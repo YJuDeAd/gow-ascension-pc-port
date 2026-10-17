@@ -2,7 +2,3 @@
 	path = ps3recomp
 	url = https://github.com/sp00nznet/ps3recomp.git
 	ignore = dirty
-[submodule "twistedmetal"]
-	path = twistedmetal
-	url = https://github.com/sp00nznet/twistedmetal.git
-	ignore = dirty
