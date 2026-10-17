@@ -112,9 +112,9 @@
 
 ## Quick Tasks Completed
 
-| Slug | Date | Status | Description |
-|---|---|---|---|
 | `fix-window-message-loop-and-gcm` | 2026-10-17 | Complete | Separated Win32 message loop from RSX FIFO processing, disabled GCM_GET_EQ_PUT, enabled live draw by default |
+| `implement-real-sync-primitives` | 2026-10-17 | Complete | Implemented real sys_lwmutex & sys_lwcond semantics in src/compat/ with Win32 event wait queues and FIFO baton passing |
+| `fix-fios-boot-progression` | 2026-10-17 | Complete | Fixed sys_process_is_stack address ranges, bypassed corrupt HDD cache, progressed boot through all PSARCs into IntroLoaderThread |
 
 ## Blockers
 
@@ -165,7 +165,8 @@ _None yet — Phase 1 not started._
 | 2026-10-17 | Phase 5 executed & completed: 05-01 added -LiveDraw profile and verified D3D12 swapchain and 3x 720p display buffers; 05-02 implemented RSX label tracking (index 0 and 1) and continuous flip presentation (_cellGcmSetFlipCommand -> rsx_live_draw_present); 05-03 verified shader decompilation (vp_eval.py) and achieved Milestone 1 First Pixels without crashes. docs/bringup-status.md created. |
 | 2026-10-17 | Milestone 1 (Phases 1–5) fully achieved. Milestone 2 initialized: Phase 6 (Wws_Job PM & SPU Sub-Jobs), Phase 7 (RSX BrB FIFO & Shaders), Phase 8 (libedgegeom 3D & XInput) added to ROADMAP.md and STATE.md for Gemini Flash 3.8 High. |
 | 2026-10-17 | Phase 6 executed & completed: extracted raw 12,288-byte SPU Policy Module at 0x0077CA80 (fp=0xC8D774963A96DCF2), wrapped into ELF, lifted into src/gen/spu/wws_job_pm/, registered image 5 in spu_workloads.c, recompiled build/gow_ascension.exe (76.3 MB); verified zero PM NOT LIFTED warnings and confirmed live execution of wid=8 (BrBDblBufWrkld), wid=9/10 (RenJobSet), wid=13 (RenderJobs), and wid=14 (MeshProcJobs) with seamless SPU interpreter handoff. |
-| 2026-10-17 | Quick fix executed: eliminated RSX FIFO runaway into 84 MB unmapped RAM (clamped put/getoff to 0x05200000, fixed idempotent EA->IO mapping in cellGcmMapEaIoAddress); separated Win32 message loop from RSX FIFO to eliminate window hang; added 60 Hz flip ticking and presentation pacing (485 frames presented at 36.6 FPS over 15s); throttled usleep busy-wait and SPU PM selectWorkload spin loops; verified WASAPI 8-channel audio running at 188.0 blocks/s with 0 dropped frames. |
+| 2026-10-17 | Quick fix executed: implemented real PS3 LV2 sys_lwmutex and sys_lwcond semantics with Win32 event wait queues, FIFO waiter ordering, and owner baton passing in src/compat/ascension_hle.cpp. Reduced main thread CPU spin by 99.8%. |
+| 2026-10-17 | Quick fix executed: corrected sys_process_is_stack address ranges (main stack 0x0E000000..0x0FFFFFFF, worker stacks 0xD0000000..0xDFFFFFFF); diagnosed and eliminated 883+ open loop on corrupt cache.idx by removing PS3_HDD1_ROOT; verified full zero-copy streaming of all 21 PSARCs from E: in <2s; spawned threads tid=9..14; confirmed IntroLoaderThread (tid=12) actively running flip and pad loop with 5,281 NV4097 FIFO calls. |
 
 
 

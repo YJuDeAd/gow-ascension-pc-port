@@ -69,7 +69,8 @@ if ($cfgLiveDraw) {
     $env:GOW_PAD_AUTOSTART = $cfgAutoPad
     $env:PAD_ALWAYS_CHANGE = "1"
     $env:PS3_HDD0_ROOT = "vfs"
-    $env:PS3_HDD1_ROOT = "vfs"
+    Remove-Item env:PS3_HDD1_ROOT -ErrorAction SilentlyContinue
+    $env:FS_CALLER = "1"
     $env:YDKJ_PAD_BTN = "0x0008"
     $env:YDKJ_PAD_DELAY = "5"
     $env:LD_ALIAS_DBG = "1"

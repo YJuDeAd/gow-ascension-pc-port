@@ -1481,7 +1481,20 @@ static void cellSaveDataFixedDelete_nid(ppu_context* ctx)
 
 static void sys_process_is_stack_nid(ppu_context* ctx)
 {
-    ctx->gpr[3] = 0; /* Not on thread stack */
+    const uint32_t addr = (uint32_t)ctx->gpr[3];
+    int is_stack = 0;
+    /* Main thread stack range: 0x0E000000..0x0FFFFFFF (stack top 0x0FF00000)
+     * Worker thread stacks allocated from VM_STACK_BASE: 0xD0000000..0xDFFFFFFF */
+    if ((addr >= 0x0E000000u && addr < 0x10000000u) ||
+        (addr >= 0xD0000000u && addr < 0xE0000000u)) {
+        is_stack = 1;
+    }
+    static int s_logged = 0;
+    if (s_logged < 10) {
+        s_logged++;
+        fprintf(stderr, "[sysprx] sys_process_is_stack(ea=0x%08X) -> %d\n", addr, is_stack);
+    }
+    ctx->gpr[3] = (uint64_t)is_stack;
 }
 
 static void sys_time_get_system_time_nid(ppu_context* ctx)
