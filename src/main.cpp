@@ -28,6 +28,7 @@ void     ppu_hle_init(void);
 void     ppu_sysprx_register(void);
 void     ppu_fs_register(void);
 void     ascension_hle_register(void);   /* src/compat/ascension_hle.cpp */
+void     ascension_post_syscall_init(void); /* src/compat/ascension_hle.cpp */
 void     gow_hle_register_extra(void);   /* alias */
 void     gow_psn_stubs_register(void);   /* src/compat/psn_stubs.cpp */
 void     gow_print_flip_reconciliation(void); /* src/compat/ascension_hle.cpp */
@@ -480,6 +481,7 @@ int main(int argc, char** argv)
 
     printf("[boot] Initializing LV2 kernel syscalls...\n");
     lv2_init_syscalls();
+    ascension_post_syscall_init();
 
     g_ps3_guest_caller = harness_guest_caller;
 

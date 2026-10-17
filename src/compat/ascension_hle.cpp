@@ -21,10 +21,17 @@
 #include <string.h>
 #include <stdlib.h>
 #include <mutex>
+#include <vector>
 #ifdef _WIN32
 #include <windows.h>
 #endif
 #include "ps3_diagnostics.h"
+
+typedef int64_t (*gow_lv2_syscall_fn)(ppu_context* ctx);
+struct gow_lv2_syscall_table {
+    gow_lv2_syscall_fn handlers[1024];
+};
+extern "C" gow_lv2_syscall_table g_lv2_syscalls;
 
 extern "C" {
 void     ps3_hle_register_ctx(uint32_t nid, const char* name, void (*fn)(ppu_context*));
@@ -293,6 +300,11 @@ static void gow_sys_lwmutex_create(ppu_context* ctx)
     uint32_t attr = (uint32_t)ctx->gpr[4];
     if (!lwm) { ctx->gpr[3] = (uint64_t)(int64_t)CELL_EINVAL; return; }
 
+    if (lwm == 0x15E67BA0u || (lwm & 0xFFFFF000u) == 0x15E67000u) {
+        fprintf(stderr, "[GOW-LWMUTEX-CREATE] tid=%u lwm=0x%08X attr=0x%08X lr=0x%08X\n",
+                (uint32_t)ctx->thread_id, lwm, attr, (uint32_t)ctx->lr);
+    }
+
     uint32_t protocol = attr ? vm_read32(attr + 0) : SYS_SYNC_FIFO;
     uint32_t rec_attr = attr ? vm_read32(attr + 4) : SYS_SYNC_RECURSIVE;
     bool is_recursive = (rec_attr != SYS_SYNC_NOT_RECURSIVE);
@@ -352,6 +364,7 @@ static void gow_sys_lwmutex_destroy(ppu_context* ctx)
     ctx->gpr[3] = CELL_OK;
 }
 
+
 static void gow_sys_lwmutex_lock(ppu_context* ctx)
 {
     ensure_sync_lock_inited();
@@ -398,6 +411,40 @@ static void gow_sys_lwmutex_lock(ppu_context* ctx)
         vm_write32(lwm + LWM_RECUR, 1);
         vm_write32(lwm + 0x04, m->waiters.count);
         LeaveCriticalSection(&g_gow_sync_lock);
+        if (lwm == 0x009976F0u && tid == 1) {
+            static uint32_t s_spin_99 = 0;
+            static uint32_t s_last_state = 0xFFFFFFFF;
+            s_spin_99++;
+            if (s_spin_99 % 500 == 0) {
+                SwitchToThread();
+            }
+            uint32_t state = vm_read32(0x00997578u);
+            uint32_t rem_bytes = vm_read32(0x009976E0u);
+            uint32_t tot_bytes = vm_read32(0x009976E4u);
+            uint32_t ring_ptr = vm_read32(0x0082B708u);
+            uint32_t ring_sz = ring_ptr ? vm_read32(ring_ptr + 8) : 0;
+
+            if (state != s_last_state || (s_spin_99 % 20000) == 1) {
+                s_last_state = state;
+                uint32_t flags = vm_read32(0x00997688u);
+                uint32_t req = vm_read32(0x00997580u + 0x104);
+                uint32_t sl = 0x009998ACu;
+                uint32_t sl_104 = vm_read32(sl + 0x104);
+                uint32_t sl_108 = vm_read32(sl + 0x108);
+                uint32_t r10 = sl_104 ? vm_read32(sl_104 + 0x10) : 0;
+                uint32_t r14 = sl_104 ? vm_read32(sl_104 + 0x14) : 0;
+                uint32_t r18 = sl_104 ? vm_read32(sl_104 + 0x18) : 0;
+                uint32_t c10 = (r10 && r10 < 0xE0000000u) ? vm_read32(r10 + 0x98) : 0;
+                uint32_t c14 = (r14 && r14 < 0xE0000000u) ? vm_read32(r14 + 0x98) : 0;
+                uint32_t c18 = (r18 && r18 < 0xE0000000u) ? vm_read32(r18 + 0x98) : 0;
+                uint32_t op10 = (r10 && r10 < 0xE0000000u) ? vm_read32(r10 + 0x40) : 0;
+                uint32_t op14 = (r14 && r14 < 0xE0000000u) ? vm_read32(r14 + 0x40) : 0;
+                uint32_t op18 = (r18 && r18 < 0xE0000000u) ? vm_read32(r18 + 0x40) : 0;
+                fprintf(stderr, "[SCENE-POLL #%u] state=%u req=0x%08X flags=0x%08X rem=%u tot=%u ring_sz=%u | sl_104=0x%08X sl_108=%u | r10=0x%08X(op=%u,c=%u) r14=0x%08X(op=%u,c=%u) r18=0x%08X(op=%u,c=%u)\n",
+                        s_spin_99, state, req, flags, rem_bytes, tot_bytes, ring_sz,
+                        sl_104, sl_108, r10, op10, c10, r14, op14, c14, r18, op18, c18);
+            }
+        }
         ctx->gpr[3] = CELL_OK;
         return;
     }
@@ -562,6 +609,11 @@ static void gow_sys_lwcond_create(ppu_context* ctx)
     uint32_t lwmutex = (uint32_t)ctx->gpr[4];
     if (!lwcond || !lwmutex) { ctx->gpr[3] = (uint64_t)(int64_t)CELL_EINVAL; return; }
 
+    if (lwcond == 0x15E67BE0u || lwmutex == 0x15E67BA0u || (lwcond & 0xFFFFF000u) == 0x15E67000u) {
+        fprintf(stderr, "[GOW-LWCOND-CREATE] tid=%u lwcond=0x%08X lwmutex=0x%08X lr=0x%08X\n",
+                (uint32_t)ctx->thread_id, lwcond, lwmutex, (uint32_t)ctx->lr);
+    }
+
     static uint32_t s_lwcond_id = 0x4C000000u;
     vm_write32(lwcond + 0x00, lwmutex);   /* 32-bit lwmutex pointer */
     vm_write32(lwcond + 0x04, ++s_lwcond_id);   /* lwcond_queue */
@@ -706,10 +758,40 @@ static void gow_sys_lwcond_wait(ppu_context* ctx)
     uint32_t tid = (uint32_t)ctx->thread_id;
     if (!lwcond) { ctx->gpr[3] = (uint64_t)(int64_t)CELL_EINVAL; return; }
 
+    static uint32_t s_cond_log_cnt = 0;
+    if ((tid == 1 || lwcond == 0x15E67BE0u) && s_cond_log_cnt++ < 5) {
+        uint32_t sp = (uint32_t)ctx->gpr[1];
+        uint32_t caller_lr = vm_read32(sp + 0xB0);
+        uint32_t caller_sp = vm_read32(sp);
+        fprintf(stderr, "\n============================================================\n");
+        fprintf(stderr, ">>> [GOW-LWCOND-WAIT] tid=%u lwcond=0x%08X timeout_us=%llu lr=0x%08X sp=0x%08X <<<\n",
+                tid, lwcond, (unsigned long long)timeout_us, (uint32_t)ctx->lr, sp);
+        fprintf(stderr, "  caller of wait: lr=0x%08X caller_sp=0x%08X\n", caller_lr, caller_sp);
+        uint32_t s = sp;
+        for (int f = 0; f < 10 && s >= 0x0F000000 && s < 0x0FF00000; f++) {
+            uint32_t ns = vm_read32(s);
+            uint32_t l1 = vm_read32(s + 0x10);
+            uint32_t l2 = (ns >= 0x0F000000 && ns < 0x0FF00000) ? vm_read32(ns + 0x10) : 0;
+            fprintf(stderr, "    frame[%d]: sp=0x%08X next_sp=0x%08X lr@+10=0x%08X lr@next+10=0x%08X\n",
+                    f, s, ns, l1, l2);
+            if (ns <= s) break;
+            s = ns;
+        }
+        uint32_t base = lwcond & ~0x7Fu;
+        fprintf(stderr, "  [DUMP 0x%08X..0x%08X]:\n", base, base + 0x80);
+        for (uint32_t o = 0; o < 0x80; o += 0x10) {
+            fprintf(stderr, "    +%02X: %08X %08X %08X %08X\n",
+                    o, vm_read32(base+o), vm_read32(base+o+4), vm_read32(base+o+8), vm_read32(base+o+12));
+        }
+        fprintf(stderr, "============================================================\n\n");
+    }
+
     DWORD timeout_ms = INFINITE;
     if (timeout_us > 0) {
         uint64_t m = (timeout_us + 999) / 1000;
         timeout_ms = (m > 0xFFFFFFFEull) ? 0xFFFFFFFEu : (DWORD)m;
+    } else if (lwcond == 0x15E67BE0u) {
+        timeout_ms = 50; /* Do not deadlock on un-signaled Edge cond */
     }
 
     EnterCriticalSection(&g_gow_sync_lock);
@@ -784,6 +866,10 @@ static void gow_sys_lwcond_wait(ppu_context* ctx)
     } else {
         if (c) c->waiters.remove(&cond_waiter);
         timed_out = true;
+        if (lwcond == 0x15E67BE0u) {
+            fprintf(stderr, ">>> [EDGE-COND] lwcond 0x15E67BE0 timed out (50ms) - returning CELL_OK to unblock tid=%u <<<\n", tid);
+            timed_out = false;
+        }
     }
 
     // 5. Must re-acquire the lwmutex before returning
@@ -1183,6 +1269,15 @@ static void cellSpursTasksetGetSpursAddress(ppu_context* ctx)
 /* ---------------------------------------------------------------------------
  * SPURS Lock-Free Queue (LFQueue) Handlers
  * ------------------------------------------------------------------------- */
+static std::mutex s_lfqueue_mutex;
+
+struct CachedDecompBlock {
+    uint32_t src_ea = 0;
+    uint32_t srclen = 0;
+    std::vector<uint8_t> uncomp;
+};
+static std::vector<CachedDecompBlock> s_decomp_cache;
+
 static void _cellSpursLFQueuePushBody(ppu_context* ctx)
 {
     const uint32_t q = (uint32_t)ctx->gpr[3];
@@ -1194,26 +1289,30 @@ static void _cellSpursLFQueuePushBody(ppu_context* ctx)
         return;
     }
 
+    std::lock_guard<std::mutex> lock(s_lfqueue_mutex);
+
     const uint32_t depth     = vm_read32(q + 0x0C);
     const uint32_t size      = vm_read32(q + 0x10);
-    const uint32_t buffer_ea = (uint32_t)vm_read64(q + 0x18);
-    const uint32_t owner_ea  = (uint32_t)vm_read64(q + 0x70);
+    uint32_t buffer_ea = (uint32_t)vm_read64(q + 0x18);
+    if (!buffer_ea) buffer_ea = vm_read32(q + 0x18);
+    uint32_t owner_ea  = (uint32_t)vm_read64(q + 0x70);
+    if (!owner_ea) owner_ea = vm_read32(q + 0x70);
 
     if (depth > 0 && size > 0 && buffer_ea) {
-        uint32_t w1 = vm_read32(q + 0x04); /* push index */
-        uint32_t slot = w1 % depth;
+        uint16_t push = vm_read16(q + 0x02); /* 16-bit push counter */
+        uint32_t slot = (uint32_t)(push & 0x3FFFu) % depth;
         uint32_t slot_ea = buffer_ea + slot * size;
         for (uint32_t i = 0; i < size; i += 4) {
             vm_write32(slot_ea + i, vm_read32(data + i));
         }
-        vm_write32(q + 0x04, w1 + 1);
+        vm_write16(q + 0x02, (uint16_t)(push + 1));
         fprintf(stderr, "[cellSpurs] LFQueuePush(q=0x%08X slot=%u size=%u owner=0x%08X last_taskset=0x%08X n_tasksets=%d)\n",
                 q, slot, size, owner_ea, s_last_spurs_taskset, s_num_tasksets);
         fprintf(stderr, "[cellSpurs] LFQueuePush data: %08X %08X %08X %08X %08X %08X %08X %08X\n",
                 vm_read32(data+0), vm_read32(data+4), vm_read32(data+8), vm_read32(data+12),
                 vm_read32(data+16), vm_read32(data+20), vm_read32(data+24), vm_read32(data+28));
-        fprintf(stderr, "[cellSpurs] LFQueue queue state: w0(pop)=%u w1(push)=%u flag@0x%08X=0x%08X\n",
-                vm_read32(q+0), vm_read32(q+4), q - 0x80, vm_read32(q - 0x80));
+        fprintf(stderr, "[cellSpurs] LFQueue queue state: pop=%u push=%u flag@0x%08X=0x%08X\n",
+                (uint32_t)vm_read16(q+0), (uint32_t)vm_read16(q+2), q - 0x80, vm_read32(q - 0x80));
 
         const uint32_t src_ea    = vm_read32(data + 0x00);
         const uint32_t dst_ea    = vm_read32(data + 0x04);
@@ -1225,51 +1324,55 @@ static void _cellSpursLFQueuePushBody(ppu_context* ctx)
         const uint16_t skipBegin = vm_read16(data + 0x1A);
         const uint16_t skipEnd   = vm_read16(data + 0x1C);
 
-        static uint32_t s_cached_src_ea = 0;
-        static uint32_t s_cached_srclen = 0;
-        static uint8_t*  s_cached_uncomp = nullptr;
-        static uint32_t s_cached_uncomp_cap = 0;
-        static uint32_t s_cached_uncomp_len = 0;
-
         if (src_ea && srclen && dst_ea && dstlen && vm_base) {
             uint32_t total_expected = (uint32_t)skipBegin + dstlen + (uint32_t)skipEnd;
             if (total_expected < dstlen) total_expected = dstlen;
 
             /* Check if we already have this compressed stream inflated in cache */
-            if (src_ea != s_cached_src_ea || srclen != s_cached_srclen || !s_cached_uncomp) {
-                s_cached_src_ea = src_ea;
-                s_cached_srclen = srclen;
-                /* Allocate enough space for full decompression */
-                uint32_t alloc_size = total_expected > (256 * 1024) ? total_expected : (256 * 1024);
-                if (alloc_size > s_cached_uncomp_cap) {
-                    free(s_cached_uncomp);
-                    s_cached_uncomp = (uint8_t*)malloc(alloc_size);
-                    s_cached_uncomp_cap = s_cached_uncomp ? alloc_size : 0;
+            CachedDecompBlock* hit = nullptr;
+            for (auto& entry : s_decomp_cache) {
+                if (entry.src_ea == src_ea && entry.srclen == srclen) {
+                    hit = &entry;
+                    break;
                 }
-                int n = s_cached_uncomp ? gow_inflate(s_cached_uncomp, s_cached_uncomp_cap, vm_base + src_ea, srclen) : -1;
-                if (n < 0 && (src_ea & 1) && s_cached_uncomp) {
-                    n = gow_inflate(s_cached_uncomp, s_cached_uncomp_cap, vm_base + (src_ea & ~1u), srclen);
-                }
-                s_cached_uncomp_len = (n >= 0) ? (uint32_t)n : 0;
-                fprintf(stderr, "[edge] cached inflate(src=0x%08X len=%u total_exp=%u) => %d bytes\n",
-                        src_ea, srclen, total_expected, n);
             }
 
-            if (s_cached_uncomp && s_cached_uncomp_len > 0) {
-                if ((uint32_t)skipBegin + dstlen <= s_cached_uncomp_len) {
-                    memcpy(vm_base + dst_ea, s_cached_uncomp + skipBegin, dstlen);
-                } else if ((uint32_t)skipBegin < s_cached_uncomp_len) {
-                    uint32_t avail = s_cached_uncomp_len - skipBegin;
-                    memcpy(vm_base + dst_ea, s_cached_uncomp + skipBegin, avail);
+            if (!hit) {
+                uint32_t alloc_size = total_expected > (256 * 1024) ? total_expected : (256 * 1024);
+                std::vector<uint8_t> tmp(alloc_size);
+                int n = gow_inflate(tmp.data(), alloc_size, vm_base + src_ea, srclen);
+                if (n < 0 && (src_ea & 1)) {
+                    n = gow_inflate(tmp.data(), alloc_size, vm_base + (src_ea & ~1u), srclen);
+                }
+                fprintf(stderr, "[edge] cached inflate(src=0x%08X len=%u total_exp=%u) => %d bytes\n",
+                        src_ea, srclen, total_expected, n);
+                if (n > 0) {
+                    tmp.resize((size_t)n);
+                    if (s_decomp_cache.size() >= 8) {
+                        s_decomp_cache.erase(s_decomp_cache.begin());
+                    }
+                    s_decomp_cache.push_back({src_ea, srclen, std::move(tmp)});
+                    hit = &s_decomp_cache.back();
+                }
+            }
+
+            if (hit && !hit->uncomp.empty()) {
+                if ((uint32_t)skipBegin + dstlen <= hit->uncomp.size()) {
+                    memcpy(vm_base + dst_ea, hit->uncomp.data() + skipBegin, dstlen);
+                } else if ((uint32_t)skipBegin < hit->uncomp.size()) {
+                    uint32_t avail = (uint32_t)hit->uncomp.size() - skipBegin;
+                    memcpy(vm_base + dst_ea, hit->uncomp.data() + skipBegin, avail);
                     memset(vm_base + dst_ea + avail, 0, dstlen - avail);
                 } else {
                     memset(vm_base + dst_ea, 0, dstlen);
                 }
+            } else {
+                memset(vm_base + dst_ea, 0, dstlen);
             }
 
-            /* Consume request from LFQueue (advance pop index) */
-            uint32_t w0 = vm_read32(q + 0x00);
-            vm_write32(q + 0x00, w0 + 1);
+            /* Consume request from LFQueue (advance 16-bit pop counter) */
+            uint16_t pop = vm_read16(q + 0x00);
+            vm_write16(q + 0x00, (uint16_t)(pop + 1));
 
             if (user_ea) {
                 uint32_t status_ea = user_ea & ~3u;
@@ -1324,6 +1427,146 @@ static void hook_func_005A8D6C(ppu_context* ctx)
     func_005A8D6C(ctx);
 }
 
+
+static void hook_func_00466B88(ppu_context* ctx)
+{
+    const uint32_t r31_ptr = (uint32_t)ctx->gpr[3];
+    const uint32_t b = (uint32_t)ctx->gpr[4] & 1;
+
+    if (r31_ptr >= 0x10000u) {
+        const uint32_t r5 = vm_read32(r31_ptr);
+        if (r5 >= 0x10000u) {
+            const uint32_t hdr = r5 + (b << 4) + 0x40u;
+            uint16_t target = vm_read16(hdr);
+            const uint32_t r11_base = r5 + (b << 2);
+            const uint32_t r9_tbl = vm_read32(r11_base + 0x30u);
+            uint32_t extra = 0;
+            if (r9_tbl >= 0x10000u) {
+                uint32_t entry = r9_tbl + ((target & 0x1Fu) << 3);
+                if (vm_read16(entry + 2) != 0) {
+                    extra = 1;
+                    entry += 10;
+                    while (vm_read16(entry) != 0 && extra < 32) {
+                        extra++;
+                        entry += 8;
+                    }
+                }
+            }
+            uint16_t completed_val = (uint16_t)(target + extra);
+            for (int i = 1; i <= 7; ++i) {
+                vm_write16(hdr + (uint32_t)i * 2, completed_val);
+            }
+            vm_write32(r5 + 8, b);
+            if (vm_read32(r31_ptr + 4) == 0) {
+                vm_write32(r31_ptr + 4, 1);
+            }
+        }
+    }
+
+    func_00466B88(ctx);
+}
+
+static void hook_func_003636F8(ppu_context* ctx)
+{
+    static uint32_t s_disp_cnt = 0;
+    uint32_t id = ++s_disp_cnt;
+    uint32_t a0 = (uint32_t)ctx->gpr[3];
+    uint32_t a1 = (uint32_t)ctx->gpr[4];
+    uint32_t a2 = (uint32_t)ctx->gpr[5];
+    uint32_t w0 = a2 ? vm_read32(a2) : 0;
+    uint32_t type = (w0 >> 16) & 0xFFF;
+    uint16_t sub_count = a2 ? vm_read16(a2 + 0x0C) : 0;
+    uint32_t w1 = a2 ? vm_read32(a2 + 4) : 0;
+    uint32_t w2 = a2 ? vm_read32(a2 + 8) : 0;
+    uint32_t w4 = a2 ? vm_read32(a2 + 16) : 0;
+
+    uint32_t cap = a0 ? vm_read32(a0 + 0x68) : 0;
+    uint16_t used = a0 ? vm_read16(a0 + 0x5C) : 0;
+    uint32_t tbl = a0 ? vm_read32(a0 + 0x74) : 0;
+    uint16_t max_probe = a0 ? vm_read16(a0 + 0x5E) : 0;
+    uint32_t total_probes = a0 ? vm_read32(a0 + 0x64) : 0;
+
+    uint32_t heap_r3 = vm_read32(0x00981698u);
+    uint32_t heap_r5 = vm_read32(0x0098169Cu);
+    uint32_t heap_arr = vm_read32(0x00981694u);
+    uint32_t cur_heap = (heap_arr && heap_r3 != heap_r5) ? vm_read32(heap_arr + (heap_r3 << 2)) : 0;
+
+    fprintf(stderr, "\n>>> [RESOURCE-DISPATCH #%u START] a0=0x%08X (used=%u cap=%u tbl=0x%08X max_probe=%u total_probes=%u) a1=0x%08X a2=0x%08X (w0=%08X w1=%08X w2=%08X type=%u sub=%u w4=%08X) [heap: arr=0x%08X cur=0x%08X] <<<\n",
+            id, a0, used, cap, tbl, max_probe, total_probes, a1, a2, w0, w1, w2, type, sub_count, w4, heap_arr, cur_heap);
+
+    if (type == 1 && a2) {
+        uint32_t r30 = a2 + w4;
+        uint32_t ent_count = vm_read32(r30 + 0x18);
+        uint32_t ent_tbl_off = vm_read32(r30 + 0x1C);
+        uint32_t tbl_ea = r30 + ent_tbl_off;
+        fprintf(stderr, "    [RESOURCE-INFO] r30=0x%08X sub-entities=%u ent_tbl_off=0x%08X (tbl_ea=0x%08X)\n",
+                r30, ent_count, ent_tbl_off, tbl_ea);
+    }
+    fflush(stderr);
+
+    func_003636F8(ctx);
+    fprintf(stderr, "\n>>> [RESOURCE-DISPATCH #%u END] ret=0x%08X (used=%u cap=%u) <<<\n\n",
+            id, (uint32_t)ctx->gpr[3], a0 ? vm_read16(a0 + 0x5C) : 0, a0 ? vm_read32(a0 + 0x68) : 0);
+    fflush(stderr);
+}
+
+static void hook_func_0036298C(ppu_context* ctx)
+{
+    static uint32_t s_wad_cnt = 0;
+    s_wad_cnt++;
+    uint32_t a0 = (uint32_t)ctx->gpr[3];
+    uint32_t a1 = (uint32_t)ctx->gpr[4];
+    uint32_t a2 = (uint32_t)ctx->gpr[5];
+    uint16_t count = a2 ? vm_read16(a2 + 0x0C) : 0;
+    fprintf(stderr, "\n>>> [WAD-PARSE #%u START] r3=0x%08X r4=0x%08X r5=0x%08X (sub-entities=%u) <<<\n",
+            s_wad_cnt, a0, a1, a2, count);
+    fflush(stderr);
+    func_0036298C(ctx);
+    fprintf(stderr, ">>> [WAD-PARSE #%u END] completed: ret=0x%08X <<<\n\n",
+            s_wad_cnt, (uint32_t)ctx->gpr[3]);
+    fflush(stderr);
+}
+
+static void hook_func_003633A4(ppu_context* ctx)
+{
+    static uint32_t s_chunk_cnt = 0;
+    s_chunk_cnt++;
+    uint32_t a0 = (uint32_t)ctx->gpr[3];
+    uint32_t a1 = (uint32_t)ctx->gpr[4];
+    uint32_t a2 = (uint32_t)ctx->gpr[5];
+    if (s_chunk_cnt <= 20 || (s_chunk_cnt % 50) == 0) {
+        fprintf(stderr, ">>> [CHUNK-PARSE #%u] r3=0x%08X r4=0x%08X r5=0x%08X <<<\n",
+                s_chunk_cnt, a0, a1, a2);
+    }
+    func_003633A4(ctx);
+}
+
+
+static void hook_func_003C8F54(ppu_context* ctx)
+{
+    static uint32_t s_pkg_cnt = 0;
+    uint32_t hdr = (uint32_t)ctx->gpr[3];
+    uint32_t dst = (uint32_t)ctx->gpr[4];
+    uint16_t type = hdr ? vm_read16(hdr) : 0;
+    uint16_t flags = hdr ? vm_read16(hdr + 2) : 0;
+    uint32_t sz = hdr ? vm_read32(hdr + 4) : 0;
+    char name[33] = {0};
+    if (hdr) {
+        for (int i = 0; i < 32; i++) {
+            char c = (char)vm_read8(hdr + 8 + i);
+            name[i] = (c >= 32 && c < 127) ? c : '.';
+        }
+    }
+    fprintf(stderr, "\n>>> [PKG #%u] hdr=0x%08X type=0x%04X flags=0x%04X sz=%u dst=0x%08X raw=[%08X %08X %08X %08X] name='%s' <<<\n",
+            ++s_pkg_cnt, hdr, type, flags, sz, dst,
+            hdr ? vm_read32(hdr) : 0, hdr ? vm_read32(hdr + 4) : 0,
+            hdr ? vm_read32(hdr + 8) : 0, hdr ? vm_read32(hdr + 12) : 0, name);
+    fflush(stderr);
+    func_003C8F54(ctx);
+    fprintf(stderr, ">>> [PKG #%u END] ret=%llu <<<\n\n", s_pkg_cnt, (unsigned long long)ctx->gpr[3]);
+    fflush(stderr);
+}
+
 static void cellSpursLFQueueDetachLv2EventQueue(ppu_context* ctx)
 {
     ctx->gpr[3] = 0; /* CELL_OK */
@@ -1334,17 +1577,19 @@ static void cellSpursLFQueuePopBody(ppu_context* ctx)
     const uint32_t q = (uint32_t)ctx->gpr[3];
     const uint32_t data = (uint32_t)ctx->gpr[4];
     if (q && data) {
+        std::lock_guard<std::mutex> lock(s_lfqueue_mutex);
         const uint32_t depth     = vm_read32(q + 0x0C);
         const uint32_t size      = vm_read32(q + 0x10);
-        const uint32_t buffer_ea = (uint32_t)vm_read64(q + 0x18);
+        uint32_t buffer_ea = (uint32_t)vm_read64(q + 0x18);
+        if (!buffer_ea) buffer_ea = vm_read32(q + 0x18);
         if (depth > 0 && size > 0 && buffer_ea) {
-            uint32_t w0 = vm_read32(q + 0x00); /* pop index */
-            uint32_t slot = w0 % depth;
+            uint16_t pop = vm_read16(q + 0x00); /* 16-bit pop counter */
+            uint32_t slot = (uint32_t)(pop & 0x3FFFu) % depth;
             uint32_t slot_ea = buffer_ea + slot * size;
             for (uint32_t i = 0; i < size; i += 4) {
                 vm_write32(data + i, vm_read32(slot_ea + i));
             }
-            vm_write32(q + 0x00, w0 + 1);
+            vm_write16(q + 0x00, (uint16_t)(pop + 1));
         }
     }
     ctx->gpr[3] = 0; /* CELL_OK */
@@ -1455,6 +1700,25 @@ static void hle_cellGcmSetFlipCommand(ppu_context* ctx)
 static void _cellGcmFunc15(ppu_context* ctx)
 {
     ctx->gpr[3] = 0; /* CELL_OK */
+}
+
+extern "C" void cellGcmSetVBlankHandler(void (*handler)(uint32_t));
+
+static void gow_cellGcmSetVBlankHandler(ppu_context* ctx)
+{
+    uint32_t handler = (uint32_t)ctx->gpr[3];
+    fprintf(stderr, "\n>>> [GOW-GCM] cellGcmSetVBlankHandler(opd=0x%08X) called by tid=%u <<<\n",
+            handler, (uint32_t)ctx->thread_id);
+    cellGcmSetVBlankHandler((void (*)(uint32_t))(uintptr_t)handler);
+
+    // CRITICAL ENGINE UNLOCK:
+    // Santa Monica's GCM display list queue (0x00376788 & 0x00376DE8) gates frame submission
+    // on *(0x00970F30) (flipInterval / renderEnable). Setting it to 1 enables 60 fps display list dispatch!
+    vm_write32(0x00970F30u, 1);
+    vm_write32(0x0081C9B4u, 0);
+    fprintf(stderr, ">>> [GOW-GCM] Unlocked 3D frame rendering: *(0x00970F30)=1, *(0x0081C9B4)=0 <<<\n\n");
+
+    ctx->gpr[3] = CELL_OK;
 }
 
 static void cellVideoOutSetGamma_nid(ppu_context* ctx)
@@ -1671,6 +1935,9 @@ extern "C" void ascension_hle_register(void)
 
     /* cellSpurs LFQueue, Taskset & Workload bridges */
     ps3_hle_register_ctx(0x8A85674Du, "_cellSpursLFQueuePushBody",          _cellSpursLFQueuePushBody);
+    ps3_hle_register_ctx(0x327C3F77u, "cellSpursLFQueuePush",               _cellSpursLFQueuePushBody);
+    ps3_hle_register_ctx(0x35DAE22Bu, "_cellSpursLFQueuePopBody",           cellSpursLFQueuePopBody);
+    ps3_hle_register_ctx(0x92DF869Cu, "cellSpursLFQueuePop",                cellSpursLFQueuePopBody);
     ps3_hle_register_ctx(0x73E06F91u, "cellSpursLFQueueDetachLv2EventQueue", cellSpursLFQueueDetachLv2EventQueue);
     ps3_hle_register_ctx(0xBEB600ACu, "cellSpursCreateTask",                hle_cellSpursCreateTask);
     ps3_hle_register_ctx(0x52CC6C82u, "cellSpursCreateTaskset",             hle_cellSpursCreateTaskset);
@@ -1685,6 +1952,7 @@ extern "C" void ascension_hle_register(void)
     ps3_hle_register_ctx(0xD8F88E1Au, "_cellGcmSetFlipCommandWithWaitLabel", hle_cellGcmSetFlipCommandWithWaitLabel);
     ps3_hle_register_ctx(0x21397818u, "_cellGcmSetFlipCommand",              hle_cellGcmSetFlipCommand);
     ps3_hle_register_ctx(0x72A577CEu, "cellGcmGetFlipStatus",               hle_cellGcmGetFlipStatus);
+    ps3_hle_register_ctx(0xA91B0402u, "cellGcmSetVBlankHandler",            gow_cellGcmSetVBlankHandler);
 
     /* cellSysutilAvconfExt */
     ps3_hle_register_ctx(0xC7020F62u, "cellVideoOutSetGamma",                cellVideoOutSetGamma_nid);
@@ -1725,10 +1993,135 @@ extern "C" void ascension_hle_register(void)
     ps3_hle_register_ctx(0x9F951810u, "cellFs_9F951810",                     cellFs_ok_stub);
     ps3_hle_register_ctx(0xDB869F20u, "cellFs_DB869F20",                     cellFs_ok_stub);
     ppu_register_function(0x005A8D6Cu, hook_func_005A8D6C);
+    ppu_register_function(0x003636F8u, hook_func_003636F8);
+    ppu_register_function(0x0036298Cu, hook_func_0036298C);
+    ppu_register_function(0x003633A4u, hook_func_003633A4);
+    ppu_register_function(0x003C8F54u, hook_func_003C8F54);
+    ppu_register_function(0x00466B88u, hook_func_00466B88);
 }
 
 /* Alias for compatibility */
 extern "C" void gow_hle_register_extra(void)
 {
     ascension_hle_register();
+}
+
+extern "C" int64_t sys_timer_usleep(ppu_context* ctx);
+
+extern "C" int64_t hook_sys_timer_usleep(ppu_context* ctx)
+{
+    const uint32_t tid = (uint32_t)ctx->thread_id;
+    const uint32_t lr = (uint32_t)ctx->lr;
+
+    // brbDriver is tid=13 or callers with lr == 0x006245B8
+    if (tid == 13 || lr == 0x006245B8u) {
+        static uint32_t s_brb_ticks = 0;
+        s_brb_ticks++;
+
+        // Advance SPU audio workload progress counters using true pointer ctx->gpr[30]
+        uint32_t r31_ptr = (uint32_t)ctx->gpr[30];
+        if (!r31_ptr) r31_ptr = 0x009FE180u;
+        const uint32_t r5 = vm_read32(r31_ptr);
+        if (r5 != 0) {
+            for (uint32_t b = 0; b < 2; ++b) {
+                const uint32_t hdr = r5 + (b << 4) + 0x40u;
+                uint16_t target = vm_read16(hdr);
+
+                // Account for voice entries in 0x30(r11) table
+                const uint32_t r11_base = r5 + (b << 2);
+                const uint32_t r9_tbl = vm_read32(r11_base + 0x30u);
+                uint32_t extra = 0;
+                if (r9_tbl != 0) {
+                    uint32_t entry = r9_tbl + ((target & 0x1Fu) << 3);
+                    if (vm_read16(entry + 2) != 0) {
+                        extra = 1;
+                        entry += 10;
+                        while (vm_read16(entry) != 0 && extra < 32) {
+                            extra++;
+                            entry += 8;
+                        }
+                    }
+                }
+                uint16_t completed_val = (uint16_t)(target + extra);
+                for (int i = 1; i <= 7; ++i) {
+                    vm_write16(hdr + (uint32_t)i * 2, completed_val);
+                }
+                vm_write32(r5 + 8, b);
+            }
+            if (vm_read32(r31_ptr + 4) == 0) {
+                vm_write32(r31_ptr + 4, 1);
+            }
+        }
+
+        if (s_brb_ticks <= 10 || (s_brb_ticks % 1000) == 0) {
+            uint32_t r7 = vm_read32(0x00818F74u);
+            uint32_t sub = 0, comp = 0;
+            if (r7 >= 0x10000u) {
+                uint32_t r9 = vm_read32(r7 + 0x10u);
+                uint32_t r10 = vm_read32(r7 + 0x14u);
+                if (r9 >= 0x10000u) sub = vm_read32(r9 + 0x10u);
+                if (r10 >= 0x10000u) comp = vm_read32(r10 + 0x24u);
+            }
+            fprintf(stderr, "[BRB-SPU-ADVANCE #%u] tid=%u lr=0x%08X r30=0x%08X r5=0x%08X sub=%u comp=%u\n",
+                    s_brb_ticks, tid, lr, r31_ptr, r5, sub, comp);
+        }
+    }
+
+    if (tid == 1 && lr == 0x0061B9FCu) {
+        static uint32_t s_main_ticks = 0;
+        uint32_t r28_val = (uint32_t)ctx->gpr[28];
+        uint32_t r7 = (r28_val >= 0x10000u) ? vm_read32(r28_val) : 0;
+        if (!r7) r7 = vm_read32(0x00818F74u);
+        if (r7 >= 0x10000u) {
+            uint32_t r9 = vm_read32(r7 + 0x10u);
+            uint32_t r10 = vm_read32(r7 + 0x14u);
+            if (r9 >= 0x10000u && r10 >= 0x10000u) {
+                uint32_t sub = vm_read32(r9 + 0x10u);
+                vm_write32(r10 + 0x24u, sub);
+                if (++s_main_ticks % 100 == 1) {
+                    fprintf(stderr, "[MAIN-BRB] Instantly satisfied brb_StartSession (sub=%u -> comp=%u)\n", sub, sub);
+                }
+            }
+        }
+    }
+
+
+    static uint32_t s_last_dl_head = 0xFFFFFFFF;
+    static uint32_t s_last_dl_tail = 0xFFFFFFFF;
+    static uint32_t s_dl_periodic_tick = 0;
+    uint32_t dl_head = vm_read32(0x009711D4u);
+    uint32_t dl_tail = vm_read32(0x009711D8u);
+    uint32_t flip_int = vm_read32(0x00970F30u);
+    if (dl_head != s_last_dl_head || dl_tail != s_last_dl_tail || (++s_dl_periodic_tick % 50 == 1)) {
+        s_last_dl_head = dl_head;
+        s_last_dl_tail = dl_tail;
+        uint32_t gate = vm_read32(0x0081C9B4u);
+        uint32_t f996 = vm_read32(0x009967CCu);
+        uint32_t f82b1 = vm_read32(0x0082B68Cu);
+        uint32_t f82b2 = vm_read32(0x0082B690u);
+        uint32_t vlist = vm_read32(0x00955E60u);
+        uint32_t mview = vm_read32(0x008199DCu);
+        extern ppu_context* volatile g_ppu_main_ctx;
+        uint32_t main_lr = g_ppu_main_ctx ? (uint32_t)g_ppu_main_ctx->lr : 0;
+        uint32_t main_r3 = g_ppu_main_ctx ? (uint32_t)g_ppu_main_ctx->gpr[3] : 0;
+        uint32_t main_r31 = g_ppu_main_ctx ? (uint32_t)g_ppu_main_ctx->gpr[31] : 0;
+        fprintf(stderr, ">>> [GCM-DISPLAY-LIST] dl_head=%u dl_tail=%u flipInt=%u | lr=0x%08X r3=0x%08X r31=0x%08X | gate_C9B4=%u flags=[%u,%u,%u] vlist=0x%08X mview=0x%08X <<<\n",
+                dl_head, dl_tail, flip_int, main_lr, main_r3, main_r31, gate, f996, f82b1, f82b2, vlist, mview);
+        if (main_lr == 0x00385108u && main_r31) {
+            uint32_t d_next = vm_read32(main_r31 + 0x4D0u);
+            uint32_t d_prev = vm_read32(main_r31 + 0x4CCu);
+            fprintf(stderr, "    [VIEW-LOOP-DIAG] view=0x%08X: list_next=0x%08X list_prev=0x%08X cur_node=0x%08X (node_vt=0x%08X next=0x%08X)\n",
+                    main_r31, d_next, d_prev, main_r3,
+                    main_r3 ? vm_read32(main_r3) : 0,
+                    main_r3 ? vm_read32(main_r3 + 4) : 0);
+        }
+    }
+
+    return sys_timer_usleep(ctx);
+}
+
+extern "C" void ascension_post_syscall_init(void)
+{
+    g_lv2_syscalls.handlers[141] = (gow_lv2_syscall_fn)hook_sys_timer_usleep;
+    fprintf(stderr, "[ascension] Hooked SYS_TIMER_USLEEP (141) with BRB audio driver handler\n");
 }

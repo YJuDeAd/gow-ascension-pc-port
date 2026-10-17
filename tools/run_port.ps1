@@ -11,6 +11,8 @@ param(
 )
 
 $ErrorActionPreference = "Stop"
+Remove-Item env:PPU_OPD_RECOVER -ErrorAction SilentlyContinue
+Remove-Item env:PPU_NOOP_BAD_VCALL -ErrorAction SilentlyContinue
 
 # 0. Parse config.toml if present
 $cfgPath = ".\config.toml"
@@ -76,6 +78,11 @@ if ($cfgLiveDraw) {
     $env:LD_ALIAS_DBG = "1"
     $env:AUDIO_RATE = $cfgAudioRate
     $env:AUDIO_PEAK = $cfgAudioPeak
+    $env:PS3_NULL_READ_STACK = "1"
+    $env:PS3_CALLTRACE = "20"
+    $env:PS3_CALLTRACE_LR = "0x00385108"
+    Remove-Item env:PPU_OPD_RECOVER -ErrorAction SilentlyContinue
+    Remove-Item env:PPU_NOOP_BAD_VCALL -ErrorAction SilentlyContinue
     Write-Host "[run_port] Environment: RSX_LIVE_DRAW=$env:RSX_LIVE_DRAW, GOW_PAD_AUTOSTART=$env:GOW_PAD_AUTOSTART, PS3_HDD0_ROOT=$env:PS3_HDD0_ROOT, PS3_HDD1_ROOT=$env:PS3_HDD1_ROOT, AUDIO_RATE=$env:AUDIO_RATE, AUDIO_PEAK=$env:AUDIO_PEAK"
 }
 
