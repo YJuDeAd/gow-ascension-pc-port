@@ -1,0 +1,67 @@
+# God of War: Ascension (PS3) — PC Port Configuration File
+# Location: ./config.toml
+
+[graphics]
+# Rendering Backend: "d3d12" (DirectX 12 LiveDraw) or "null" (headless)
+backend = "d3d12"
+
+# Window & Internal Resolution:
+#   Native PS3:  width = 1280, height = 720
+#   Full HD:     width = 1920, height = 1080
+#   QHD / 1440p: width = 2560, height = 1440
+#   4K UHD:      width = 3840, height = 2160
+width = 1280
+height = 720
+
+# VSync Mode: "on", "off", "adaptive"
+vsync = "on"
+
+# Resolution Scaling Factor: 1 = native (1x), 2 = 2x, 3 = 3x
+scale_factor = 1
+
+# Anisotropic Filtering: 0 (default), 2, 4, 8, 16
+aniso_filter = 16
+
+[audio]
+# Audio Backend: "wasapi" (low-latency Windows Audio Session API)
+backend = "wasapi"
+
+# Sampling Rate: 48000 Hz (PS3 hardware native)
+sample_rate = 48000
+
+# Buffer Size: 512 samples (~10.6 ms)
+buffer_size = 512
+
+# Port Channel Count: 8 channels (7.1 Dolby surround downmixed to stereo float)
+channels = 8
+
+# Output Downmix Target: "stereo"
+downmix = "stereo"
+
+[input]
+# Input Backend: "xinput" (Xbox 360 / Xbox One / Series X / DualSense via XInput)
+backend = "xinput"
+
+# Analog Stick Deadzone (0 - 32767 raw units, default 7849 = ~24% deadzone)
+deadzone = 7849
+
+# Enable Keyboard & Mouse Fallback when no physical controller is connected
+keyboard_fallback = true
+
+[spu]
+# Dynamic SPU Workload Execution:
+spu_interpreter_unlifted = true
+spu_host_depth_max = 100000
+
+[debug]
+# Real-time WASAPI audio mixing rate logging (blocks/sec and dropped frames)
+log_audio_rate = true
+
+# Audio peak amplitude and ring buffer occupancy logging
+log_audio_peak = true
+
+# RSX LiveDraw Direct3D 12 presentation
+live_draw = true
+
+# Automated start pulse injection for hands-free boot regression verification
+auto_pad_start = true

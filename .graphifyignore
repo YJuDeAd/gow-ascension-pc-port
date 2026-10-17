@@ -1,0 +1,29 @@
+# Exclude God of War: Ascension generated C++ and build artifacts
+src/gen/
+build/
+out/
+*.obj
+*.pdb
+*.ilk
+*.exe
+*.lib
+
+# CRITICAL: Exclude Twisted Metal's lifted C++ chunks and ps3recomp build folders
+twistedmetal/src/gen/
+twistedmetal/build/
+twistedmetal/out/
+ps3recomp/build/
+ps3recomp/out/
+
+# Exclude raw PS3 binaries and game archives
+vfs/
+extracted/
+disc/
+*.iso
+*.bin
+*.elf
+*.self
+*.sprx
+*.wad
+*.psarc
+*.sfo

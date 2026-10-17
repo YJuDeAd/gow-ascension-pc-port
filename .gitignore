@@ -1,0 +1,84 @@
+# =============================================================================
+# God of War: Ascension (PS3) Port - .gitignore
+# =============================================================================
+
+# --- Copyrighted Game Material & Decrypted Disc / VFS ---
+*.iso
+*.ISO
+*.bin
+*.BIN
+*.elf
+*.ELF
+*.self
+*.SELF
+*.sprx
+*.SPRX
+*.pkg
+*.zip
+*.7z
+*.wad
+*.psarc
+*.sfo
+vfs/
+disc/
+extracted/
+God of War - Ascension (Asia) (En,Zh,Ko).dec.iso
+
+# --- Build Output & Binaries ---
+build/
+build_*/
+out/
+bin/
+*.obj
+*.o
+*.pdb
+*.ilk
+*.exe
+*.lib
+*.exp
+*.map
+CMakeCache.txt
+CMakeFiles/
+cmake_install.cmake
+compile_commands.json
+
+# --- Intermediate Object Files in Analysis ---
+analysis/*.o
+analysis/jobmods/
+analysis/jobmods_test/
+analysis/spu_images/
+
+# --- Logs, Dumps & Scratch ---
+*.log
+*.tmp
+run_*.txt
+trap.log
+build.log
+scratch/
+*_dump.hlsl
+rt_save.bmp
+frame_*.bmp
+frames/
+*.bmp
+live_surface.*
+
+# --- Python ---
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+venv/
+
+# --- IDE & OS ---
+.claude/
+.vs/
+.vscode/
+.idea/
+*.user
+*.suo
+Thumbs.db
+.DS_Store
+
+# --- Graphify Internal Cache ---
+graphify-out/cache/
+graphify-out/2026-*/
