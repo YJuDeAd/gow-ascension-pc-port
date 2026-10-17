@@ -1,76 +1,84 @@
-# =============================================================================
-# God of War: Ascension (PS3) Port - .gitignore
-# =============================================================================
+# ============================================================
+# God of War: Ascension PS3 recomp port
+# ============================================================
 
-# --- Copyrighted Game Material & Decrypted Disc / VFS ---
+# ---- Game data: NEVER commit (copyrighted, and 36 GB) ----
 *.iso
-*.ISO
+*.dec.iso
+*.PSARC
+*.psarc
+*.wad
+*.pkg
+*.edat
+*.EDAT
+*.sdat
 *.bin
 *.BIN
-*.elf
-*.ELF
 *.self
 *.SELF
-*.sprx
-*.SPRX
-*.pkg
-*.zip
-*.7z
-*.wad
-*.psarc
+*.elf
+*.ELF
 *.sfo
+*.SFO
 vfs/
-disc/
-extracted/
-God of War - Ascension (Asia) (En,Zh,Ko).dec.iso
-
-# --- Build Output & Binaries ---
-build/
-build_*/
-out/
-bin/
-*.obj
-*.o
-*.pdb
-*.ilk
-*.exe
-*.lib
-*.exp
-*.map
-CMakeCache.txt
-CMakeFiles/
-cmake_install.cmake
-compile_commands.json
-
-# --- Intermediate Object Files in Analysis ---
-analysis/*.o
+spu_programs/
+analysis/spu_images/
 analysis/jobmods/
 analysis/jobmods_test/
-analysis/spu_images/
 
-# --- Logs, Dumps & Scratch ---
-*.log
-*.tmp
-run_*.txt
-trap.log
+# ---- Lifted output (derived from the game's code; regenerate it) ----
+# Rebuild with: python tools/relift.py
+src/gen/
+src/recomp/
+imports.json
+analysis/
+
+# ---- Build output ----
+build/
+build-*/
+out/
+cmake-build-*/
+CMakeCache.txt
+CMakeFiles/
+*.ninja_deps
+*.ninja_log
+*.obj
+*.o
+*.a
+*.lib
+*.exe
+*.dll
+*.pdb
+*.ilk
+*.exp
+*.map
 build.log
-scratch/
-*_dump.hlsl
-rt_save.bmp
-frame_*.bmp
-frames/
-*.bmp
-live_surface.*
 
-# --- Python ---
+# ---- Runtime logs and captures ----
+logs/
+*.log
+*.dmp
+*.etl
+*.rdc
+stderr_*.txt
+stdout_*.txt
+
+# ---- Save data / emulated HDD written at runtime ----
+vfs/cache/
+vfs/game/
+vfs/dev_hdd0/
+vfs/dev_hdd1/
+
+# ---- Tool caches and indexes ----
+graphify-out/
+.graphify*
 __pycache__/
 *.pyc
-*.pyo
+.pytest_cache/
 .venv/
 venv/
 
-# --- IDE & OS ---
-.claude/
+# ---- Editor, OS, agent local state ----
 .vs/
 .vscode/
 .idea/
@@ -78,7 +86,8 @@ venv/
 *.suo
 Thumbs.db
 .DS_Store
+.claude/
 
-# --- Graphify Internal Cache ---
-graphify-out/cache/
-graphify-out/2026-*/
+# ---- Dependencies cloned inside the repo (see note below) ----
+ps3recomp/
+twistedmetal/
