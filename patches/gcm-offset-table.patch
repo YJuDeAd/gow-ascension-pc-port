@@ -1,0 +1,297 @@
+﻿diff --git a/libs/video/cellGcmSys.c b/libs/video/cellGcmSys.c
+index da009b4..f6b2966 100644
+--- a/libs/video/cellGcmSys.c
++++ b/libs/video/cellGcmSys.c
+@@ -151,6 +151,7 @@ static u16 s_ea_address_table[65536];
+ #define GCM_OFFSET_TABLE_PAGES   4096u                 /* 4 GiB / 1 MiB       */
+ #define GCM_OFFSET_TABLE_IO_ADDR (VM_HLE_INJECT_BASE + 0x3000u)           /* ea >> 20  -> io>>20 */
+ #define GCM_OFFSET_TABLE_EA_ADDR (VM_HLE_INJECT_BASE + 0x5000u)           /* io >> 20  -> ea>>20 */
++#define GCM_MAX_IO_SIZE          0x10000000u          /* 256 MiB RSX IO aperture */
+ 
+ /* Local memory bump allocator */
+ static u32 s_local_mem_allocated = 0;  /* next free offset in local memory */
+@@ -360,19 +361,27 @@ static void populate_offset_table(u32 ea, u32 io, u32 size)
+     for (u32 i = 0; i < pages && (ea_page + i) < 65536 && (io_page + i) < 65536; i++) {
+         s_io_address_table[ea_page + i] = (u16)(io_page + i);
+         s_ea_address_table[io_page + i] = (u16)(ea_page + i);
++        if ((ea_page + i) < GCM_OFFSET_TABLE_PAGES)
++            vm_write16(GCM_OFFSET_TABLE_IO_ADDR + (ea_page + i) * 2, (u16)(io_page + i));
++        if ((io_page + i) < GCM_OFFSET_TABLE_PAGES)
++            vm_write16(GCM_OFFSET_TABLE_EA_ADDR + (io_page + i) * 2, (u16)(ea_page + i));
+     }
+ }
+ 
+ /* Clear offset table entries for an IO mapping */
+ static void clear_offset_table(u32 ea, u32 io, u32 size)
+ {
+-    u32 pages = size >> 20;
++    u32 pages = (size + 0xFFFFFu) >> 20;
+     u32 ea_page = ea >> 20;
+     u32 io_page = io >> 20;
+ 
+     for (u32 i = 0; i < pages && (ea_page + i) < 65536 && (io_page + i) < 65536; i++) {
+         s_io_address_table[ea_page + i] = 0xFFFF;
+         s_ea_address_table[io_page + i] = 0xFFFF;
++        if ((ea_page + i) < GCM_OFFSET_TABLE_PAGES)
++            vm_write16(GCM_OFFSET_TABLE_IO_ADDR + (ea_page + i) * 2, 0xFFFF);
++        if ((io_page + i) < GCM_OFFSET_TABLE_PAGES)
++            vm_write16(GCM_OFFSET_TABLE_EA_ADDR + (io_page + i) * 2, 0xFFFF);
+     }
+ }
+ 
+@@ -462,6 +471,10 @@ s32 cellGcmInit(u32 cmdSize, u32 ioSize, u32 ioAddress)
+      * producing plausible-but-wrong offsets instead of a translation failure. */
+     memset(s_io_address_table, 0xFF, sizeof(s_io_address_table));
+     memset(s_ea_address_table, 0xFF, sizeof(s_ea_address_table));
++    for (u32 i = 0; i < GCM_OFFSET_TABLE_PAGES; i++) {
++        vm_write16(GCM_OFFSET_TABLE_IO_ADDR + i * 2, 0xFFFF);
++        vm_write16(GCM_OFFSET_TABLE_EA_ADDR + i * 2, 0xFFFF);
++    }
+     s_current_display_buffer_id = 0;
+     s_flip_handler = NULL;
+     s_vblank_handler = NULL;
+@@ -727,6 +740,7 @@ void ppu_gcm_pump(void)
+                    fprintf(stderr, "[gcm-pump] calls=%u vblank=%u flip=%u vcount=%u%c",
+                            calls, nv, nf, s_vblank_count, 10); } }
+     if ((p & 1) && s_vblank_handler_opd && g_ps3_guest_caller) {
++        fprintf(stderr, "[GCM-DIAG] INVOKING VBlank handler OPD 0x%08X (count=%u)\n", s_vblank_handler_opd, s_vblank_count);
+         ydkj_restore_handler_opd(s_vblank_handler_opd, s_vblank_handler_code);
+         g_ps3_guest_caller(s_vblank_handler_opd, (uint64_t)s_vblank_count,
+                            0, 0, 0, 0, 0, 0, 0);
+@@ -734,6 +748,7 @@ void ppu_gcm_pump(void)
+     if (p & 2) {
+         s_flip_status = CELL_GCM_FLIP_STATUS_DONE;
+         if (s_flip_handler_opd && g_ps3_guest_caller) {
++            fprintf(stderr, "[GCM-DIAG] INVOKING Flip handler OPD 0x%08X (arg=1)\n", s_flip_handler_opd);
+             ydkj_restore_handler_opd(s_flip_handler_opd, s_flip_handler_code);
+             g_ps3_guest_caller(s_flip_handler_opd, 1, 0, 0, 0, 0, 0, 0, 0);
+         }
+@@ -1358,6 +1373,10 @@ static void gcm_fifo_resync_why(const char* why, u32* getoff, u32 put)
+     if (n++ < 8)
+         fprintf(stderr, "[cellGcmSys] FIFO resync (%s) 0x%08X -> put 0x%08X\n",
+                 why, *getoff, put);
++    /* Guard against invalid put values (e.g. 0xFFFFFFFF or > GCM_MAX_IO_SIZE) */
++    if (put == 0xFFFFFFFFu || put >= GCM_MAX_IO_SIZE) {
++        put = (s_last_ring_off < GCM_MAX_IO_SIZE) ? s_last_ring_off : 0;
++    }
+     /* If an SPU DMA'd a pushbuffer that ends just short of `put`, that is the
+      * stream the RSX is being pointed at -- land at its START and walk it,
+      * instead of landing on `put` and skipping it. Resyncing to `put` keeps the
+@@ -1365,16 +1384,18 @@ static void gcm_fifo_resync_why(const char* why, u32* getoff, u32 put)
+      * of them: the draws still arrive, with no primitive type, and are dropped
+      * by the backend as prim=0. */
+     u32 land = gcm_spu_block_for_put(put);
+-    if (land == 0xFFFFFFFFu) land = put;
++    if (land == 0xFFFFFFFFu || land >= GCM_MAX_IO_SIZE) land = put;
+     else { static int b = 0; if (b++ < 8)
+         fprintf(stderr, "[cellGcmSys] resync landing on SPU pushbuffer "
+                 "0x%08X (put 0x%08X) instead of skipping to put\n", land, put); }
++    if (land >= GCM_MAX_IO_SIZE) land = 0;
+ 
+     /* Sweep only the range still being skipped; the walker will consume the
+      * fences inside the block itself, and pushing them here too would publish
+-     * every one twice. */
++     * every one twice. Guard strictly against scanning past GCM_MAX_IO_SIZE (256MB). */
+     u32 from = (*getoff <= land) ? *getoff : s_last_ring_off;
+-    if (from < land) {
++    if (from >= GCM_MAX_IO_SIZE) from = 0;
++    if (from < land && land <= GCM_MAX_IO_SIZE) {
+         unsigned rescued = 0;
+         for (u32 io = from; io + 8 <= land; io += 4) {
+             u32 ea = gcm_io2ea(io); if (!ea) continue;
+@@ -1577,6 +1598,12 @@ static void gcm_rsx_process_fifo_unlocked(void)
+      * own command ring, so everything after the jump (including the reference
+      * writes its waits spin on) silently never executed. */
+     u32 put = vm_read32(GCM_CONTROL_GUEST_ADDR + 0);
++    if (put == 0xFFFFFFFFu || put >= GCM_MAX_IO_SIZE || (put > 0 && !gcm_io2ea((put - 4) & ~3u) && !gcm_io2ea(put & ~3u))) {
++        static int _badput = 0;
++        if (_badput++ < 4)
++            fprintf(stderr, "[cellGcmSys] invalid put=0x%08X (out of GCM IO 256MB range or unmapped) -- skipping drain\n", put);
++        return;
++    }
+     /* The words behind `put` were stored by another thread (the title, or the
+      * recycle below) before it stored `put`. On x86 the hardware keeps loads
+      * in order; on arm64 it does not, so without an acquire here the ring
+@@ -1660,6 +1687,13 @@ static void gcm_rsx_process_fifo_unlocked(void)
+      * catch up, and the reason is the whole diagnosis. */
+     const char* why = "caught-up";
+     while (s_fifo_getoff != put && budget-- > 0) {
++        if (s_fifo_getoff >= GCM_MAX_IO_SIZE) {
++            static int _badget = 0;
++            if (_badget++ < 4)
++                fprintf(stderr, "[cellGcmSys] getoff=0x%08X past 256MB GCM IO range -- snapping to put=0x%08X\n", s_fifo_getoff, put);
++            s_fifo_getoff = (put < GCM_MAX_IO_SIZE) ? put : 0;
++            break;
++        }
+         u32 ea = gcm_io2ea(s_fifo_getoff);
+         if (!ea) {
+             /* get is sitting on an IO offset with no mapping -- the title
+@@ -1741,7 +1775,12 @@ static void gcm_rsx_process_fifo_unlocked(void)
+               if (_rd) fprintf(stderr, "[JMP] %08X -> %08X (put=%08X)\n",
+                                s_fifo_getoff, w & 0x1FFFFFFCu, put); }
+             { u32 tgt = w & 0x1FFFFFFCu;
+-              if (!gcm_io2ea(tgt)) { gcm_fifo_bad_branch("JUMP", tgt, w); gcm_fifo_dump_around(s_fifo_getoff); gcm_fifo_resync_why("unmapped-JUMP", &s_fifo_getoff, put); break; }
++              if (tgt >= GCM_MAX_IO_SIZE || !gcm_io2ea(tgt)) {
++                  gcm_fifo_bad_branch("JUMP", tgt, w);
++                  gcm_fifo_dump_around(s_fifo_getoff);
++                  gcm_fifo_resync_why("unmapped-JUMP", &s_fifo_getoff, put);
++                  break;
++              }
+               /* A JUMP to its own address is the "park the RSX here" idiom:
+                * the title leaves it at the write head so the GPU stops if it
+                * catches up, and overwrites it when the next segment is
+@@ -1788,7 +1827,11 @@ static void gcm_rsx_process_fifo_unlocked(void)
+         }
+         if ((w & 3) == 2) {                    /* CALL: offset | 2 */
+             { u32 tgt = w & 0x1FFFFFFCu;
+-              if (!gcm_io2ea(tgt)) { gcm_fifo_bad_branch("CALL", tgt, w); gcm_fifo_resync_why("unmapped-CALL", &s_fifo_getoff, put); break; }
++              if (tgt >= GCM_MAX_IO_SIZE || !gcm_io2ea(tgt)) {
++                  gcm_fifo_bad_branch("CALL", tgt, w);
++                  gcm_fifo_resync_why("unmapped-CALL", &s_fifo_getoff, put);
++                  break;
++              }
+               s_fifo_calloff = s_fifo_getoff + 4;
+               s_fifo_getoff  = tgt; }
+             continue;
+@@ -2397,8 +2440,10 @@ static s32 gcm_flip_request(u32 bufferId, int in_fifo)
+      * handler against half-built state. Tokyo Jungle faults that way, in
+      * func_001F2D3C, dereferencing a singleton it has not constructed yet.
+      * GCM_FLIPCB_ONTICK=1 leaves the callback to the tick alone. */
+-    if (s_flip_handler_opd && g_ps3_guest_caller && !gcm_flipcb_on_tick_only())
++    if (s_flip_handler_opd && g_ps3_guest_caller && !gcm_flipcb_on_tick_only()) {
++        fprintf(stderr, "[GCM-DIAG] INVOKING Flip handler OPD 0x%08X (arg=0)\n", s_flip_handler_opd);
+         g_ps3_guest_caller(s_flip_handler_opd, 0, 0, 0, 0, 0, 0, 0, 0);  /* head 0 = primary display */
++    }
+ 
+     return CELL_OK;
+ }
+@@ -2521,7 +2566,7 @@ void cellGcmSetFlipHandler(CellGcmFlipHandler handler)
+      * the legacy host-typed value too for any callers still using
+      * the old API style. Real dispatch goes through
+      * cellGcmDispatchVBlank()/DispatchFlip() via g_ps3_guest_caller. */
+-    printf("[cellGcmSys] SetFlipHandler(opd=0x%08X)\n", (unsigned)(size_t)handler);
++    fprintf(stderr, "[GCM-DIAG] cellGcmSetFlipHandler(opd=0x%08X)\n", (unsigned)(size_t)handler);
+     s_flip_handler_opd = (u32)(size_t)handler;
+     s_flip_handler = handler;
+     { u32 c = s_flip_handler_opd ? vm_read32(s_flip_handler_opd) : 0; if (c) s_flip_handler_code = c; }
+@@ -2531,7 +2576,7 @@ void cellGcmSetFlipHandler(CellGcmFlipHandler handler)
+ /* NID: 0xA547ADDE */
+ void cellGcmSetVBlankHandler(CellGcmVBlankHandler handler)
+ {
+-    printf("[cellGcmSys] SetVBlankHandler(opd=0x%08X)\n", (unsigned)(size_t)handler);
++    fprintf(stderr, "[GCM-DIAG] cellGcmSetVBlankHandler(opd=0x%08X)\n", (unsigned)(size_t)handler);
+     s_vblank_handler_opd = (u32)(size_t)handler;
+     s_vblank_handler = handler;
+     { u32 c = s_vblank_handler_opd ? vm_read32(s_vblank_handler_opd) : 0; if (c) s_vblank_handler_code = c; }
+@@ -2575,6 +2620,43 @@ static void gcm_publish_offset_tables(void)
+     }
+ }
+ 
++void gcm_dump_offset_tables(const char* tag)
++{
++    fprintf(stderr, "[GCM-TABLE-DIAG] %s:\n", tag);
++    fprintf(stderr, "  GCM_OFFSET_TABLE_IO_ADDR = 0x%08X, EA_ADDR = 0x%08X\n",
++            (u32)GCM_OFFSET_TABLE_IO_ADDR, (u32)GCM_OFFSET_TABLE_EA_ADDR);
++    if (vm_base) {
++        uint32_t game_io_ptr = vm_read32(0x009BDFB4);
++        uint32_t game_ea_ptr = vm_read32(0x009BDFB8);
++        fprintf(stderr, "  Game struct @ 0x009BDFB4: ioAddress=0x%08X, eaAddress=0x%08X\n",
++                game_io_ptr, game_ea_ptr);
++    }
++    fprintf(stderr, "  Host s_io_address_table (first non-0xFFFF entries):\n");
++    int count = 0;
++    for (u32 i = 0; i < 4096 && count < 16; i++) {
++        if (s_io_address_table[i] != 0xFFFF) {
++            u16 guest_val = vm_read16(GCM_OFFSET_TABLE_IO_ADDR + i * 2);
++            fprintf(stderr, "    EA page 0x%03X (EA 0x%08X) -> IO page 0x%03X (host=0x%04X, guest=0x%04X)\n",
++                    i, i << 20, s_io_address_table[i], s_io_address_table[i], guest_val);
++            count++;
++        }
++    }
++    if (count == 0) fprintf(stderr, "    (all 0xFFFF)\n");
++
++    fprintf(stderr, "  Host s_ea_address_table (first non-0xFFFF entries):\n");
++    count = 0;
++    for (u32 i = 0; i < 4096 && count < 16; i++) {
++        if (s_ea_address_table[i] != 0xFFFF) {
++            u16 guest_val = vm_read16(GCM_OFFSET_TABLE_EA_ADDR + i * 2);
++            fprintf(stderr, "    IO page 0x%03X (IO 0x%08X) -> EA page 0x%03X (host=0x%04X, guest=0x%04X)\n",
++                    i, i << 20, s_ea_address_table[i], s_ea_address_table[i], guest_val);
++            count++;
++        }
++    }
++    if (count == 0) fprintf(stderr, "    (all 0xFFFF)\n");
++    fflush(stderr);
++}
++
+ s32 cellGcmGetOffsetTable(CellGcmOffsetTable* table)
+ {
+     u32 ea = (u32)(uintptr_t)table;
+@@ -2586,6 +2668,10 @@ s32 cellGcmGetOffsetTable(CellGcmOffsetTable* table)
+     /* The guest struct is two 4-byte EAs, not two host pointers. */
+     vm_write32(ea + 0, GCM_OFFSET_TABLE_IO_ADDR);
+     vm_write32(ea + 4, GCM_OFFSET_TABLE_EA_ADDR);
++
++    fprintf(stderr, "[cellGcmSys] GetOffsetTable(table=0x%08X) -> io=0x%08X, ea=0x%08X\n",
++            ea, (u32)GCM_OFFSET_TABLE_IO_ADDR, (u32)GCM_OFFSET_TABLE_EA_ADDR);
++    gcm_dump_offset_tables("cellGcmGetOffsetTable");
+     return CELL_OK;
+ }
+ 
+@@ -2767,6 +2853,7 @@ s32 cellGcmMapMainMemory(u32 ea, u32 size, u32* offset)
+     s_io_mapping_count++;
+ 
+     populate_offset_table(ea, io_offset, size);
++    gcm_dump_offset_tables("after cellGcmMapMainMemory");
+ 
+     vm_write32((uint32_t)(uintptr_t)offset, io_offset);   /* guest out-param */
+     return CELL_OK;
+@@ -2788,8 +2875,13 @@ s32 cellGcmMapEaIoAddress(u32 ea, u32 io, u32 size)
+         printf("[cellGcmSys] MapEaIoAddress REFUSED: size 0x%X is not a non-zero multiple of 1MB\n", size);
+         return CELL_GCM_ERROR_INVALID_ALIGNMENT;
+     }
+-    if (find_mapping_by_ea(ea) != NULL) {
+-        printf("[cellGcmSys] MapEaIoAddress REFUSED: ea 0x%08X is already mapped\n", ea);
++    IoMapping* existing = find_mapping_by_ea(ea);
++    if (existing != NULL) {
++        if (existing->io == io) {
++            printf("[cellGcmSys] MapEaIoAddress ea 0x%08X already mapped to io 0x%08X (re-mapping OK)\n", ea, io);
++            return CELL_OK;
++        }
++        printf("[cellGcmSys] MapEaIoAddress REFUSED: ea 0x%08X is already mapped to io 0x%08X (requested io 0x%08X)\n", ea, existing->io, io);
+         return CELL_GCM_ERROR_ADDRESS_OVERWRAP;
+     }
+ 
+@@ -2806,6 +2898,7 @@ s32 cellGcmMapEaIoAddress(u32 ea, u32 io, u32 size)
+     s_io_mapping_count++;
+ 
+     populate_offset_table(ea, io, size);
++    gcm_dump_offset_tables("after cellGcmMapEaIoAddress");
+ 
+     return CELL_OK;
+ }
+@@ -3212,6 +3305,7 @@ s32 cellGcmSetDefaultFifoSize(u32 size)
+ /* NID: 0x21397818 */
+ s32 _cellGcmSetFlipCommand(void* ctx, u32 bufferId)
+ {
++    fprintf(stderr, "[GCM-DIAG] _cellGcmSetFlipCommand(buf=%u)\n", bufferId);
+     if (gcm_flip_into_fifo((u32)(uintptr_t)ctx, bufferId))
+         return gcm_flip_request(bufferId, 1);
+     return cellGcmSetFlipCommand(bufferId);
+@@ -3221,6 +3315,8 @@ s32 _cellGcmSetFlipCommand(void* ctx, u32 bufferId)
+ s32 _cellGcmSetFlipCommandWithWaitLabel(void* ctx, u32 bufferId,
+                                         u32 labelIndex, u32 labelValue)
+ {
++    fprintf(stderr, "[GCM-DIAG] _cellGcmSetFlipCommandWithWaitLabel(buf=%u, label=%u, val=%u)\n",
++            bufferId, labelIndex, labelValue);
+     (void)ctx;
+     return cellGcmSetFlipCommandWithWaitLabel(bufferId, labelIndex, labelValue);
+ }
+@@ -3447,6 +3543,7 @@ s32 cellGcmSetFlipImmediate(u32 bufferId)
+ /* Set flip status directly */
+ void cellGcmSetFlipStatus(u32 status)
+ {
++    fprintf(stderr, "[GCM-DIAG] cellGcmSetFlipStatus(status=0x%X)\n", status);
+     s_flip_status = status;
+ }
+ 
