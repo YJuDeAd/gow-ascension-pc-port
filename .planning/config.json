@@ -1,0 +1,28 @@
+{
+  "project": "gow-ascension-port",
+  "version": "0.1.0",
+  "milestone": 1,
+  "active_phase": 1,
+  "planning_model": "claude-opus-4.6",
+  "execution_model": "gemini-flash-3.8-high",
+  "workflow": {
+    "auto_commit": false,
+    "require_verify": true,
+    "graphify_first": true,
+    "code_review": false,
+    "uat_required": false
+  },
+  "constraints": {
+    "disk_budget_gb": 45,
+    "compiler": "clang-cl",
+    "generator": "Ninja",
+    "gen_optimize": "/O2",
+    "gen_debug_info": false,
+    "stack_size_mb": 256,
+    "bash_allowed": false,
+    "read_only_repos": ["ps3recomp", "twistedmetal"],
+    "never_edit": ["src/gen/"],
+    "never_read_into_context": ["src/gen/recomp_*.cpp"]
+  },
+  "created": "2026-10-16T23:17:00+05:30"
+}
