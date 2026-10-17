@@ -1,0 +1,1020 @@
+﻿diff --git a/src/compat/ascension_hle.cpp b/src/compat/ascension_hle.cpp
+index d58393d..ef0eabc 100644
+--- a/src/compat/ascension_hle.cpp
++++ b/src/compat/ascension_hle.cpp
+@@ -112,330 +112,760 @@ static void cellGcmMapEaIoAddressWithFlags(ppu_context* ctx)
+ }
+ 
+ /* ---------------------------------------------------------------------------
+- * sys_lwmutex & sys_lwcond Telemetry & Diagnostics
++ * Real sys_lwmutex & sys_lwcond Implementation (PS3 LV2 Semantics)
+  * ------------------------------------------------------------------------- */
++#define SYS_SYNC_FIFO              0x00000001
++#define SYS_SYNC_PRIORITY          0x00000002
++#define SYS_SYNC_RECURSIVE         0x00000010
++#define SYS_SYNC_NOT_RECURSIVE     0x00000020
++
++#define CELL_OK                    0x00000000
++#define CELL_EINVAL                ((int32_t)0x80010002)
++#define CELL_ESRCH                 ((int32_t)0x80010005)
++#define CELL_EDEADLK               ((int32_t)0x80010008)
++#define CELL_EPERM                ((int32_t)0x80010009)
++#define CELL_EBUSY                 ((int32_t)0x8001000A)
++#define CELL_ETIMEDOUT             ((int32_t)0x8001000B)
++
+ #define LWM_OWNER  0x00
+ #define LWM_ATTR   0x08
+ #define LWM_RECUR  0x0C
+ #define LWM_SELF(ctx) ((uint32_t)(ctx)->thread_id ? (uint32_t)(ctx)->thread_id : 0x7FFFFFFEu)
+ 
+-#define DIAG_LWM_HASH 65536u
+-static struct DiagLwmSlot {
+-    volatile long addr;
+-    HANDLE sem;
+-} g_diag_lwm[DIAG_LWM_HASH];
+-static volatile long g_diag_lwm_tab_lock = 0;
+-
+-static HANDLE diag_lwm_sem(uint32_t addr)
+-{
+-    if (!addr) return nullptr;
+-    uint32_t h = (addr * 2654435761u) & (DIAG_LWM_HASH - 1);
+-    for (uint32_t i = 0; i < DIAG_LWM_HASH; i++) {
+-        uint32_t idx = (h + i) & (DIAG_LWM_HASH - 1);
+-        long cur = g_diag_lwm[idx].addr;
+-        if ((uint32_t)cur == addr) return g_diag_lwm[idx].sem;
+-        if (cur == 0) {
+-            while (_InterlockedExchange(&g_diag_lwm_tab_lock, 1)) YieldProcessor();
+-            HANDLE r = nullptr;
+-            if (g_diag_lwm[idx].addr == 0) {
+-                g_diag_lwm[idx].sem = CreateSemaphoreA(NULL, 1, 1, NULL); /* free */
+-                g_diag_lwm[idx].addr = (long)addr;
+-                r = g_diag_lwm[idx].sem;
+-            } else if ((uint32_t)g_diag_lwm[idx].addr == addr) {
+-                r = g_diag_lwm[idx].sem;
+-            }
+-            _InterlockedExchange(&g_diag_lwm_tab_lock, 0);
+-            if (r) return r;
+-        }
+-    }
+-    return nullptr;
+-}
+-
+-struct DiagCondStats {
+-    uint32_t cond_ea;
+-    uint32_t mutex_ea;
+-    uint64_t wait_count;
+-    uint64_t signal_count;
+-    uint64_t signal_all_count;
+-    uint64_t wakeup_count;
+-    volatile long active_waiters;
+-    uint32_t last_waiter_tid;
+-    uint32_t last_signaler_tid;
+-    uint64_t zero_waiter_signals;
++struct GowSyncWaiter {
++    uint32_t       thread_id;
++    HANDLE         event;
++    bool           woken;
++    GowSyncWaiter* next;
++    GowSyncWaiter* prev;
+ };
+ 
+-#define MAX_TRACKED_CONDS 256
+-static DiagCondStats g_tracked_conds[MAX_TRACKED_CONDS];
+-static uint32_t g_num_tracked_conds = 0;
+-static std::mutex g_sync_diag_lock;
++struct GowWaiterQueue {
++    GowSyncWaiter* head;
++    GowSyncWaiter* tail;
++    uint32_t       count;
++
++    void push_back(GowSyncWaiter* w) {
++        w->next = nullptr;
++        w->prev = tail;
++        if (tail) tail->next = w;
++        else head = w;
++        tail = w;
++        count++;
++    }
+ 
+-static DiagCondStats* get_or_create_cond_stats(uint32_t cond_ea, uint32_t mutex_ea)
+-{
+-    std::lock_guard<std::mutex> lock(g_sync_diag_lock);
+-    for (uint32_t i = 0; i < g_num_tracked_conds; i++) {
+-        if (g_tracked_conds[i].cond_ea == cond_ea) {
+-            if (mutex_ea && !g_tracked_conds[i].mutex_ea) g_tracked_conds[i].mutex_ea = mutex_ea;
+-            return &g_tracked_conds[i];
+-        }
++    GowSyncWaiter* pop_front() {
++        if (!head) return nullptr;
++        GowSyncWaiter* w = head;
++        head = w->next;
++        if (head) head->prev = nullptr;
++        else tail = nullptr;
++        w->next = w->prev = nullptr;
++        count--;
++        return w;
+     }
+-    if (g_num_tracked_conds < MAX_TRACKED_CONDS) {
+-        DiagCondStats* s = &g_tracked_conds[g_num_tracked_conds++];
+-        memset(s, 0, sizeof(*s));
+-        s->cond_ea = cond_ea;
+-        s->mutex_ea = mutex_ea;
+-        return s;
++
++    bool remove(GowSyncWaiter* w) {
++        if (!w) return false;
++        if (w->prev) w->prev->next = w->next;
++        else if (head == w) head = w->next;
++        else return false;
++
++        if (w->next) w->next->prev = w->prev;
++        else if (tail == w) tail = w->prev;
++
++        w->next = w->prev = nullptr;
++        count--;
++        return true;
+     }
+-    return nullptr;
+-}
++};
+ 
+-struct DiagMutexStats {
+-    uint32_t mutex_ea;
+-    uint64_t lock_count;
+-    uint64_t unlock_count;
+-    uint64_t trylock_count;
++struct GowLwMutex {
++    uint32_t       ea;
++    bool           active;
++    bool           recursive;
++    uint32_t       owner_tid;
++    uint32_t       recursion_count;
++    GowWaiterQueue waiters;
++
++    uint64_t       lock_count;
++    uint64_t       unlock_count;
++    uint64_t       trylock_count;
+ };
+ 
+-#define MAX_TRACKED_MUTEXES 256
+-static DiagMutexStats g_tracked_mutexes[MAX_TRACKED_MUTEXES];
+-static uint32_t g_num_tracked_mutexes = 0;
++struct GowLwCond {
++    uint32_t       ea;
++    bool           active;
++    uint32_t       lwmutex_ea;
++    GowWaiterQueue waiters;
++
++    uint64_t       wait_count;
++    uint64_t       signal_count;
++    uint64_t       signal_all_count;
++    uint64_t       signal_to_count;
++    uint64_t       wakeup_count;
++    uint64_t       zero_waiter_signals;
++    uint32_t       last_waiter_tid;
++    uint32_t       last_signaler_tid;
++};
+ 
+-static DiagMutexStats* get_or_create_mutex_stats(uint32_t mutex_ea)
+-{
+-    std::lock_guard<std::mutex> lock(g_sync_diag_lock);
+-    for (uint32_t i = 0; i < g_num_tracked_mutexes; i++) {
+-        if (g_tracked_mutexes[i].mutex_ea == mutex_ea) return &g_tracked_mutexes[i];
++#define GOW_SYNC_HASH_SIZE 2048
++static GowLwMutex g_gow_mutexes[GOW_SYNC_HASH_SIZE];
++static GowLwCond  g_gow_conds[GOW_SYNC_HASH_SIZE];
++static CRITICAL_SECTION g_gow_sync_lock;
++static bool g_gow_sync_lock_inited = false;
++
++static inline void ensure_sync_lock_inited() {
++    if (!g_gow_sync_lock_inited) {
++        InitializeCriticalSectionAndSpinCount(&g_gow_sync_lock, 4000);
++        g_gow_sync_lock_inited = true;
++    }
++}
++
++static thread_local HANDLE t_sync_wait_event = NULL;
++static inline HANDLE get_thread_sync_wait_event(void) {
++    if (!t_sync_wait_event) {
++        t_sync_wait_event = CreateEventA(NULL, FALSE, FALSE, NULL);
++    }
++    return t_sync_wait_event;
++}
++
++static GowLwMutex* find_or_create_mutex(uint32_t ea) {
++    if (!ea) return nullptr;
++    uint32_t h = (ea * 2654435761u) & (GOW_SYNC_HASH_SIZE - 1);
++    for (uint32_t i = 0; i < GOW_SYNC_HASH_SIZE; i++) {
++        uint32_t idx = (h + i) & (GOW_SYNC_HASH_SIZE - 1);
++        if (g_gow_mutexes[idx].ea == ea && g_gow_mutexes[idx].active) {
++            return &g_gow_mutexes[idx];
++        }
++        if (!g_gow_mutexes[idx].active) {
++            g_gow_mutexes[idx].ea = ea;
++            g_gow_mutexes[idx].active = true;
++            uint32_t attr = vm_read32(ea + LWM_ATTR);
++            g_gow_mutexes[idx].recursive = (attr != SYS_SYNC_NOT_RECURSIVE);
++            g_gow_mutexes[idx].owner_tid = 0;
++            g_gow_mutexes[idx].recursion_count = 0;
++            g_gow_mutexes[idx].waiters.head = nullptr;
++            g_gow_mutexes[idx].waiters.tail = nullptr;
++            g_gow_mutexes[idx].waiters.count = 0;
++            g_gow_mutexes[idx].lock_count = 0;
++            g_gow_mutexes[idx].unlock_count = 0;
++            g_gow_mutexes[idx].trylock_count = 0;
++            return &g_gow_mutexes[idx];
++        }
+     }
+-    if (g_num_tracked_mutexes < MAX_TRACKED_MUTEXES) {
+-        DiagMutexStats* s = &g_tracked_mutexes[g_num_tracked_mutexes++];
+-        memset(s, 0, sizeof(*s));
+-        s->mutex_ea = mutex_ea;
+-        return s;
++    return nullptr;
++}
++
++static GowLwCond* find_or_create_cond(uint32_t ea) {
++    if (!ea) return nullptr;
++    uint32_t h = (ea * 2654435761u) & (GOW_SYNC_HASH_SIZE - 1);
++    for (uint32_t i = 0; i < GOW_SYNC_HASH_SIZE; i++) {
++        uint32_t idx = (h + i) & (GOW_SYNC_HASH_SIZE - 1);
++        if (g_gow_conds[idx].ea == ea && g_gow_conds[idx].active) {
++            return &g_gow_conds[idx];
++        }
++        if (!g_gow_conds[idx].active) {
++            g_gow_conds[idx].ea = ea;
++            g_gow_conds[idx].active = true;
++            g_gow_conds[idx].lwmutex_ea = vm_read32(ea + 0x00);
++            g_gow_conds[idx].waiters.head = nullptr;
++            g_gow_conds[idx].waiters.tail = nullptr;
++            g_gow_conds[idx].waiters.count = 0;
++            g_gow_conds[idx].wait_count = 0;
++            g_gow_conds[idx].signal_count = 0;
++            g_gow_conds[idx].signal_all_count = 0;
++            g_gow_conds[idx].signal_to_count = 0;
++            g_gow_conds[idx].wakeup_count = 0;
++            g_gow_conds[idx].zero_waiter_signals = 0;
++            g_gow_conds[idx].last_waiter_tid = 0;
++            g_gow_conds[idx].last_signaler_tid = 0;
++            return &g_gow_conds[idx];
++        }
+     }
+     return nullptr;
+ }
+ 
+-static void diag_sys_lwmutex_create(ppu_context* ctx)
++static void gow_sys_lwmutex_create(ppu_context* ctx)
+ {
+-    uint32_t lwm = (uint32_t)ctx->gpr[3];
++    ensure_sync_lock_inited();
++    uint32_t lwm  = (uint32_t)ctx->gpr[3];
+     uint32_t attr = (uint32_t)ctx->gpr[4];
+-    uint32_t protocol = attr ? vm_read32(attr + 0) : 0;
+-    vm_write32(lwm + 0x00, 0);          /* owner */
+-    vm_write32(lwm + 0x04, 0);          /* waiter */
+-    vm_write32(lwm + LWM_ATTR, protocol);
+-    vm_write32(lwm + LWM_RECUR, 0);     /* recursive_count */
+-    vm_write32(lwm + 0x10, 0);          /* sleep_queue */
++    if (!lwm) { ctx->gpr[3] = (uint64_t)(int64_t)CELL_EINVAL; return; }
++
++    uint32_t protocol = attr ? vm_read32(attr + 0) : SYS_SYNC_FIFO;
++    uint32_t rec_attr = attr ? vm_read32(attr + 4) : SYS_SYNC_RECURSIVE;
++    bool is_recursive = (rec_attr != SYS_SYNC_NOT_RECURSIVE);
++
++    EnterCriticalSection(&g_gow_sync_lock);
++    GowLwMutex* m = find_or_create_mutex(lwm);
++    if (m) {
++        m->ea = lwm;
++        m->active = true;
++        m->recursive = is_recursive;
++        m->owner_tid = 0;
++        m->recursion_count = 0;
++        while (GowSyncWaiter* w = m->waiters.pop_front()) {
++            w->woken = true;
++            SetEvent(w->event);
++        }
++    }
++    LeaveCriticalSection(&g_gow_sync_lock);
++
++    static uint32_t s_next_q_id = 0x51000000u;
++    vm_write32(lwm + 0x00, 0);                 /* owner */
++    vm_write32(lwm + 0x04, 0);                 /* waiter */
++    vm_write32(lwm + LWM_ATTR, rec_attr);      /* attribute */
++    vm_write32(lwm + LWM_RECUR, 0);            /* recursive_count */
++    vm_write32(lwm + 0x10, ++s_next_q_id);     /* sleep_queue */
+     vm_write32(lwm + 0x14, 0);
+-    HANDLE s = diag_lwm_sem(lwm);
+-    if (s) ReleaseSemaphore(s, 1, NULL);
+-    get_or_create_mutex_stats(lwm);
+-    ctx->gpr[3] = 0;
++
++    ctx->gpr[3] = CELL_OK;
+ }
+ 
+-static void diag_sys_lwmutex_destroy(ppu_context* ctx)
++static void gow_sys_lwmutex_destroy(ppu_context* ctx)
+ {
+-    ctx->gpr[3] = 0;
++    ensure_sync_lock_inited();
++    uint32_t lwm = (uint32_t)ctx->gpr[3];
++    if (!lwm) { ctx->gpr[3] = (uint64_t)(int64_t)CELL_EINVAL; return; }
++
++    EnterCriticalSection(&g_gow_sync_lock);
++    GowLwMutex* m = find_or_create_mutex(lwm);
++    if (m && (m->owner_tid != 0 || m->waiters.count > 0)) {
++        LeaveCriticalSection(&g_gow_sync_lock);
++        ctx->gpr[3] = (uint64_t)(int64_t)CELL_EBUSY;
++        return;
++    }
++    if (m) {
++        m->active = false;
++        m->ea = 0;
++        m->owner_tid = 0;
++        m->recursion_count = 0;
++    }
++    LeaveCriticalSection(&g_gow_sync_lock);
++
++    vm_write32(lwm + 0x00, 0);
++    vm_write32(lwm + 0x04, 0);
++    vm_write32(lwm + 0x08, 0);
++    vm_write32(lwm + 0x0C, 0);
++    vm_write32(lwm + 0x10, 0);
++    ctx->gpr[3] = CELL_OK;
+ }
+ 
+-static void diag_sys_lwmutex_lock(ppu_context* ctx)
++static void gow_sys_lwmutex_lock(ppu_context* ctx)
+ {
++    ensure_sync_lock_inited();
+     uint32_t lwm = (uint32_t)ctx->gpr[3];
+-    uint32_t self = LWM_SELF(ctx);
+     uint64_t timeout_us = ctx->gpr[4];
++    uint32_t self = LWM_SELF(ctx);
+     uint32_t tid = (uint32_t)ctx->thread_id;
+-    DiagMutexStats* st = get_or_create_mutex_stats(lwm);
+-    if (st) st->lock_count++;
+-
+-    HANDLE s = diag_lwm_sem(lwm);
+-    if (s) {
+-        if (vm_read32(lwm + LWM_OWNER) == self && vm_read32(lwm + LWM_RECUR) > 0) {
+-            vm_write32(lwm + LWM_RECUR, vm_read32(lwm + LWM_RECUR) + 1);
+-            ctx->gpr[3] = 0;
++    if (!lwm) { ctx->gpr[3] = (uint64_t)(int64_t)CELL_EINVAL; return; }
++
++    DWORD timeout_ms = INFINITE;
++    if (timeout_us > 0) {
++        uint64_t m = (timeout_us + 999) / 1000;
++        timeout_ms = (m > 0xFFFFFFFEull) ? 0xFFFFFFFEu : (DWORD)m;
++    }
++
++    EnterCriticalSection(&g_gow_sync_lock);
++    GowLwMutex* m = find_or_create_mutex(lwm);
++    if (!m) {
++        LeaveCriticalSection(&g_gow_sync_lock);
++        ctx->gpr[3] = (uint64_t)(int64_t)CELL_EINVAL;
++        return;
++    }
++    m->lock_count++;
++
++    // 1. Caller already holds lock
++    if (m->owner_tid == self && m->recursion_count > 0) {
++        if (!m->recursive) {
++            LeaveCriticalSection(&g_gow_sync_lock);
++            ctx->gpr[3] = (uint64_t)(int64_t)CELL_EDEADLK;
+             return;
+         }
+-        if (WaitForSingleObject(s, 0) != WAIT_OBJECT_0) {
+-            ppu_diag_set_wait(tid, PPU_WAIT_LWMUTEX, lwm);
+-            DWORD ms = INFINITE;
+-            if (timeout_us) { uint64_t m = (timeout_us + 999) / 1000; ms = m > 0xFFFFFFFEull ? 0xFFFFFFFEu : (DWORD)m; }
+-            DWORD wr = WaitForSingleObject(s, ms);
+-            ppu_diag_clear_wait(tid);
+-            if (wr == WAIT_TIMEOUT) {
+-                ctx->gpr[3] = (uint64_t)(int64_t)(int32_t)0x8001000Bu;
+-                return;
+-            }
+-        }
++        m->recursion_count++;
++        vm_write32(lwm + LWM_RECUR, m->recursion_count);
++        LeaveCriticalSection(&g_gow_sync_lock);
++        ctx->gpr[3] = CELL_OK;
++        return;
+     }
+-    vm_write32(lwm + LWM_OWNER, self);
+-    vm_write32(lwm + LWM_RECUR, 1);
+-    ctx->gpr[3] = 0;
++
++    // 2. Free lock
++    if (m->owner_tid == 0) {
++        m->owner_tid = self;
++        m->recursion_count = 1;
++        vm_write32(lwm + LWM_OWNER, self);
++        vm_write32(lwm + LWM_RECUR, 1);
++        vm_write32(lwm + 0x04, m->waiters.count);
++        LeaveCriticalSection(&g_gow_sync_lock);
++        ctx->gpr[3] = CELL_OK;
++        return;
++    }
++
++    // 3. Contended -> Block in FIFO queue
++    GowSyncWaiter waiter;
++    waiter.thread_id = tid;
++    waiter.event = get_thread_sync_wait_event();
++    waiter.woken = false;
++    ResetEvent(waiter.event);
++
++    m->waiters.push_back(&waiter);
++    vm_write32(lwm + 0x04, m->waiters.count);
++
++    ppu_diag_set_wait(tid, PPU_WAIT_LWMUTEX, lwm);
++    LeaveCriticalSection(&g_gow_sync_lock);
++
++    DWORD wr = WaitForSingleObject(waiter.event, timeout_ms);
++
++    EnterCriticalSection(&g_gow_sync_lock);
++    ppu_diag_clear_wait(tid);
++
++    if (waiter.woken) {
++        // Ownership transferred directly by unlocker
++        vm_write32(lwm + 0x04, m->waiters.count);
++        LeaveCriticalSection(&g_gow_sync_lock);
++        ctx->gpr[3] = CELL_OK;
++        return;
++    }
++
++    // Timed out
++    m->waiters.remove(&waiter);
++    vm_write32(lwm + 0x04, m->waiters.count);
++    LeaveCriticalSection(&g_gow_sync_lock);
++    ctx->gpr[3] = (uint64_t)(int64_t)CELL_ETIMEDOUT;
+ }
+ 
+-static void diag_sys_lwmutex_trylock(ppu_context* ctx)
++static void gow_sys_lwmutex_trylock(ppu_context* ctx)
+ {
++    ensure_sync_lock_inited();
+     uint32_t lwm = (uint32_t)ctx->gpr[3];
+     uint32_t self = LWM_SELF(ctx);
+-    DiagMutexStats* st = get_or_create_mutex_stats(lwm);
+-    if (st) st->trylock_count++;
+-
+-    HANDLE s = diag_lwm_sem(lwm);
+-    if (s) {
+-        if (vm_read32(lwm + LWM_OWNER) == self && vm_read32(lwm + LWM_RECUR) > 0) {
+-            vm_write32(lwm + LWM_RECUR, vm_read32(lwm + LWM_RECUR) + 1);
+-            ctx->gpr[3] = 0;
+-            return;
+-        }
+-        if (WaitForSingleObject(s, 0) != WAIT_OBJECT_0) {
+-            ctx->gpr[3] = (uint64_t)(int64_t)(int32_t)0x8001000Bu;
++    if (!lwm) { ctx->gpr[3] = (uint64_t)(int64_t)CELL_EINVAL; return; }
++
++    EnterCriticalSection(&g_gow_sync_lock);
++    GowLwMutex* m = find_or_create_mutex(lwm);
++    if (!m) {
++        LeaveCriticalSection(&g_gow_sync_lock);
++        ctx->gpr[3] = (uint64_t)(int64_t)CELL_EINVAL;
++        return;
++    }
++    m->trylock_count++;
++
++    if (m->owner_tid == self && m->recursion_count > 0) {
++        if (!m->recursive) {
++            LeaveCriticalSection(&g_gow_sync_lock);
++            ctx->gpr[3] = (uint64_t)(int64_t)CELL_EBUSY;
+             return;
+         }
++        m->recursion_count++;
++        vm_write32(lwm + LWM_RECUR, m->recursion_count);
++        LeaveCriticalSection(&g_gow_sync_lock);
++        ctx->gpr[3] = CELL_OK;
++        return;
+     }
+-    vm_write32(lwm + LWM_OWNER, self);
+-    vm_write32(lwm + LWM_RECUR, 1);
+-    ctx->gpr[3] = 0;
++
++    if (m->owner_tid == 0) {
++        m->owner_tid = self;
++        m->recursion_count = 1;
++        vm_write32(lwm + LWM_OWNER, self);
++        vm_write32(lwm + LWM_RECUR, 1);
++        vm_write32(lwm + 0x04, m->waiters.count);
++        LeaveCriticalSection(&g_gow_sync_lock);
++        ctx->gpr[3] = CELL_OK;
++        return;
++    }
++
++    LeaveCriticalSection(&g_gow_sync_lock);
++    ctx->gpr[3] = (uint64_t)(int64_t)CELL_EBUSY;
+ }
+ 
+-static void diag_sys_lwmutex_unlock(ppu_context* ctx)
++static void gow_sys_lwmutex_unlock(ppu_context* ctx)
+ {
++    ensure_sync_lock_inited();
+     uint32_t lwm = (uint32_t)ctx->gpr[3];
+-    DiagMutexStats* st = get_or_create_mutex_stats(lwm);
+-    if (st) st->unlock_count++;
++    uint32_t self = LWM_SELF(ctx);
++    if (!lwm) { ctx->gpr[3] = (uint64_t)(int64_t)CELL_EINVAL; return; }
+ 
+-    uint32_t rc = vm_read32(lwm + LWM_RECUR);
+-    if (rc > 1) {
+-        vm_write32(lwm + LWM_RECUR, rc - 1);
+-        ctx->gpr[3] = 0;
++    EnterCriticalSection(&g_gow_sync_lock);
++    GowLwMutex* m = find_or_create_mutex(lwm);
++    if (!m) {
++        LeaveCriticalSection(&g_gow_sync_lock);
++        ctx->gpr[3] = (uint64_t)(int64_t)CELL_EINVAL;
+         return;
+     }
+-    vm_write32(lwm + LWM_RECUR, 0);
+-    vm_write32(lwm + LWM_OWNER, 0);
+-    HANDLE s = diag_lwm_sem(lwm);
+-    if (s) ReleaseSemaphore(s, 1, NULL);
+-    ctx->gpr[3] = 0;
++    m->unlock_count++;
++
++    if (m->owner_tid != self || m->recursion_count == 0) {
++        LeaveCriticalSection(&g_gow_sync_lock);
++        ctx->gpr[3] = (uint64_t)(int64_t)CELL_EPERM;
++        return;
++    }
++
++    m->recursion_count--;
++    if (m->recursion_count > 0) {
++        vm_write32(lwm + LWM_RECUR, m->recursion_count);
++        LeaveCriticalSection(&g_gow_sync_lock);
++        ctx->gpr[3] = CELL_OK;
++        return;
++    }
++
++    // Fully unlocked: baton pass to next waiter
++    GowSyncWaiter* next_w = m->waiters.pop_front();
++    if (next_w) {
++        m->owner_tid = next_w->thread_id ? next_w->thread_id : 0x7FFFFFFEu;
++        m->recursion_count = 1;
++        next_w->woken = true;
++        vm_write32(lwm + LWM_OWNER, m->owner_tid);
++        vm_write32(lwm + LWM_RECUR, 1);
++        vm_write32(lwm + 0x04, m->waiters.count);
++        SetEvent(next_w->event);
++    } else {
++        m->owner_tid = 0;
++        m->recursion_count = 0;
++        vm_write32(lwm + LWM_OWNER, 0);
++        vm_write32(lwm + LWM_RECUR, 0);
++        vm_write32(lwm + 0x04, 0);
++    }
++
++    LeaveCriticalSection(&g_gow_sync_lock);
++    ctx->gpr[3] = CELL_OK;
+ }
+ 
+-static void diag_sys_lwcond_create(ppu_context* ctx)
++static void gow_sys_lwmutex_reset_all(ppu_context* ctx)
+ {
+-    static uint32_t s_lwcond_id = 0x4C000000u;
++    ensure_sync_lock_inited();
++    EnterCriticalSection(&g_gow_sync_lock);
++    for (uint32_t i = 0; i < GOW_SYNC_HASH_SIZE; i++) {
++        if (g_gow_mutexes[i].active) {
++            g_gow_mutexes[i].owner_tid = 0;
++            g_gow_mutexes[i].recursion_count = 0;
++            while (GowSyncWaiter* w = g_gow_mutexes[i].waiters.pop_front()) {
++                w->woken = true;
++                SetEvent(w->event);
++            }
++        }
++        if (g_gow_conds[i].active) {
++            while (GowSyncWaiter* w = g_gow_conds[i].waiters.pop_front()) {
++                w->woken = true;
++                SetEvent(w->event);
++            }
++        }
++    }
++    LeaveCriticalSection(&g_gow_sync_lock);
++    ctx->gpr[3] = CELL_OK;
++}
++
++static void gow_sys_lwcond_create(ppu_context* ctx)
++{
++    ensure_sync_lock_inited();
+     uint32_t lwcond  = (uint32_t)ctx->gpr[3];
+     uint32_t lwmutex = (uint32_t)ctx->gpr[4];
++    if (!lwcond || !lwmutex) { ctx->gpr[3] = (uint64_t)(int64_t)CELL_EINVAL; return; }
++
++    static uint32_t s_lwcond_id = 0x4C000000u;
+     vm_write32(lwcond + 0x00, lwmutex);   /* 32-bit lwmutex pointer */
+     vm_write32(lwcond + 0x04, ++s_lwcond_id);   /* lwcond_queue */
+-    get_or_create_cond_stats(lwcond, lwmutex);
+-    ctx->gpr[3] = 0;
++
++    EnterCriticalSection(&g_gow_sync_lock);
++    GowLwCond* c = find_or_create_cond(lwcond);
++    if (c) {
++        c->ea = lwcond;
++        c->active = true;
++        c->lwmutex_ea = lwmutex;
++        while (GowSyncWaiter* w = c->waiters.pop_front()) {
++            w->woken = true;
++            SetEvent(w->event);
++        }
++    }
++    LeaveCriticalSection(&g_gow_sync_lock);
++
++    ctx->gpr[3] = CELL_OK;
+ }
+ 
+-static void diag_sys_lwcond_destroy(ppu_context* ctx)
++static void gow_sys_lwcond_destroy(ppu_context* ctx)
+ {
+-    ctx->gpr[3] = 0;
++    ensure_sync_lock_inited();
++    uint32_t lwcond = (uint32_t)ctx->gpr[3];
++    if (!lwcond) { ctx->gpr[3] = (uint64_t)(int64_t)CELL_EINVAL; return; }
++
++    EnterCriticalSection(&g_gow_sync_lock);
++    GowLwCond* c = find_or_create_cond(lwcond);
++    if (c && c->waiters.count > 0) {
++        LeaveCriticalSection(&g_gow_sync_lock);
++        ctx->gpr[3] = (uint64_t)(int64_t)CELL_EBUSY;
++        return;
++    }
++    if (c) {
++        c->active = false;
++        c->ea = 0;
++        c->lwmutex_ea = 0;
++    }
++    LeaveCriticalSection(&g_gow_sync_lock);
++
++    vm_write32(lwcond + 0x00, 0);
++    vm_write32(lwcond + 0x04, 0);
++    ctx->gpr[3] = CELL_OK;
+ }
+ 
+-static void diag_sys_lwcond_signal(ppu_context* ctx)
++static void gow_sys_lwcond_signal(ppu_context* ctx)
+ {
++    ensure_sync_lock_inited();
+     uint32_t lwcond = (uint32_t)ctx->gpr[3];
+     uint32_t tid = (uint32_t)ctx->thread_id;
+-    uint32_t lwmutex = vm_read32(lwcond + 0x00);
+-    DiagCondStats* st = get_or_create_cond_stats(lwcond, lwmutex);
+-    if (st) {
+-        st->signal_count++;
+-        st->last_signaler_tid = tid;
+-        if (st->active_waiters == 0) {
+-            st->zero_waiter_signals++;
+-            static long s_warn_count = 0;
+-            if (++s_warn_count <= 20) {
+-                fprintf(stderr, "[LWCOND-WARN] signal on cond 0x%08X (mutex 0x%08X) by tid=%u with ZERO waiters! (count=%llu)\n",
+-                        lwcond, lwmutex, tid, (unsigned long long)st->zero_waiter_signals);
+-            }
++    if (!lwcond) { ctx->gpr[3] = (uint64_t)(int64_t)CELL_EINVAL; return; }
++
++    EnterCriticalSection(&g_gow_sync_lock);
++    GowLwCond* c = find_or_create_cond(lwcond);
++    if (c) {
++        c->signal_count++;
++        c->last_signaler_tid = tid;
++
++        GowSyncWaiter* w = c->waiters.pop_front();
++        if (w) {
++            w->woken = true;
++            SetEvent(w->event);
++        } else {
++            c->zero_waiter_signals++;
+         }
+     }
+-    ctx->gpr[3] = 0;
++    LeaveCriticalSection(&g_gow_sync_lock);
++    ctx->gpr[3] = CELL_OK;
+ }
+ 
+-static void diag_sys_lwcond_signal_all(ppu_context* ctx)
++static void gow_sys_lwcond_signal_all(ppu_context* ctx)
+ {
++    ensure_sync_lock_inited();
+     uint32_t lwcond = (uint32_t)ctx->gpr[3];
+     uint32_t tid = (uint32_t)ctx->thread_id;
+-    uint32_t lwmutex = vm_read32(lwcond + 0x00);
+-    DiagCondStats* st = get_or_create_cond_stats(lwcond, lwmutex);
+-    if (st) {
+-        st->signal_all_count++;
+-        st->last_signaler_tid = tid;
+-        if (st->active_waiters == 0) {
+-            st->zero_waiter_signals++;
+-            static long s_warn_count_all = 0;
+-            if (++s_warn_count_all <= 20) {
+-                fprintf(stderr, "[LWCOND-WARN] signal_all on cond 0x%08X (mutex 0x%08X) by tid=%u with ZERO waiters! (count=%llu)\n",
+-                        lwcond, lwmutex, tid, (unsigned long long)st->zero_waiter_signals);
++    if (!lwcond) { ctx->gpr[3] = (uint64_t)(int64_t)CELL_EINVAL; return; }
++
++    EnterCriticalSection(&g_gow_sync_lock);
++    GowLwCond* c = find_or_create_cond(lwcond);
++    if (c) {
++        c->signal_all_count++;
++        c->last_signaler_tid = tid;
++
++        if (c->waiters.count == 0) {
++            c->zero_waiter_signals++;
++        } else {
++            while (GowSyncWaiter* w = c->waiters.pop_front()) {
++                w->woken = true;
++                SetEvent(w->event);
+             }
+         }
+     }
+-    ctx->gpr[3] = 0;
++    LeaveCriticalSection(&g_gow_sync_lock);
++    ctx->gpr[3] = CELL_OK;
+ }
+ 
+-static void diag_sys_lwcond_wait(ppu_context* ctx)
++static void gow_sys_lwcond_signal_to(ppu_context* ctx)
+ {
+-    uint32_t lwcond  = (uint32_t)ctx->gpr[3];
+-    uint32_t tid     = (uint32_t)ctx->thread_id;
+-    uint32_t lwmutex = vm_read32(lwcond + 0x00);
+-    DiagCondStats* st = get_or_create_cond_stats(lwcond, lwmutex);
+-    if (st) {
+-        st->wait_count++;
+-        _InterlockedIncrement(&st->active_waiters);
+-        st->last_waiter_tid = tid;
++    ensure_sync_lock_inited();
++    uint32_t lwcond = (uint32_t)ctx->gpr[3];
++    uint32_t target_tid = (uint32_t)ctx->gpr[4];
++    uint32_t tid = (uint32_t)ctx->thread_id;
++    if (!lwcond) { ctx->gpr[3] = (uint64_t)(int64_t)CELL_EINVAL; return; }
++
++    EnterCriticalSection(&g_gow_sync_lock);
++    GowLwCond* c = find_or_create_cond(lwcond);
++    if (!c) {
++        LeaveCriticalSection(&g_gow_sync_lock);
++        ctx->gpr[3] = (uint64_t)(int64_t)CELL_EINVAL;
++        return;
++    }
++    c->signal_to_count++;
++    c->last_signaler_tid = tid;
++
++    GowSyncWaiter* found = nullptr;
++    for (GowSyncWaiter* curr = c->waiters.head; curr != nullptr; curr = curr->next) {
++        if (curr->thread_id == target_tid) {
++            found = curr;
++            break;
++        }
++    }
++
++    if (!found) {
++        LeaveCriticalSection(&g_gow_sync_lock);
++        ctx->gpr[3] = (uint64_t)(int64_t)CELL_ESRCH;
++        return;
++    }
++
++    c->waiters.remove(found);
++    found->woken = true;
++    SetEvent(found->event);
++    LeaveCriticalSection(&g_gow_sync_lock);
++    ctx->gpr[3] = CELL_OK;
++}
++
++static void gow_sys_lwcond_wait(ppu_context* ctx)
++{
++    ensure_sync_lock_inited();
++    uint32_t lwcond = (uint32_t)ctx->gpr[3];
++    uint64_t timeout_us = ctx->gpr[4];
++    uint32_t self = LWM_SELF(ctx);
++    uint32_t tid = (uint32_t)ctx->thread_id;
++    if (!lwcond) { ctx->gpr[3] = (uint64_t)(int64_t)CELL_EINVAL; return; }
++
++    DWORD timeout_ms = INFINITE;
++    if (timeout_us > 0) {
++        uint64_t m = (timeout_us + 999) / 1000;
++        timeout_ms = (m > 0xFFFFFFFEull) ? 0xFFFFFFFEu : (DWORD)m;
++    }
++
++    EnterCriticalSection(&g_gow_sync_lock);
++    GowLwCond* c = find_or_create_cond(lwcond);
++    uint32_t lwm_ea = (c && c->lwmutex_ea) ? c->lwmutex_ea : vm_read32(lwcond + 0x00);
++    if (!lwm_ea) {
++        LeaveCriticalSection(&g_gow_sync_lock);
++        ctx->gpr[3] = (uint64_t)(int64_t)CELL_EINVAL;
++        return;
++    }
++    if (c) c->lwmutex_ea = lwm_ea;
++    GowLwMutex* m = find_or_create_mutex(lwm_ea);
++    if (!m) {
++        LeaveCriticalSection(&g_gow_sync_lock);
++        ctx->gpr[3] = (uint64_t)(int64_t)CELL_EINVAL;
++        return;
++    }
++
++    // Verify caller holds the mutex
++    if (m->owner_tid != self || m->recursion_count == 0) {
++        LeaveCriticalSection(&g_gow_sync_lock);
++        ctx->gpr[3] = (uint64_t)(int64_t)CELL_EPERM;
++        return;
+     }
+-    ppu_diag_set_wait(tid, PPU_WAIT_LWCOND, lwcond);
+ 
+-    HANDLE s = diag_lwm_sem(lwmutex);
+-    if (s) {
+-        uint32_t own = vm_read32(lwmutex + LWM_OWNER);
+-        uint32_t rc  = vm_read32(lwmutex + LWM_RECUR);
+-        vm_write32(lwmutex + LWM_RECUR, 0);
+-        vm_write32(lwmutex + LWM_OWNER, 0);
+-        ReleaseSemaphore(s, 1, NULL);
+-        Sleep(1);
+-        WaitForSingleObject(s, INFINITE);
+-        vm_write32(lwmutex + LWM_OWNER, own);
+-        vm_write32(lwmutex + LWM_RECUR, rc ? rc : 1);
++    // 1. Save recursion count
++    uint32_t saved_recur = m->recursion_count;
++
++    // 2. Fully release mutex to other threads
++    GowSyncWaiter* next_m_waiter = m->waiters.pop_front();
++    if (next_m_waiter) {
++        m->owner_tid = next_m_waiter->thread_id ? next_m_waiter->thread_id : 0x7FFFFFFEu;
++        m->recursion_count = 1;
++        next_m_waiter->woken = true;
++        vm_write32(lwm_ea + LWM_OWNER, m->owner_tid);
++        vm_write32(lwm_ea + LWM_RECUR, 1);
++        vm_write32(lwm_ea + 0x04, m->waiters.count);
++        SetEvent(next_m_waiter->event);
++    } else {
++        m->owner_tid = 0;
++        m->recursion_count = 0;
++        vm_write32(lwm_ea + LWM_OWNER, 0);
++        vm_write32(lwm_ea + LWM_RECUR, 0);
++        vm_write32(lwm_ea + 0x04, 0);
+     }
+ 
++    // 3. Register on cond queue
++    GowSyncWaiter cond_waiter;
++    cond_waiter.thread_id = tid;
++    cond_waiter.event = get_thread_sync_wait_event();
++    cond_waiter.woken = false;
++    ResetEvent(cond_waiter.event);
++
++    if (c) {
++        c->waiters.push_back(&cond_waiter);
++        c->wait_count++;
++        c->last_waiter_tid = tid;
++    }
++
++    ppu_diag_set_wait(tid, PPU_WAIT_LWCOND, lwcond);
++    LeaveCriticalSection(&g_gow_sync_lock);
++
++    // 4. Sleep on CV event
++    DWORD wr = WaitForSingleObject(cond_waiter.event, timeout_ms);
++
++    EnterCriticalSection(&g_gow_sync_lock);
+     ppu_diag_clear_wait(tid);
+-    if (st) {
+-        _InterlockedDecrement(&st->active_waiters);
+-        st->wakeup_count++;
++
++    bool timed_out = false;
++    if (cond_waiter.woken) {
++        if (c) c->wakeup_count++;
++    } else {
++        if (c) c->waiters.remove(&cond_waiter);
++        timed_out = true;
++    }
++
++    // 5. Must re-acquire the lwmutex before returning
++    if (m->owner_tid == 0) {
++        m->owner_tid = self;
++        m->recursion_count = saved_recur;
++        vm_write32(lwm_ea + LWM_OWNER, self);
++        vm_write32(lwm_ea + LWM_RECUR, saved_recur);
++        vm_write32(lwm_ea + 0x04, m->waiters.count);
++    } else {
++        GowSyncWaiter mutex_waiter;
++        mutex_waiter.thread_id = tid;
++        mutex_waiter.event = get_thread_sync_wait_event();
++        mutex_waiter.woken = false;
++        ResetEvent(mutex_waiter.event);
++
++        m->waiters.push_back(&mutex_waiter);
++        vm_write32(lwm_ea + 0x04, m->waiters.count);
++        ppu_diag_set_wait(tid, PPU_WAIT_LWMUTEX, lwm_ea);
++        LeaveCriticalSection(&g_gow_sync_lock);
++
++        WaitForSingleObject(mutex_waiter.event, INFINITE);
++
++        EnterCriticalSection(&g_gow_sync_lock);
++        ppu_diag_clear_wait(tid);
++
++        m->owner_tid = self;
++        m->recursion_count = saved_recur;
++        vm_write32(lwm_ea + LWM_OWNER, self);
++        vm_write32(lwm_ea + LWM_RECUR, saved_recur);
++        vm_write32(lwm_ea + 0x04, m->waiters.count);
++    }
++
++    LeaveCriticalSection(&g_gow_sync_lock);
++
++    if (timed_out) {
++        ctx->gpr[3] = (uint64_t)(int64_t)CELL_ETIMEDOUT;
++    } else {
++        ctx->gpr[3] = CELL_OK;
+     }
+-    ctx->gpr[3] = 0;
+ }
+ 
+ extern "C" void gow_dump_sync_stats(void)
+ {
++    ensure_sync_lock_inited();
++    EnterCriticalSection(&g_gow_sync_lock);
+     fprintf(stderr, "\n=== [SYNC-AUDIT T=3s] Condition Variables (sys_lwcond) ===\n");
+-    for (uint32_t i = 0; i < g_num_tracked_conds; i++) {
+-        DiagCondStats* c = &g_tracked_conds[i];
+-        uint32_t m_owner = c->mutex_ea ? vm_read32(c->mutex_ea + LWM_OWNER) : 0;
+-        uint32_t m_recur = c->mutex_ea ? vm_read32(c->mutex_ea + LWM_RECUR) : 0;
+-        fprintf(stderr, "  cond=0x%08X  mutex=0x%08X (owner=tid_%-2u recur=%u)  waits=%-8llu wakeups=%-8llu active_waiters=%ld  signals=%-6llu sig_all=%-6llu zero_wait_sigs=%llu\n",
+-                c->cond_ea, c->mutex_ea, m_owner, m_recur,
++    for (uint32_t i = 0; i < GOW_SYNC_HASH_SIZE; i++) {
++        if (!g_gow_conds[i].active) continue;
++        GowLwCond* c = &g_gow_conds[i];
++        if (c->wait_count == 0 && c->signal_count == 0 && c->signal_all_count == 0 && c->waiters.count == 0) continue;
++        uint32_t m_owner = c->lwmutex_ea ? vm_read32(c->lwmutex_ea + LWM_OWNER) : 0;
++        uint32_t m_recur = c->lwmutex_ea ? vm_read32(c->lwmutex_ea + LWM_RECUR) : 0;
++        fprintf(stderr, "  cond=0x%08X  mutex=0x%08X (owner=tid_%-2u recur=%u)  waits=%-8llu wakeups=%-8llu active_waiters=%u  signals=%-6llu sig_all=%-6llu sig_to=%-4llu zero_wait_sigs=%llu\n",
++                c->ea, c->lwmutex_ea, m_owner, m_recur,
+                 (unsigned long long)c->wait_count, (unsigned long long)c->wakeup_count,
+-                c->active_waiters,
++                c->waiters.count,
+                 (unsigned long long)c->signal_count, (unsigned long long)c->signal_all_count,
++                (unsigned long long)c->signal_to_count,
+                 (unsigned long long)c->zero_waiter_signals);
+-        if (c->active_waiters > 0 && (c->signal_count + c->signal_all_count == 0)) {
+-            fprintf(stderr, "    >>> [LWCOND-FLAG] cond 0x%08X has %ld ACTIVE WAITERS and ZERO SIGNALS! (last_tid=%u) <<<\n",
+-                    c->cond_ea, c->active_waiters, c->last_waiter_tid);
++        if (c->waiters.count > 0 && (c->signal_count + c->signal_all_count + c->signal_to_count == 0)) {
++            fprintf(stderr, "    >>> [LWCOND-FLAG] cond 0x%08X has %u ACTIVE WAITERS and ZERO SIGNALS! (last_tid=%u) <<<\n",
++                    c->ea, c->waiters.count, c->last_waiter_tid);
+         }
+     }
+     fprintf(stderr, "=== [SYNC-AUDIT T=3s] Mutexes (sys_lwmutex) Top Active ===\n");
+-    for (uint32_t i = 0; i < g_num_tracked_mutexes; i++) {
+-        DiagMutexStats* m = &g_tracked_mutexes[i];
+-        if (m->lock_count == 0 && m->unlock_count == 0) continue;
+-        uint32_t owner = vm_read32(m->mutex_ea + LWM_OWNER);
+-        uint32_t recur = vm_read32(m->mutex_ea + LWM_RECUR);
+-        fprintf(stderr, "  mutex=0x%08X  locks=%-10llu unlocks=%-10llu trylocks=%-6llu owner=tid_%-2u recur=%u\n",
+-                m->mutex_ea, (unsigned long long)m->lock_count, (unsigned long long)m->unlock_count,
+-                (unsigned long long)m->trylock_count, owner, recur);
++    for (uint32_t i = 0; i < GOW_SYNC_HASH_SIZE; i++) {
++        if (!g_gow_mutexes[i].active) continue;
++        GowLwMutex* m = &g_gow_mutexes[i];
++        if (m->lock_count == 0 && m->unlock_count == 0 && m->trylock_count == 0) continue;
++        uint32_t owner = vm_read32(m->ea + LWM_OWNER);
++        uint32_t recur = vm_read32(m->ea + LWM_RECUR);
++        fprintf(stderr, "  mutex=0x%08X  locks=%-10llu unlocks=%-10llu trylocks=%-6llu owner=tid_%-2u recur=%u waiters=%u\n",
++                m->ea, (unsigned long long)m->lock_count, (unsigned long long)m->unlock_count,
++                (unsigned long long)m->trylock_count, owner, recur, m->waiters.count);
+     }
+     fprintf(stderr, "==========================================================\n\n");
+     fflush(stderr);
++    LeaveCriticalSection(&g_gow_sync_lock);
+ }
+ 
++
+ extern "C" void gow_fios_diag_tick(void)
+ {
+     static int s_tick_count = 0;
+@@ -1172,17 +1602,19 @@ extern "C" void ascension_hle_register(void)
+     ps3_hle_register_ctx(0x42B23552u, "sys_prx_register_library",     sys_prx_register_library);
+ 
+     /* sys_lwmutex & sys_lwcond with real-time telemetry */
+-    ps3_hle_register_ctx(0x1573DC3Fu, "sys_lwmutex_lock",             diag_sys_lwmutex_lock);
+-    ps3_hle_register_ctx(0x1BC200F4u, "sys_lwmutex_unlock",           diag_sys_lwmutex_unlock);
+-    ps3_hle_register_ctx(0xAEB78725u, "sys_lwmutex_trylock",          diag_sys_lwmutex_trylock);
+-    ps3_hle_register_ctx(0x2F85C0EFu, "sys_lwmutex_create",           diag_sys_lwmutex_create);
+-    ps3_hle_register_ctx(0xC3476D0Cu, "sys_lwmutex_destroy",          diag_sys_lwmutex_destroy);
+-
+-    ps3_hle_register_ctx(0xDA0EB71Au, "sys_lwcond_create",            diag_sys_lwcond_create);
+-    ps3_hle_register_ctx(0x1C9A942Cu, "sys_lwcond_destroy",           diag_sys_lwcond_destroy);
+-    ps3_hle_register_ctx(0x2A6D9D51u, "sys_lwcond_wait",              diag_sys_lwcond_wait);
+-    ps3_hle_register_ctx(0xEF87A695u, "sys_lwcond_signal",            diag_sys_lwcond_signal);
+-    ps3_hle_register_ctx(0xE9A1BD84u, "sys_lwcond_signal_all",        diag_sys_lwcond_signal_all);
++    ps3_hle_register_ctx(0x1573DC3Fu, "sys_lwmutex_lock",             gow_sys_lwmutex_lock);
++    ps3_hle_register_ctx(0x1BC200F4u, "sys_lwmutex_unlock",           gow_sys_lwmutex_unlock);
++    ps3_hle_register_ctx(0xAEB78725u, "sys_lwmutex_trylock",          gow_sys_lwmutex_trylock);
++    ps3_hle_register_ctx(0x2F85C0EFu, "sys_lwmutex_create",           gow_sys_lwmutex_create);
++    ps3_hle_register_ctx(0xC3476D0Cu, "sys_lwmutex_destroy",          gow_sys_lwmutex_destroy);
++    ps3_hle_register_ctx(0xC8F6F985u, "sys_lwmutex_reset_all",        gow_sys_lwmutex_reset_all);
++
++    ps3_hle_register_ctx(0xDA0EB71Au, "sys_lwcond_create",            gow_sys_lwcond_create);
++    ps3_hle_register_ctx(0x1C9A942Cu, "sys_lwcond_destroy",           gow_sys_lwcond_destroy);
++    ps3_hle_register_ctx(0x2A6D9D51u, "sys_lwcond_wait",              gow_sys_lwcond_wait);
++    ps3_hle_register_ctx(0xEF87A695u, "sys_lwcond_signal",            gow_sys_lwcond_signal);
++    ps3_hle_register_ctx(0xE9A1BD84u, "sys_lwcond_signal_all",        gow_sys_lwcond_signal_all);
++    ps3_hle_register_ctx(0x52AADADFu, "sys_lwcond_signal_to",         gow_sys_lwcond_signal_to);
+ 
+     /* cellGcmSys */
+     ps3_hle_register_ctx(0x626E8518u, "cellGcmMapEaIoAddressWithFlags", cellGcmMapEaIoAddressWithFlags);
