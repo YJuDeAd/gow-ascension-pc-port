@@ -47,7 +47,7 @@ Technical notes and bring-up logs live in [docs/](file:///C:/IfItWorksItWorks/Pr
 ### 1. Clone with submodules
 
 ```bash
-git clone --recursive https://github.com/<your-username>/<your-repo-name>.git
+git clone --recursive https://github.com/YJuDeAd/gow-ascension-pc-port
 cd gowassension
 ```
 
