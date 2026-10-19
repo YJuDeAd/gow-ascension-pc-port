@@ -67,6 +67,7 @@ if ($cfgLiveDraw) {
     $env:GCM_SEMA_ACQUIRE = "0"
     $env:SPU_HOST_DEPTH_MAX = "100000"
     $env:SPU_INTERP_UNLIFTED = "1"
+    $env:SPU_DMA_LAX = "1"
     $env:YDKJ_INJECT_PAD = $cfgAutoPad
     $env:GOW_PAD_AUTOSTART = $cfgAutoPad
     $env:PAD_ALWAYS_CHANGE = "1"

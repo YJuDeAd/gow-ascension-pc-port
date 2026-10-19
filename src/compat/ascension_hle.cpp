@@ -15,6 +15,7 @@
  */
 
 #include "ppu_recomp.h"
+#include "spu_context.h"
 
 #include <stdint.h>
 #include <stdio.h>
@@ -1118,6 +1119,34 @@ static int      s_num_tasksets = 0;
 static uint32_t s_q_taskset = 0;
 static uint32_t s_last_spurs_taskset = 0;
 
+static void hle_cellSpursGetWorkloadInfo(ppu_context* ctx)
+{
+    uint32_t spurs_ea = (uint32_t)ctx->gpr[3];
+    uint32_t wid      = (uint32_t)ctx->gpr[4];
+    uint32_t info_ea  = (uint32_t)ctx->gpr[5];
+
+    static uint64_t s_count = 0;
+    if ((++s_count % 100000) == 1) {
+        fprintf(stderr, "[spurs-info] cellSpursGetWorkloadInfo(spurs=0x%08X, wid=%u, info=0x%08X) call #%llu\n",
+                spurs_ea, wid, info_ea, (unsigned long long)s_count);
+    }
+
+    if (info_ea && vm_base) {
+        // Zero the CellSpursWorkloadInfo struct (64 bytes):
+        // +0x20: contention/state (expected == 0)
+        // +0x23: readyCount/status (expected == 0)
+        memset(vm_base + info_ea, 0, 0x40);
+    }
+
+#ifdef _WIN32
+    if ((s_count & 0x3F) == 0) {
+        SwitchToThread();
+    }
+#endif
+
+    ctx->gpr[3] = 0; // CELL_OK
+}
+
 static void register_taskset(uint32_t taskset)
 {
     if (!taskset) return;
@@ -1153,6 +1182,32 @@ static void hle_cellSpursCreateTasksetWithAttribute(ppu_context* ctx)
     const void* attr = (const void*)(uintptr_t)ctx->gpr[5];
     int32_t rc = cellSpursCreateTasksetWithAttribute((void*)(uintptr_t)spurs,
                                                     (void*)(uintptr_t)taskset, attr);
+    ctx->gpr[3] = (uint64_t)(int64_t)rc;
+}
+
+extern "C" int32_t cellSpursAddWorkloadWithAttribute(void* spurs, void* wid, const void* attr);
+
+static void hle_cellSpursAddWorkloadWithAttribute(ppu_context* ctx)
+{
+    const uint32_t spurs = (uint32_t)ctx->gpr[3];
+    const uint32_t wid   = (uint32_t)ctx->gpr[4];
+    const uint32_t attr  = (uint32_t)ctx->gpr[5];
+
+    if (attr && vm_base) {
+        uint32_t pm_ea = vm_read32(attr + 0x08); // WKATTR_PM
+        if (pm_ea == 0x0077CA80u) {
+            uint32_t data_hi = vm_read32(attr + 0x10);
+            if (data_hi != 0) {
+                fprintf(stderr, "[cellSpurs] Sanitizing Wws_Job PM attr=0x%08X: clearing audit buffer EA (data_hi=0x%08X -> 0)\n",
+                        attr, data_hi);
+                vm_write32(attr + 0x10, 0);
+            }
+        }
+    }
+
+    int32_t rc = cellSpursAddWorkloadWithAttribute((void*)(uintptr_t)spurs,
+                                                   (void*)(uintptr_t)wid,
+                                                   (const void*)(uintptr_t)attr);
     ctx->gpr[3] = (uint64_t)(int64_t)rc;
 }
 
@@ -1639,7 +1694,7 @@ extern "C" void cellGcmTickFlip(void);
 
 static void hle_cellGcmGetFlipStatus(ppu_context* ctx)
 {
-    if (ppu_gcm_pump) ppu_gcm_pump();
+    ppu_gcm_pump();
     const uint32_t st = cellGcmGetFlipStatus();
     ctx->gpr[3] = (uint64_t)st;
 #ifdef _WIN32
@@ -1945,6 +2000,8 @@ extern "C" void ascension_hle_register(void)
     ps3_hle_register_ctx(0x1656D49Fu, "cellSpursLFQueueAttachLv2EventQueue", hle_cellSpursLFQueueAttachLv2EventQueue);
     ps3_hle_register_ctx(0x011EE38Bu, "_cellSpursLFQueueInitialize",         hle_cellSpursLFQueueInitialize);
     ps3_hle_register_ctx(0xA73BF47Eu, "_cellSpursWorkloadFlagReceiver",      _cellSpursWorkloadFlagReceiver);
+    ps3_hle_register_ctx(0x4E153E3Eu, "cellSpursGetWorkloadInfo",            hle_cellSpursGetWorkloadInfo);
+    ps3_hle_register_ctx(0xC0158D8Bu, "cellSpursAddWorkloadWithAttribute",   hle_cellSpursAddWorkloadWithAttribute);
 
     /* cellGcmSys extra & label/flip auditing */
     ps3_hle_register_ctx(0x3A33C1FDu, "_cellGcmFunc15",                      _cellGcmFunc15);
@@ -2120,8 +2177,46 @@ extern "C" int64_t hook_sys_timer_usleep(ppu_context* ctx)
     return sys_timer_usleep(ctx);
 }
 
+extern "C" {
+void spu_begin_image(int image_id);
+void spu_register_function(uint32_t addr, void (*fn)(spu_context*));
+void spu_wws_job_pm_spu_func_00000040(spu_context* ctx);
+}
+
+static void gow_wws_job_pm_interrupt_handler(spu_context* ctx)
+{
+    static int s_logged = 0;
+    if (s_logged++ < 16) {
+        fprintf(stderr, "[wws-irq] SPU img=2 interrupt 0x00A2C taken -> delegating to 0x0040 (stallstat=0x%X srr0=0x%05X loadJobState=%02X%02X%02X%02X)\n",
+                ctx->list_stall_stat, ctx->srr0,
+                ctx->ls[0x12A0], ctx->ls[0x12A1], ctx->ls[0x12A2], ctx->ls[0x12A3]);
+    }
+
+    // 0x2C..0x3C in wws_job_pm: save r78 to 0x1590, zero r78
+    memcpy(ctx->ls + 0x1590, &ctx->gpr[78], 16);
+    memset(&ctx->gpr[78], 0, sizeof(ctx->gpr[78]));
+
+    // Enter lifted interrupt handler at 0x40.
+    // Executes 0x40 -> 0x60 -> 0x80 (adjusts r1 and calls 0x1990) -> 0x90 -> 0xD0 (restores r1 & regs, iret to srr0).
+    spu_wws_job_pm_spu_func_00000040(ctx);
+}
+
+void gow_register_spu_overrides(void)
+{
+    spu_begin_image(2);
+    spu_register_function(0x00A2Cu, gow_wws_job_pm_interrupt_handler);
+    spu_begin_image(0);
+    fprintf(stderr, "[ascension] Registered SPU img=2 vector 0x00A2C -> gow_wws_job_pm_interrupt_handler\n");
+}
+
+__attribute__((constructor)) static void gow_spu_overrides_ctor(void)
+{
+    gow_register_spu_overrides();
+}
+
 extern "C" void ascension_post_syscall_init(void)
 {
+    gow_register_spu_overrides();
     g_lv2_syscalls.handlers[141] = (gow_lv2_syscall_fn)hook_sys_timer_usleep;
     fprintf(stderr, "[ascension] Hooked SYS_TIMER_USLEEP (141) with BRB audio driver handler\n");
 }
