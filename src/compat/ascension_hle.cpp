@@ -47,6 +47,7 @@ void     vm_write64(uint64_t a, uint64_t v);
 
 uint64_t ppu_guest_call(uint32_t opd, uint64_t a0, uint64_t a1, uint64_t a2, uint64_t a3,
                         uint64_t a4, uint64_t a5, uint64_t a6, uint64_t a7);
+void     ppu_gcm_pump(void);
 
 int32_t  cellGcmMapEaIoAddress(uint32_t ea, uint32_t io, uint32_t size);
 int32_t  cellSpursCreateTaskset(void* spurs, void* taskset, uint64_t args,
@@ -417,8 +418,8 @@ static void gow_sys_lwmutex_lock(ppu_context* ctx)
             static uint32_t s_last_state = 0xFFFFFFFF;
             s_spin_99++;
             uint32_t state = vm_read32(0x00997578u);
-            if ((state == 2 || state == 3) && (s_spin_99 % 256 == 0)) {
-                SwitchToThread();
+            if ((state == 2 || state == 3) && (s_spin_99 % 32 == 0)) {
+                Sleep(1);
             } else if (s_spin_99 % 500 == 0) {
                 SwitchToThread();
             }
@@ -1537,34 +1538,37 @@ static void hook_func_00466E28(ppu_context* ctx)
     const uint32_t mgr_ea = (uint32_t)ctx->gpr[3];
     const uint32_t buf_set = (uint32_t)ctx->gpr[4];
 
+    ppu_gcm_pump();
 #ifdef _WIN32
     SwitchToThread();
 #endif
 
     if (mgr_ea >= 0x10000u) {
         const uint32_t r5 = vm_read32(mgr_ea);
-        if (r5 >= 0x10000u && buf_set < 8) {
-            const uint32_t hdr = r5 + (buf_set << 4) + 0x40u;
-            uint16_t target = vm_read16(hdr);
-            const uint32_t r11_base = r5 + (buf_set << 2);
-            const uint32_t r9_tbl = vm_read32(r11_base + 0x30u);
-            uint32_t extra = 0;
-            if (r9_tbl >= 0x10000u) {
-                uint32_t entry = r9_tbl + ((target & 0x1Fu) << 3);
-                if (vm_read16(entry + 2) != 0) {
-                    extra = 1;
-                    entry += 10;
-                    while (vm_read16(entry) != 0 && extra < 32) {
-                        extra++;
-                        entry += 8;
+        if (r5 >= 0x10000u) {
+            for (uint32_t b = 0; b < 8; ++b) {
+                const uint32_t hdr = r5 + (b << 4) + 0x40u;
+                uint16_t target = vm_read16(hdr);
+                const uint32_t r11_base = r5 + (b << 2);
+                const uint32_t r9_tbl = vm_read32(r11_base + 0x30u);
+                uint32_t extra = 0;
+                if (r9_tbl >= 0x10000u) {
+                    uint32_t entry = r9_tbl + ((target & 0x1Fu) << 3);
+                    if (vm_read16(entry + 2) != 0) {
+                        extra = 1;
+                        entry += 10;
+                        while (vm_read16(entry) != 0 && extra < 32) {
+                            extra++;
+                            entry += 8;
+                        }
                     }
                 }
+                uint16_t completed_val = (uint16_t)(target + extra);
+                for (int i = 1; i <= 7; ++i) {
+                    vm_write16(hdr + (uint32_t)i * 2, completed_val);
+                }
+                vm_write32(r5 + 8, b);
             }
-            uint16_t completed_val = (uint16_t)(target + extra);
-            for (int i = 1; i <= 7; ++i) {
-                vm_write16(hdr + (uint32_t)i * 2, completed_val);
-            }
-            vm_write32(r5 + 8, buf_set);
             if (vm_read32(mgr_ea + 4) == 0) {
                 vm_write32(mgr_ea + 4, 1);
             }
@@ -1574,65 +1578,124 @@ static void hook_func_00466E28(ppu_context* ctx)
     func_00466E28(ctx);
 }
 
+static void hook_func_003E798C(ppu_context* ctx)
+{
+    ppu_gcm_pump();
+#ifdef _WIN32
+    SwitchToThread();
+#endif
+
+    for (uint32_t slot = 0; slot < 3; ++slot) {
+        vm_write16(0x0099AAC0u + slot * 4, 0);
+        vm_write16(0x0099AAB0u + slot * 4, 0);
+    }
+    for (uint32_t i = 0; i < 8; ++i) {
+        vm_write16(0x0099AA80u + i * 4, 0);
+        vm_write32(0x0099B460u + i * 4, 0);
+    }
+
+    func_003E798C(ctx);
+}
+
+static void hook_func_00466398(ppu_context* ctx)
+{
+    const uint32_t mgr_ea = (uint32_t)ctx->gpr[3];
+    const uint32_t buf_set = (uint32_t)ctx->gpr[4];
+    const uint16_t target = (uint16_t)ctx->gpr[5];
+
+    ppu_gcm_pump();
+#ifdef _WIN32
+    SwitchToThread();
+#endif
+
+    if (mgr_ea >= 0x10000u) {
+        const uint32_t r5 = vm_read32(mgr_ea);
+        if (r5 >= 0x10000u && buf_set < 8) {
+            const uint32_t hdr = r5 + (buf_set << 4) + 0x40u;
+            for (int i = 1; i <= 7; ++i) {
+                uint16_t cur = vm_read16(hdr + (uint32_t)i * 2);
+                if (cur < target) {
+                    vm_write16(hdr + (uint32_t)i * 2, target);
+                }
+            }
+        }
+    }
+
+    func_00466398(ctx);
+
+    static uint32_t s_wws_sync_cnt = 0;
+    if (++s_wws_sync_cnt <= 10 || (s_wws_sync_cnt % 50 == 0)) {
+        fprintf(stderr, "[WWS-SYNC-UNBLOCK #%u] mgr=0x%08X buf_set=%u target=%u -> ret=%u\n",
+                s_wws_sync_cnt, mgr_ea, buf_set, target, (uint32_t)ctx->gpr[3]);
+    }
+}
+
 static void hook_func_003636F8(ppu_context* ctx)
 {
     static uint32_t s_disp_cnt = 0;
     uint32_t id = ++s_disp_cnt;
-    uint32_t a0 = (uint32_t)ctx->gpr[3];
-    uint32_t a1 = (uint32_t)ctx->gpr[4];
-    uint32_t a2 = (uint32_t)ctx->gpr[5];
-    uint32_t w0 = a2 ? vm_read32(a2) : 0;
-    uint32_t type = (w0 >> 16) & 0xFFF;
-    uint16_t sub_count = a2 ? vm_read16(a2 + 0x0C) : 0;
-    uint32_t w1 = a2 ? vm_read32(a2 + 4) : 0;
-    uint32_t w2 = a2 ? vm_read32(a2 + 8) : 0;
-    uint32_t w4 = a2 ? vm_read32(a2 + 16) : 0;
+    const bool log = (id <= 10 || (id % 50 == 0));
+    if (log) {
+        uint32_t a0 = (uint32_t)ctx->gpr[3];
+        uint32_t a1 = (uint32_t)ctx->gpr[4];
+        uint32_t a2 = (uint32_t)ctx->gpr[5];
+        uint32_t w0 = a2 ? vm_read32(a2) : 0;
+        uint32_t type = (w0 >> 16) & 0xFFF;
+        uint16_t sub_count = a2 ? vm_read16(a2 + 0x0C) : 0;
+        uint32_t w1 = a2 ? vm_read32(a2 + 4) : 0;
+        uint32_t w2 = a2 ? vm_read32(a2 + 8) : 0;
+        uint32_t w4 = a2 ? vm_read32(a2 + 16) : 0;
 
-    uint32_t cap = a0 ? vm_read32(a0 + 0x68) : 0;
-    uint16_t used = a0 ? vm_read16(a0 + 0x5C) : 0;
-    uint32_t tbl = a0 ? vm_read32(a0 + 0x74) : 0;
-    uint16_t max_probe = a0 ? vm_read16(a0 + 0x5E) : 0;
-    uint32_t total_probes = a0 ? vm_read32(a0 + 0x64) : 0;
+        uint32_t cap = a0 ? vm_read32(a0 + 0x68) : 0;
+        uint16_t used = a0 ? vm_read16(a0 + 0x5C) : 0;
+        uint32_t tbl = a0 ? vm_read32(a0 + 0x74) : 0;
+        uint16_t max_probe = a0 ? vm_read16(a0 + 0x5E) : 0;
+        uint32_t total_probes = a0 ? vm_read32(a0 + 0x64) : 0;
 
-    uint32_t heap_r3 = vm_read32(0x00981698u);
-    uint32_t heap_r5 = vm_read32(0x0098169Cu);
-    uint32_t heap_arr = vm_read32(0x00981694u);
-    uint32_t cur_heap = (heap_arr && heap_r3 != heap_r5) ? vm_read32(heap_arr + (heap_r3 << 2)) : 0;
+        uint32_t heap_r3 = vm_read32(0x00981698u);
+        uint32_t heap_r5 = vm_read32(0x0098169Cu);
+        uint32_t heap_arr = vm_read32(0x00981694u);
+        uint32_t cur_heap = (heap_arr && heap_r3 != heap_r5) ? vm_read32(heap_arr + (heap_r3 << 2)) : 0;
 
-    fprintf(stderr, "\n>>> [RESOURCE-DISPATCH #%u START] a0=0x%08X (used=%u cap=%u tbl=0x%08X max_probe=%u total_probes=%u) a1=0x%08X a2=0x%08X (w0=%08X w1=%08X w2=%08X type=%u sub=%u w4=%08X) [heap: arr=0x%08X cur=0x%08X] <<<\n",
-            id, a0, used, cap, tbl, max_probe, total_probes, a1, a2, w0, w1, w2, type, sub_count, w4, heap_arr, cur_heap);
+        fprintf(stderr, "\n>>> [RESOURCE-DISPATCH #%u START] a0=0x%08X (used=%u cap=%u tbl=0x%08X max_probe=%u total_probes=%u) a1=0x%08X a2=0x%08X (w0=%08X w1=%08X w2=%08X type=%u sub=%u w4=%08X) [heap: arr=0x%08X cur=0x%08X] <<<\n",
+                id, a0, used, cap, tbl, max_probe, total_probes, a1, a2, w0, w1, w2, type, sub_count, w4, heap_arr, cur_heap);
 
-    if (type == 1 && a2) {
-        uint32_t r30 = a2 + w4;
-        uint32_t ent_count = vm_read32(r30 + 0x18);
-        uint32_t ent_tbl_off = vm_read32(r30 + 0x1C);
-        uint32_t tbl_ea = r30 + ent_tbl_off;
-        fprintf(stderr, "    [RESOURCE-INFO] r30=0x%08X sub-entities=%u ent_tbl_off=0x%08X (tbl_ea=0x%08X)\n",
-                r30, ent_count, ent_tbl_off, tbl_ea);
+        if (type == 1 && a2) {
+            uint32_t r30 = a2 + w4;
+            uint32_t ent_count = vm_read32(r30 + 0x18);
+            uint32_t ent_tbl_off = vm_read32(r30 + 0x1C);
+            uint32_t tbl_ea = r30 + ent_tbl_off;
+            fprintf(stderr, "    [RESOURCE-INFO] r30=0x%08X sub-entities=%u ent_tbl_off=0x%08X (tbl_ea=0x%08X)\n",
+                    r30, ent_count, ent_tbl_off, tbl_ea);
+        }
     }
-    fflush(stderr);
 
     func_003636F8(ctx);
-    fprintf(stderr, "\n>>> [RESOURCE-DISPATCH #%u END] ret=0x%08X (used=%u cap=%u) <<<\n\n",
-            id, (uint32_t)ctx->gpr[3], a0 ? vm_read16(a0 + 0x5C) : 0, a0 ? vm_read32(a0 + 0x68) : 0);
-    fflush(stderr);
+    if (log) {
+        uint32_t a0 = (uint32_t)ctx->gpr[3];
+        fprintf(stderr, ">>> [RESOURCE-DISPATCH #%u END] ret=0x%08X (used=%u cap=%u) <<<\n\n",
+                id, (uint32_t)ctx->gpr[3], a0 ? vm_read16(a0 + 0x5C) : 0, a0 ? vm_read32(a0 + 0x68) : 0);
+    }
 }
 
 static void hook_func_0036298C(ppu_context* ctx)
 {
     static uint32_t s_wad_cnt = 0;
     s_wad_cnt++;
-    uint32_t a0 = (uint32_t)ctx->gpr[3];
-    uint32_t a1 = (uint32_t)ctx->gpr[4];
-    uint32_t a2 = (uint32_t)ctx->gpr[5];
-    uint16_t count = a2 ? vm_read16(a2 + 0x0C) : 0;
-    fprintf(stderr, "\n>>> [WAD-PARSE #%u START] r3=0x%08X r4=0x%08X r5=0x%08X (sub-entities=%u) <<<\n",
-            s_wad_cnt, a0, a1, a2, count);
-    fflush(stderr);
+    const bool log = (s_wad_cnt <= 10 || (s_wad_cnt % 50 == 0));
+    if (log) {
+        uint32_t a0 = (uint32_t)ctx->gpr[3];
+        uint32_t a1 = (uint32_t)ctx->gpr[4];
+        uint32_t a2 = (uint32_t)ctx->gpr[5];
+        uint16_t count = a2 ? vm_read16(a2 + 0x0C) : 0;
+        fprintf(stderr, "\n>>> [WAD-PARSE #%u START] r3=0x%08X r4=0x%08X r5=0x%08X (sub-entities=%u) <<<\n",
+                s_wad_cnt, a0, a1, a2, count);
+    }
     func_0036298C(ctx);
-    fprintf(stderr, ">>> [WAD-PARSE #%u END] completed: ret=0x%08X <<<\n\n",
-            s_wad_cnt, (uint32_t)ctx->gpr[3]);
-    fflush(stderr);
+    if (log) {
+        fprintf(stderr, ">>> [WAD-PARSE #%u END] completed: ret=0x%08X <<<\n\n",
+                s_wad_cnt, (uint32_t)ctx->gpr[3]);
+    }
 }
 
 static void hook_func_003633A4(ppu_context* ctx)
@@ -2109,6 +2172,8 @@ extern "C" void ascension_hle_register(void)
     ppu_register_function(0x003C8F54u, hook_func_003C8F54);
     ppu_register_function(0x00466B88u, hook_func_00466B88);
     ppu_register_function(0x00466E28u, hook_func_00466E28);
+    ppu_register_function(0x00466398u, hook_func_00466398);
+    ppu_register_function(0x003E798Cu, hook_func_003E798C);
 }
 
 /* Alias for compatibility */
@@ -2196,9 +2261,57 @@ extern "C" int64_t hook_sys_timer_usleep(ppu_context* ctx)
         }
     }
 
+    if (tid == 1 && (lr == 0x003E8378u || (lr >= 0x003E798Cu && lr <= 0x003E7B80u))) {
+        ppu_gcm_pump();
+#ifdef _WIN32
+        SwitchToThread();
+#endif
+        for (uint32_t slot = 0; slot < 3; ++slot) {
+            vm_write16(0x0099AAC0u + slot * 4, 0);
+            vm_write16(0x0099AAB0u + slot * 4, 0);
+        }
+        for (uint32_t i = 0; i < 8; ++i) {
+            vm_write16(0x0099AA80u + i * 4, 0);
+            vm_write32(0x0099B460u + i * 4, 0);
+        }
+        static uint32_t s_frame_sync_unblock = 0;
+        if (++s_frame_sync_unblock <= 20 || (s_frame_sync_unblock % 100 == 0)) {
+            fprintf(stderr, "[FRAME-SYNC-UNBLOCK #%u] tid=1 lr=0x%08X cleared frame sync counters\n",
+                    s_frame_sync_unblock, lr);
+        }
+    }
+
     extern ppu_context* volatile g_ppu_main_ctx;
     if (g_ppu_main_ctx) {
         uint32_t mlr = (uint32_t)g_ppu_main_ctx->lr;
+        if (mlr == 0x00467E1Cu) {
+            uint32_t mgr_ea = (uint32_t)g_ppu_main_ctx->gpr[30];
+            uint32_t buf_set = (uint32_t)g_ppu_main_ctx->gpr[4];
+            uint16_t target = (uint16_t)g_ppu_main_ctx->gpr[31];
+            if (mgr_ea >= 0x10000u) {
+                const uint32_t r5 = vm_read32(mgr_ea);
+                if (r5 >= 0x10000u && buf_set < 8) {
+                    const uint32_t hdr = r5 + (buf_set << 4) + 0x40u;
+                    for (int i = 1; i <= 7; ++i) {
+                        uint16_t cur = vm_read16(hdr + (uint32_t)i * 2);
+                        if (cur < target) {
+                            vm_write16(hdr + (uint32_t)i * 2, target);
+                        }
+                    }
+                }
+            }
+        }
+        if (mlr == 0x003E8378u || (mlr >= 0x003E798Cu && mlr <= 0x003E7B80u)) {
+            ppu_gcm_pump();
+            for (uint32_t slot = 0; slot < 3; ++slot) {
+                vm_write16(0x0099AAC0u + slot * 4, 0);
+                vm_write16(0x0099AAB0u + slot * 4, 0);
+            }
+            for (uint32_t i = 0; i < 8; ++i) {
+                vm_write16(0x0099AA80u + i * 4, 0);
+                vm_write32(0x0099B460u + i * 4, 0);
+            }
+        }
         if (mlr == 0x00467B1Cu || mlr == 0x00467B34u || mlr == 0x00467B84u) {
             uint32_t mgr_ea = (uint32_t)g_ppu_main_ctx->gpr[31];
             if (mgr_ea >= 0x10000u) {

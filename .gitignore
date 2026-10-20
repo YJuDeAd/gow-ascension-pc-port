@@ -79,6 +79,7 @@ __pycache__/
 venv/
 
 # ---- Editor, OS, agent local state ----
+scratch/
 .vs/
 .vscode/
 .idea/
