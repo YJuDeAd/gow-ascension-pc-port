@@ -88,7 +88,10 @@ if ($cfgLiveDraw) {
 }
 
 # 1. Ensure decrypted ISO is mounted
-$isoPath = "C:\IfItWorksItWorks\Project\gowassension\God of War - Ascension (Asia) (En,Zh,Ko).dec.iso"
+$isoPath = "D:\God of War - Ascension (Asia) (En,Zh,Ko).dec.iso"
+if (!(Test-Path $isoPath)) {
+    $isoPath = "C:\IfItWorksItWorks\Project\gowassension\God of War - Ascension (Asia) (En,Zh,Ko).dec.iso"
+}
 if (!(Test-Path "E:\PS3_GAME\USRDIR\GAME.PSARC")) {
     Write-Host "[run_port] Mounting decrypted ISO to virtual drive E:..."
     Mount-DiskImage -ImagePath $isoPath -StorageType ISO | Out-Null
