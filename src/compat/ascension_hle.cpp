@@ -416,10 +416,12 @@ static void gow_sys_lwmutex_lock(ppu_context* ctx)
             static uint32_t s_spin_99 = 0;
             static uint32_t s_last_state = 0xFFFFFFFF;
             s_spin_99++;
-            if (s_spin_99 % 500 == 0) {
+            uint32_t state = vm_read32(0x00997578u);
+            if ((state == 2 || state == 3) && (s_spin_99 % 32 == 0)) {
+                Sleep(1);
+            } else if (s_spin_99 % 500 == 0) {
                 SwitchToThread();
             }
-            uint32_t state = vm_read32(0x00997578u);
             uint32_t rem_bytes = vm_read32(0x009976E0u);
             uint32_t tot_bytes = vm_read32(0x009976E4u);
             uint32_t ring_ptr = vm_read32(0x0082B708u);
@@ -1197,10 +1199,11 @@ static void hle_cellSpursAddWorkloadWithAttribute(ppu_context* ctx)
         uint32_t pm_ea = vm_read32(attr + 0x08); // WKATTR_PM
         if (pm_ea == 0x0077CA80u) {
             uint32_t data_hi = vm_read32(attr + 0x10);
-            if (data_hi != 0) {
-                fprintf(stderr, "[cellSpurs] Sanitizing Wws_Job PM attr=0x%08X: clearing audit buffer EA (data_hi=0x%08X -> 0)\n",
+            static bool s_logged_pm = false;
+            if (!s_logged_pm) {
+                s_logged_pm = true;
+                fprintf(stderr, "[cellSpurs] Preserving Wws_Job PM attr=0x%08X (data_hi=0x%08X)\n",
                         attr, data_hi);
-                vm_write32(attr + 0x10, 0);
             }
         }
     }
@@ -1361,13 +1364,17 @@ static void _cellSpursLFQueuePushBody(ppu_context* ctx)
             vm_write32(slot_ea + i, vm_read32(data + i));
         }
         vm_write16(q + 0x02, (uint16_t)(push + 1));
-        fprintf(stderr, "[cellSpurs] LFQueuePush(q=0x%08X slot=%u size=%u owner=0x%08X last_taskset=0x%08X n_tasksets=%d)\n",
-                q, slot, size, owner_ea, s_last_spurs_taskset, s_num_tasksets);
-        fprintf(stderr, "[cellSpurs] LFQueuePush data: %08X %08X %08X %08X %08X %08X %08X %08X\n",
-                vm_read32(data+0), vm_read32(data+4), vm_read32(data+8), vm_read32(data+12),
-                vm_read32(data+16), vm_read32(data+20), vm_read32(data+24), vm_read32(data+28));
-        fprintf(stderr, "[cellSpurs] LFQueue queue state: pop=%u push=%u flag@0x%08X=0x%08X\n",
-                (uint32_t)vm_read16(q+0), (uint32_t)vm_read16(q+2), q - 0x80, vm_read32(q - 0x80));
+        static uint32_t s_lf_push_count = 0;
+        s_lf_push_count++;
+        if (s_lf_push_count <= 10 || (s_lf_push_count % 100 == 0)) {
+            fprintf(stderr, "[cellSpurs] LFQueuePush(q=0x%08X slot=%u size=%u owner=0x%08X last_taskset=0x%08X n_tasksets=%d #%u)\n",
+                    q, slot, size, owner_ea, s_last_spurs_taskset, s_num_tasksets, s_lf_push_count);
+            fprintf(stderr, "[cellSpurs] LFQueuePush data: %08X %08X %08X %08X %08X %08X %08X %08X\n",
+                    vm_read32(data+0), vm_read32(data+4), vm_read32(data+8), vm_read32(data+12),
+                    vm_read32(data+16), vm_read32(data+20), vm_read32(data+24), vm_read32(data+28));
+            fprintf(stderr, "[cellSpurs] LFQueue queue state: pop=%u push=%u flag@0x%08X=0x%08X\n",
+                    (uint32_t)vm_read16(q+0), (uint32_t)vm_read16(q+2), q - 0x80, vm_read32(q - 0x80));
+        }
 
         const uint32_t src_ea    = vm_read32(data + 0x00);
         const uint32_t dst_ea    = vm_read32(data + 0x04);
@@ -1399,8 +1406,12 @@ static void _cellSpursLFQueuePushBody(ppu_context* ctx)
                 if (n < 0 && (src_ea & 1)) {
                     n = gow_inflate(tmp.data(), alloc_size, vm_base + (src_ea & ~1u), srclen);
                 }
-                fprintf(stderr, "[edge] cached inflate(src=0x%08X len=%u total_exp=%u) => %d bytes\n",
-                        src_ea, srclen, total_expected, n);
+                static uint32_t s_cached_inflate_count = 0;
+                s_cached_inflate_count++;
+                if (s_cached_inflate_count <= 10 || (s_cached_inflate_count % 100 == 0)) {
+                    fprintf(stderr, "[edge] cached inflate(src=0x%08X len=%u total_exp=%u #%u) => %d bytes\n",
+                            src_ea, srclen, total_expected, s_cached_inflate_count, n);
+                }
                 if (n > 0) {
                     tmp.resize((size_t)n);
                     if (s_decomp_cache.size() >= 8) {
@@ -2149,7 +2160,7 @@ extern "C" int64_t hook_sys_timer_usleep(ppu_context* ctx)
     uint32_t dl_head = vm_read32(0x009711D4u);
     uint32_t dl_tail = vm_read32(0x009711D8u);
     uint32_t flip_int = vm_read32(0x00970F30u);
-    if (dl_head != s_last_dl_head || dl_tail != s_last_dl_tail || (++s_dl_periodic_tick % 50 == 1)) {
+    if (dl_head != s_last_dl_head || dl_tail != s_last_dl_tail || (++s_dl_periodic_tick % 2000 == 1)) {
         s_last_dl_head = dl_head;
         s_last_dl_tail = dl_tail;
         uint32_t gate = vm_read32(0x0081C9B4u);
