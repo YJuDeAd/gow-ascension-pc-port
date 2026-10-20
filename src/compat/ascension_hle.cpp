@@ -417,8 +417,8 @@ static void gow_sys_lwmutex_lock(ppu_context* ctx)
             static uint32_t s_last_state = 0xFFFFFFFF;
             s_spin_99++;
             uint32_t state = vm_read32(0x00997578u);
-            if ((state == 2 || state == 3) && (s_spin_99 % 32 == 0)) {
-                Sleep(1);
+            if ((state == 2 || state == 3) && (s_spin_99 % 256 == 0)) {
+                SwitchToThread();
             } else if (s_spin_99 % 500 == 0) {
                 SwitchToThread();
             }
@@ -1532,6 +1532,48 @@ static void hook_func_00466B88(ppu_context* ctx)
     func_00466B88(ctx);
 }
 
+static void hook_func_00466E28(ppu_context* ctx)
+{
+    const uint32_t mgr_ea = (uint32_t)ctx->gpr[3];
+    const uint32_t buf_set = (uint32_t)ctx->gpr[4];
+
+#ifdef _WIN32
+    SwitchToThread();
+#endif
+
+    if (mgr_ea >= 0x10000u) {
+        const uint32_t r5 = vm_read32(mgr_ea);
+        if (r5 >= 0x10000u && buf_set < 8) {
+            const uint32_t hdr = r5 + (buf_set << 4) + 0x40u;
+            uint16_t target = vm_read16(hdr);
+            const uint32_t r11_base = r5 + (buf_set << 2);
+            const uint32_t r9_tbl = vm_read32(r11_base + 0x30u);
+            uint32_t extra = 0;
+            if (r9_tbl >= 0x10000u) {
+                uint32_t entry = r9_tbl + ((target & 0x1Fu) << 3);
+                if (vm_read16(entry + 2) != 0) {
+                    extra = 1;
+                    entry += 10;
+                    while (vm_read16(entry) != 0 && extra < 32) {
+                        extra++;
+                        entry += 8;
+                    }
+                }
+            }
+            uint16_t completed_val = (uint16_t)(target + extra);
+            for (int i = 1; i <= 7; ++i) {
+                vm_write16(hdr + (uint32_t)i * 2, completed_val);
+            }
+            vm_write32(r5 + 8, buf_set);
+            if (vm_read32(mgr_ea + 4) == 0) {
+                vm_write32(mgr_ea + 4, 1);
+            }
+        }
+    }
+
+    func_00466E28(ctx);
+}
+
 static void hook_func_003636F8(ppu_context* ctx)
 {
     static uint32_t s_disp_cnt = 0;
@@ -2066,6 +2108,7 @@ extern "C" void ascension_hle_register(void)
     ppu_register_function(0x003633A4u, hook_func_003633A4);
     ppu_register_function(0x003C8F54u, hook_func_003C8F54);
     ppu_register_function(0x00466B88u, hook_func_00466B88);
+    ppu_register_function(0x00466E28u, hook_func_00466E28);
 }
 
 /* Alias for compatibility */
@@ -2148,6 +2191,50 @@ extern "C" int64_t hook_sys_timer_usleep(ppu_context* ctx)
                 vm_write32(r10 + 0x24u, sub);
                 if (++s_main_ticks % 100 == 1) {
                     fprintf(stderr, "[MAIN-BRB] Instantly satisfied brb_StartSession (sub=%u -> comp=%u)\n", sub, sub);
+                }
+            }
+        }
+    }
+
+    extern ppu_context* volatile g_ppu_main_ctx;
+    if (g_ppu_main_ctx) {
+        uint32_t mlr = (uint32_t)g_ppu_main_ctx->lr;
+        if (mlr == 0x00467B1Cu || mlr == 0x00467B34u || mlr == 0x00467B84u) {
+            uint32_t mgr_ea = (uint32_t)g_ppu_main_ctx->gpr[31];
+            if (mgr_ea >= 0x10000u) {
+                const uint32_t r5 = vm_read32(mgr_ea);
+                if (r5 >= 0x10000u) {
+                    for (uint32_t b = 0; b < 8; ++b) {
+                        const uint32_t hdr = r5 + (b << 4) + 0x40u;
+                        uint16_t target = vm_read16(hdr);
+                        const uint32_t r11_base = r5 + (b << 2);
+                        const uint32_t r9_tbl = vm_read32(r11_base + 0x30u);
+                        uint32_t extra = 0;
+                        if (r9_tbl >= 0x10000u) {
+                            uint32_t entry = r9_tbl + ((target & 0x1Fu) << 3);
+                            if (vm_read16(entry + 2) != 0) {
+                                extra = 1;
+                                entry += 10;
+                                while (vm_read16(entry) != 0 && extra < 32) {
+                                    extra++;
+                                    entry += 8;
+                                }
+                            }
+                        }
+                        uint16_t completed_val = (uint16_t)(target + extra);
+                        for (int i = 1; i <= 7; ++i) {
+                            vm_write16(hdr + (uint32_t)i * 2, completed_val);
+                        }
+                        vm_write32(r5 + 8, b);
+                    }
+                    if (vm_read32(mgr_ea + 4) == 0) {
+                        vm_write32(mgr_ea + 4, 1);
+                    }
+                    static uint32_t s_main_wws_unblock = 0;
+                    if (++s_main_wws_unblock <= 20 || (s_main_wws_unblock % 100 == 0)) {
+                        fprintf(stderr, "[WWS-MAIN-UNBLOCK #%u] lr=0x%08X mgr=0x%08X r5=0x%08X completed all lanes\n",
+                                s_main_wws_unblock, mlr, mgr_ea, r5);
+                    }
                 }
             }
         }
