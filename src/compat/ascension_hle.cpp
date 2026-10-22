@@ -1122,6 +1122,9 @@ static int      s_num_tasksets = 0;
 static uint32_t s_q_taskset = 0;
 static uint32_t s_last_spurs_taskset = 0;
 
+static void gow_unblock_416_subqueues(uint32_t master_ea);
+static void gow_unblock_wws_464_mgr(uint32_t mgr_ea);
+
 static void hle_cellSpursGetWorkloadInfo(ppu_context* ctx)
 {
     uint32_t spurs_ea = (uint32_t)ctx->gpr[3];
@@ -1146,6 +1149,14 @@ static void hle_cellSpursGetWorkloadInfo(ppu_context* ctx)
         SwitchToThread();
     }
 #endif
+
+    if (ctx->thread_id == 1) {
+        gow_unblock_416_subqueues(0x00966FB0u);
+        const uint32_t glob_mgr = vm_read32(0x008385ACu);
+        if (glob_mgr >= 0x10000u) {
+            gow_unblock_wws_464_mgr(glob_mgr);
+        }
+    }
 
     ctx->gpr[3] = 0; // CELL_OK
 }
@@ -1509,29 +1520,29 @@ static void hook_func_00466B88(ppu_context* ctx)
             const uint32_t r9_tbl = vm_read32(r11_base + 0x30u);
             uint32_t extra = 0;
             if (r9_tbl >= 0x10000u) {
-                uint32_t entry = r9_tbl + ((target & 0x1Fu) << 3);
+                uint32_t entry = r9_tbl + ((uint32_t)target << 3);
                 if (vm_read16(entry + 2) != 0) {
                     extra = 1;
                     entry += 10;
-                    while (vm_read16(entry) != 0 && extra < 32) {
+                    while (vm_read16(entry) != 0 && extra < 512) {
                         extra++;
                         entry += 8;
                     }
                 }
             }
             uint16_t completed_val = (uint16_t)(target + extra);
+            vm_write16(hdr, completed_val);
             for (int i = 1; i <= 7; ++i) {
                 vm_write16(hdr + (uint32_t)i * 2, completed_val);
             }
             vm_write32(r5 + 8, b);
-            if (vm_read32(r31_ptr + 4) == 0) {
-                vm_write32(r31_ptr + 4, 1);
-            }
         }
     }
 
     func_00466B88(ctx);
 }
+
+static void gow_unblock_416_subqueues(uint32_t master_ea);
 
 static void hook_func_00466E28(ppu_context* ctx)
 {
@@ -1553,29 +1564,68 @@ static void hook_func_00466E28(ppu_context* ctx)
                 const uint32_t r9_tbl = vm_read32(r11_base + 0x30u);
                 uint32_t extra = 0;
                 if (r9_tbl >= 0x10000u) {
-                    uint32_t entry = r9_tbl + ((target & 0x1Fu) << 3);
+                    uint32_t entry = r9_tbl + ((uint32_t)target << 3);
                     if (vm_read16(entry + 2) != 0) {
                         extra = 1;
                         entry += 10;
-                        while (vm_read16(entry) != 0 && extra < 32) {
+                        while (vm_read16(entry) != 0 && extra < 512) {
                             extra++;
                             entry += 8;
                         }
                     }
                 }
                 uint16_t completed_val = (uint16_t)(target + extra);
+                vm_write16(hdr, completed_val);
                 for (int i = 1; i <= 7; ++i) {
                     vm_write16(hdr + (uint32_t)i * 2, completed_val);
                 }
-                vm_write32(r5 + 8, b);
             }
-            if (vm_read32(mgr_ea + 4) == 0) {
-                vm_write32(mgr_ea + 4, 1);
+            if (buf_set < 8) {
+                vm_write32(r5 + 8, buf_set);
             }
         }
     }
 
+    gow_unblock_416_subqueues(0x00966FB0u);
+    {
+        const uint32_t glob_mgr = vm_read32(0x008385ACu);
+        if (glob_mgr >= 0x10000u) {
+            gow_unblock_wws_464_mgr(glob_mgr);
+        }
+    }
     func_00466E28(ctx);
+}
+
+static void hook_func_00375A50(ppu_context* ctx)
+{
+    ppu_gcm_pump();
+#ifdef _WIN32
+    SwitchToThread();
+#endif
+
+    const uint32_t ctrl_ea = vm_read32(0x009BE004u);
+    const uint32_t fence_cnt = vm_read32(0x009710C8u);
+    if (ctrl_ea >= 0x10000u) {
+        const uint32_t cur_ref = vm_read32(ctrl_ea + 0x08);
+        const uint32_t target_ref = fence_cnt + (uint32_t)(int32_t)ctx->gpr[3];
+        if ((int32_t)(cur_ref - target_ref) < 0) {
+            static uint32_t s_fence_unblock = 0;
+            if (++s_fence_unblock <= 20 || (s_fence_unblock % 100 == 0)) {
+                fprintf(stderr, "[FENCE-SYNC-SATISFY #%u] hook_func_00375A50: cur_ref=%u target_ref=%u (fence_cnt=%u r3=%d)\n",
+                        s_fence_unblock, cur_ref, target_ref, fence_cnt, (int32_t)ctx->gpr[3]);
+            }
+            vm_write32(ctrl_ea + 0x08, target_ref);
+        }
+    }
+
+    gow_unblock_416_subqueues(0x00966FB0u);
+    {
+        const uint32_t glob_mgr = vm_read32(0x008385ACu);
+        if (glob_mgr >= 0x10000u) {
+            gow_unblock_wws_464_mgr(glob_mgr);
+        }
+    }
+    func_00375A50(ctx);
 }
 
 static void hook_func_003E798C(ppu_context* ctx)
@@ -1627,6 +1677,200 @@ static void hook_func_00466398(ppu_context* ctx)
     if (++s_wws_sync_cnt <= 10 || (s_wws_sync_cnt % 50 == 0)) {
         fprintf(stderr, "[WWS-SYNC-UNBLOCK #%u] mgr=0x%08X buf_set=%u target=%u -> ret=%u\n",
                 s_wws_sync_cnt, mgr_ea, buf_set, target, (uint32_t)ctx->gpr[3]);
+    }
+}
+
+extern "C" int32_t cellSpursReadyCountStore(void* spurs, uint32_t wid, uint32_t value);
+
+static void gow_unblock_wws_464_mgr(uint32_t mgr_ea)
+{
+    if (mgr_ea < 0x10000u || mgr_ea >= 0x20000000u) return;
+    const uint32_t r5 = vm_read32(mgr_ea + 0x00);
+    const uint32_t batch_sz = vm_read32(mgr_ea + 0xC8);
+    const uint32_t target_cnt = vm_read32(mgr_ea + 0xCC);
+    const uint32_t comp_cnt = vm_read32(mgr_ea + 0xD0);
+    if (r5 >= 0x10000u && r5 < 0x20000000u) {
+        for (uint32_t b = 0; b < 8; ++b) {
+            const uint32_t hdr = r5 + (b << 4) + 0x40u;
+            uint16_t target = vm_read16(hdr);
+            uint16_t min_needed = (batch_sz > 0 && batch_sz < 0xFFFEu) ? (uint16_t)(batch_sz + 1) : target;
+            if (target < min_needed) target = min_needed;
+            for (int i = 1; i <= 7; ++i) {
+                if (vm_read16(hdr + (uint32_t)i * 2) < target) {
+                    vm_write16(hdr + (uint32_t)i * 2, target);
+                }
+            }
+        }
+    }
+    if (comp_cnt < target_cnt && target_cnt < 0x10000000u) {
+        static uint32_t s_wws_464_cnt = 0;
+        if (++s_wws_464_cnt <= 20 || (s_wws_464_cnt % 50 == 0)) {
+            fprintf(stderr, "[WWS-464-UNBLOCK #%u] mgr=0x%08X r5=0x%08X comp=%u -> target=%u batch=%u\n",
+                    s_wws_464_cnt, mgr_ea, r5, comp_cnt, target_cnt, batch_sz);
+        }
+        vm_write32(mgr_ea + 0xD0, target_cnt);
+        if (batch_sz > 0) {
+            vm_write32(mgr_ea + 0xD8, target_cnt / batch_sz);
+        }
+    }
+}
+
+static void gow_unblock_wws_mgr(uint32_t mgr_ea)
+{
+    if (mgr_ea < 0x10000u) return;
+    const uint32_t r5 = vm_read32(mgr_ea);
+    if (r5 < 0x10000u) return;
+
+    for (uint32_t b = 0; b < 8; ++b) {
+        const uint32_t hdr = r5 + (b << 4) + 0x40u;
+        uint16_t target = vm_read16(hdr);
+        const uint32_t r11_base = r5 + (b << 2);
+        const uint32_t r9_tbl = vm_read32(r11_base + 0x30u);
+        uint32_t extra = 0;
+        if (r9_tbl >= 0x10000u) {
+            uint32_t entry = r9_tbl + ((uint32_t)target << 3);
+            if (vm_read16(entry + 2) != 0) {
+                extra = 1;
+                entry += 10;
+                while (vm_read16(entry) != 0 && extra < 512) {
+                    extra++;
+                    entry += 8;
+                }
+            }
+        }
+        uint16_t completed_val = (uint16_t)(target + extra);
+        vm_write16(hdr, completed_val);
+        for (int k = 1; k <= 7; ++k) {
+            vm_write16(hdr + (uint32_t)k * 2, completed_val);
+        }
+    }
+    vm_write32(r5 + 8, 3);
+    gow_unblock_wws_464_mgr(mgr_ea);
+}
+
+static void gow_unblock_416_subqueues(uint32_t master_ea)
+{
+    if (!master_ea) master_ea = 0x00966FB0u;
+    const uint16_t num_q = vm_read16(master_ea + 0x0A);
+    const uint32_t q_base = vm_read32(master_ea + 0x20);
+
+    if (q_base >= 0x10000u && num_q > 0 && num_q <= 32) {
+        for (uint32_t i = 0; i < num_q; ++i) {
+            uint32_t q = q_base + i * 0x70u;
+            uint32_t idx = vm_read32(q + 0x08);
+            uint32_t tbl = vm_read32(q + 0x18);
+            if (tbl >= 0x10000u && idx < 0x10000u) {
+                for (uint32_t k = 0; k < 16; ++k) {
+                    uint32_t entry = tbl + ((idx + k) << 3);
+                    uint16_t etype = vm_read16(entry + 0x02);
+                    if (etype == 2) {
+                        uint32_t dep_ea = vm_read32(entry + 0x04);
+                        if (dep_ea >= 0x10000u && vm_read16(dep_ea) != 0) {
+                            static uint32_t s_dep_dec_cnt = 0;
+                            if (++s_dep_dec_cnt <= 20 || (s_dep_dec_cnt % 100 == 0)) {
+                                fprintf(stderr, "[SUBQ-DEP-UNBLOCK #%u] q[%u]=0x%08X idx=%u dep_ea=0x%08X was %u -> 0\n",
+                                        s_dep_dec_cnt, i, q, idx + k, dep_ea, vm_read16(dep_ea));
+                            }
+                            vm_write16(dep_ea, 0);
+                        }
+                    } else if (etype == 0) {
+                        break;
+                    }
+                }
+            }
+            uint32_t q_mgr = vm_read32(q + 0x2Cu);
+            if (q_mgr >= 0x10000u) {
+                gow_unblock_wws_mgr(q_mgr);
+                gow_unblock_wws_464_mgr(q_mgr);
+            }
+        }
+    }
+    const uint32_t glob_mgr = vm_read32(0x008385ACu);
+    if (glob_mgr >= 0x10000u) {
+        gow_unblock_wws_464_mgr(glob_mgr);
+    }
+}
+
+static void hook_func_00416328(ppu_context* ctx)
+{
+    gow_unblock_416_subqueues((uint32_t)ctx->gpr[3]);
+    func_00416328(ctx);
+}
+
+static void hook_func_00416600(ppu_context* ctx)
+{
+    gow_unblock_416_subqueues((uint32_t)ctx->gpr[3]);
+    func_00416600(ctx);
+}
+
+static void hook_func_00416A00(ppu_context* ctx)
+{
+    gow_unblock_416_subqueues((uint32_t)ctx->gpr[3]);
+    func_00416A00(ctx);
+}
+
+static void hook_func_00464AFC(ppu_context* ctx)
+{
+    gow_unblock_wws_464_mgr((uint32_t)ctx->gpr[3]);
+    func_00464AFC(ctx);
+}
+
+static void hook_func_00464A9C(ppu_context* ctx)
+{
+    gow_unblock_wws_464_mgr((uint32_t)ctx->gpr[3]);
+    func_00464A9C(ctx);
+}
+
+static void hook_func_0046630C(ppu_context* ctx)
+{
+    gow_unblock_wws_464_mgr((uint32_t)ctx->gpr[3]);
+    func_0046630C(ctx);
+}
+
+static void hook_func_00464F0C(ppu_context* ctx)
+{
+    gow_unblock_wws_464_mgr((uint32_t)ctx->gpr[3]);
+    func_00464F0C(ctx);
+}
+
+static void gow_unblock_spurs_tasks_3a5(void)
+{
+    const uint32_t target = vm_read32(0x0098317Cu);
+    const uint32_t cur = vm_read32(0x00983168u);
+    if (target > 0 && cur != target) {
+        static uint32_t s_spurs_task_sync_cnt = 0;
+        if (++s_spurs_task_sync_cnt <= 20 || (s_spurs_task_sync_cnt % 100 == 0)) {
+            fprintf(stderr, "[SPURS-TASK-SYNC-UNBLOCK #%u] completed %u -> target %u\n",
+                    s_spurs_task_sync_cnt, cur, target);
+        }
+        vm_write32(0x00983168u, target);
+    }
+}
+
+static void hook_func_003A5A94(ppu_context* ctx)
+{
+    gow_unblock_spurs_tasks_3a5();
+    func_003A5A94(ctx);
+}
+
+static void hook_func_003A5D00(ppu_context* ctx)
+{
+    gow_unblock_spurs_tasks_3a5();
+    func_003A5D00(ctx);
+}
+
+static void hle_cellSpursReadyCountStore(ppu_context* ctx)
+{
+    void* spurs = (void*)(uintptr_t)ctx->gpr[3];
+    uint32_t wid = (uint32_t)ctx->gpr[4];
+    uint32_t val = (uint32_t)ctx->gpr[5];
+    ctx->gpr[3] = cellSpursReadyCountStore(spurs, wid, val);
+    if (ctx->thread_id == 1) {
+        gow_unblock_416_subqueues(0x00966FB0u);
+        const uint32_t glob_mgr = vm_read32(0x008385ACu);
+        if (glob_mgr >= 0x10000u) {
+            gow_unblock_wws_464_mgr(glob_mgr);
+        }
     }
 }
 
@@ -2174,6 +2418,17 @@ extern "C" void ascension_hle_register(void)
     ppu_register_function(0x00466E28u, hook_func_00466E28);
     ppu_register_function(0x00466398u, hook_func_00466398);
     ppu_register_function(0x003E798Cu, hook_func_003E798C);
+    ppu_register_function(0x00375A50u, hook_func_00375A50);
+    ppu_register_function(0x00416328u, hook_func_00416328);
+    ppu_register_function(0x00416600u, hook_func_00416600);
+    ppu_register_function(0x00416A00u, hook_func_00416A00);
+    ppu_register_function(0x00464AFCu, hook_func_00464AFC);
+    ppu_register_function(0x00464A9Cu, hook_func_00464A9C);
+    ppu_register_function(0x0046630Cu, hook_func_0046630C);
+    ppu_register_function(0x00464F0Cu, hook_func_00464F0C);
+    ppu_register_function(0x003A5A94u, hook_func_003A5A94);
+    ppu_register_function(0x003A5D00u, hook_func_003A5D00);
+    ps3_hle_register_ctx(0xF843818Du, "cellSpursReadyCountStore", hle_cellSpursReadyCountStore);
 }
 
 /* Alias for compatibility */
@@ -2208,24 +2463,22 @@ extern "C" int64_t hook_sys_timer_usleep(ppu_context* ctx)
                 const uint32_t r9_tbl = vm_read32(r11_base + 0x30u);
                 uint32_t extra = 0;
                 if (r9_tbl != 0) {
-                    uint32_t entry = r9_tbl + ((target & 0x1Fu) << 3);
+                    uint32_t entry = r9_tbl + ((uint32_t)target << 3);
                     if (vm_read16(entry + 2) != 0) {
                         extra = 1;
                         entry += 10;
-                        while (vm_read16(entry) != 0 && extra < 32) {
+                        while (vm_read16(entry) != 0 && extra < 512) {
                             extra++;
                             entry += 8;
                         }
                     }
                 }
                 uint16_t completed_val = (uint16_t)(target + extra);
+                vm_write16(hdr, completed_val);
                 for (int i = 1; i <= 7; ++i) {
                     vm_write16(hdr + (uint32_t)i * 2, completed_val);
                 }
                 vm_write32(r5 + 8, b);
-            }
-            if (vm_read32(r31_ptr + 4) == 0) {
-                vm_write32(r31_ptr + 4, 1);
             }
         }
 
@@ -2261,6 +2514,27 @@ extern "C" int64_t hook_sys_timer_usleep(ppu_context* ctx)
         }
     }
 
+    if (tid == 1 && (lr == 0x00375A78u || lr == 0x00375AB4u)) {
+        ppu_gcm_pump();
+#ifdef _WIN32
+        SwitchToThread();
+#endif
+        const uint32_t ctrl_ea = vm_read32(0x009BE004u);
+        const uint32_t fence_cnt = vm_read32(0x009710C8u);
+        if (ctrl_ea >= 0x10000u) {
+            const uint32_t cur_ref = vm_read32(ctrl_ea + 0x08);
+            const uint32_t target_ref = fence_cnt + (uint32_t)(int32_t)ctx->gpr[31];
+            if ((int32_t)(cur_ref - target_ref) < 0) {
+                static uint32_t s_usleep_fence_unblock = 0;
+                if (++s_usleep_fence_unblock <= 20 || (s_usleep_fence_unblock % 100 == 0)) {
+                    fprintf(stderr, "[FENCE-USLEEP-SATISFY #%u] tid=1 lr=0x%08X: cur_ref=%u target_ref=%u (fence_cnt=%u r31=%d)\n",
+                            s_usleep_fence_unblock, lr, cur_ref, target_ref, fence_cnt, (int32_t)ctx->gpr[31]);
+                }
+                vm_write32(ctrl_ea + 0x08, target_ref);
+            }
+        }
+    }
+
     if (tid == 1 && (lr == 0x003E8378u || (lr >= 0x003E798Cu && lr <= 0x003E7B80u))) {
         ppu_gcm_pump();
 #ifdef _WIN32
@@ -2279,6 +2553,22 @@ extern "C" int64_t hook_sys_timer_usleep(ppu_context* ctx)
             fprintf(stderr, "[FRAME-SYNC-UNBLOCK #%u] tid=1 lr=0x%08X cleared frame sync counters\n",
                     s_frame_sync_unblock, lr);
         }
+    }
+
+    if (tid == 1 && ((lr >= 0x00464A9Cu && lr <= 0x00465100u) || lr == 0x00443EA4u || lr == 0x00466580u || lr == 0x004665C4u || lr == 0x00464B4Cu)) {
+        uint32_t mgr_r31 = (uint32_t)ctx->gpr[31];
+        uint32_t mgr_r29 = (uint32_t)ctx->gpr[29];
+        uint32_t mgr_r3  = (uint32_t)ctx->gpr[3];
+        uint32_t glob_mgr = vm_read32(0x008385ACu);
+        if (mgr_r31 >= 0x10000u) gow_unblock_wws_464_mgr(mgr_r31);
+        if (mgr_r29 >= 0x10000u) gow_unblock_wws_464_mgr(mgr_r29);
+        if (mgr_r3 >= 0x10000u) gow_unblock_wws_464_mgr(mgr_r3);
+        if (glob_mgr >= 0x10000u) gow_unblock_wws_464_mgr(glob_mgr);
+        gow_unblock_416_subqueues(0x00966FB0u);
+    }
+
+    if (tid == 1 && (lr == 0x003436ACu || lr == 0x00341864u || lr == 0x003E84DCu || (lr >= 0x003A5A94u && lr <= 0x003A5E00u))) {
+        gow_unblock_spurs_tasks_3a5();
     }
 
     extern ppu_context* volatile g_ppu_main_ctx;
@@ -2301,6 +2591,18 @@ extern "C" int64_t hook_sys_timer_usleep(ppu_context* ctx)
                 }
             }
         }
+        if (mlr == 0x00375A78u || mlr == 0x00375AB4u) {
+            ppu_gcm_pump();
+            const uint32_t ctrl_ea = vm_read32(0x009BE004u);
+            const uint32_t fence_cnt = vm_read32(0x009710C8u);
+            if (ctrl_ea >= 0x10000u) {
+                const uint32_t cur_ref = vm_read32(ctrl_ea + 0x08);
+                const uint32_t target_ref = fence_cnt + (uint32_t)(int32_t)g_ppu_main_ctx->gpr[31];
+                if ((int32_t)(cur_ref - target_ref) < 0) {
+                    vm_write32(ctrl_ea + 0x08, target_ref);
+                }
+            }
+        }
         if (mlr == 0x003E8378u || (mlr >= 0x003E798Cu && mlr <= 0x003E7B80u)) {
             ppu_gcm_pump();
             for (uint32_t slot = 0; slot < 3; ++slot) {
@@ -2312,11 +2614,15 @@ extern "C" int64_t hook_sys_timer_usleep(ppu_context* ctx)
                 vm_write32(0x0099B460u + i * 4, 0);
             }
         }
-        if (mlr == 0x00467B1Cu || mlr == 0x00467B34u || mlr == 0x00467B84u) {
+        if (mlr == 0x00467B1Cu || mlr == 0x00467B34u || mlr == 0x00467B84u || mlr == 0x0046700Cu || mlr == 0x00467030u) {
             uint32_t mgr_ea = (uint32_t)g_ppu_main_ctx->gpr[31];
             if (mgr_ea >= 0x10000u) {
                 const uint32_t r5 = vm_read32(mgr_ea);
                 if (r5 >= 0x10000u) {
+                    uint32_t cur_b = (uint32_t)g_ppu_main_ctx->gpr[4];
+                    if (cur_b >= 8) {
+                        cur_b = (uint32_t)(g_ppu_main_ctx->gpr[3] >> 4) & 7;
+                    }
                     for (uint32_t b = 0; b < 8; ++b) {
                         const uint32_t hdr = r5 + (b << 4) + 0x40u;
                         uint16_t target = vm_read16(hdr);
@@ -2324,29 +2630,95 @@ extern "C" int64_t hook_sys_timer_usleep(ppu_context* ctx)
                         const uint32_t r9_tbl = vm_read32(r11_base + 0x30u);
                         uint32_t extra = 0;
                         if (r9_tbl >= 0x10000u) {
-                            uint32_t entry = r9_tbl + ((target & 0x1Fu) << 3);
+                            uint32_t entry = r9_tbl + ((uint32_t)target << 3);
                             if (vm_read16(entry + 2) != 0) {
                                 extra = 1;
                                 entry += 10;
-                                while (vm_read16(entry) != 0 && extra < 32) {
+                                while (vm_read16(entry) != 0 && extra < 512) {
                                     extra++;
                                     entry += 8;
                                 }
                             }
                         }
                         uint16_t completed_val = (uint16_t)(target + extra);
+                        if (b == cur_b && (uint16_t)g_ppu_main_ctx->gpr[5] > completed_val) {
+                            completed_val = (uint16_t)g_ppu_main_ctx->gpr[5];
+                        }
+                        vm_write16(hdr, completed_val);
                         for (int i = 1; i <= 7; ++i) {
                             vm_write16(hdr + (uint32_t)i * 2, completed_val);
                         }
-                        vm_write32(r5 + 8, b);
                     }
-                    if (vm_read32(mgr_ea + 4) == 0) {
-                        vm_write32(mgr_ea + 4, 1);
+                    if (cur_b < 8) {
+                        vm_write32(r5 + 8, cur_b);
                     }
                     static uint32_t s_main_wws_unblock = 0;
                     if (++s_main_wws_unblock <= 20 || (s_main_wws_unblock % 100 == 0)) {
-                        fprintf(stderr, "[WWS-MAIN-UNBLOCK #%u] lr=0x%08X mgr=0x%08X r5=0x%08X completed all lanes\n",
-                                s_main_wws_unblock, mlr, mgr_ea, r5);
+                        fprintf(stderr, "[WWS-MAIN-UNBLOCK #%u] lr=0x%08X mgr=0x%08X r5=0x%08X cur_b=%u completed all lanes\n",
+                                s_main_wws_unblock, mlr, mgr_ea, r5, cur_b);
+                    }
+                }
+            }
+        }
+        if ((mlr >= 0x00464A9Cu && mlr <= 0x00465100u) || mlr == 0x00443EA4u || mlr == 0x00466580u || mlr == 0x004665C4u || mlr == 0x00464B4Cu) {
+            uint32_t mgr_r31 = (uint32_t)g_ppu_main_ctx->gpr[31];
+            uint32_t mgr_r29 = (uint32_t)g_ppu_main_ctx->gpr[29];
+            uint32_t mgr_r3  = (uint32_t)g_ppu_main_ctx->gpr[3];
+            uint32_t glob_mgr = vm_read32(0x008385ACu);
+            if (mgr_r31 >= 0x10000u) gow_unblock_wws_464_mgr(mgr_r31);
+            if (mgr_r29 >= 0x10000u) gow_unblock_wws_464_mgr(mgr_r29);
+            if (mgr_r3 >= 0x10000u) gow_unblock_wws_464_mgr(mgr_r3);
+            if (glob_mgr >= 0x10000u) gow_unblock_wws_464_mgr(glob_mgr);
+            gow_unblock_416_subqueues(0x00966FB0u);
+        }
+        if (mlr == 0x003436ACu || mlr == 0x00341864u || mlr == 0x003E84DCu || (mlr >= 0x003A5A94u && mlr <= 0x003A5E00u)) {
+            gow_unblock_spurs_tasks_3a5();
+        }
+        if (mlr == 0x00416A3Cu || mlr == 0x0041664Cu || (mlr >= 0x00416328u && mlr <= 0x00416B50u)) {
+            gow_unblock_416_subqueues(0x00966FB0u);
+
+            static uint32_t s_last_mlr = 0;
+            static uint32_t s_subq_spin_ticks = 0;
+
+            if (mlr == s_last_mlr) {
+                s_subq_spin_ticks++;
+            } else {
+                s_last_mlr = mlr;
+                s_subq_spin_ticks = 1;
+            }
+
+            if (s_subq_spin_ticks >= 5) {
+                const uint32_t master_ea = 0x00966FB0u;
+                const uint16_t num_q = vm_read16(master_ea + 0x0A);
+                const uint32_t q_base = vm_read32(master_ea + 0x20);
+
+                if (q_base >= 0x10000u && num_q > 0 && num_q <= 32) {
+                    for (uint32_t i = 0; i < num_q; ++i) {
+                        uint32_t q = q_base + i * 0x70u;
+                        vm_write16(q + 0x00, 0);
+
+                        for (uint32_t off = 0x1Cu; off <= 0x24u; off += 4u) {
+                            uint32_t p = vm_read32(q + off);
+                            if (p >= 0x10000u && vm_read16(p) != 0) {
+                                vm_write16(p, 0);
+                            }
+                        }
+
+                        uint32_t q_mgr = vm_read32(q + 0x2Cu);
+                        if (q_mgr >= 0x10000u) {
+                            gow_unblock_wws_mgr(q_mgr);
+                            gow_unblock_wws_464_mgr(q_mgr);
+                        }
+                    }
+
+                    const uint32_t glob_mgr = vm_read32(0x008385ACu);
+                    if (glob_mgr >= 0x10000u) {
+                        gow_unblock_wws_464_mgr(glob_mgr);
+                    }
+                    static uint32_t s_subq_unblock_log = 0;
+                    if (++s_subq_unblock_log <= 20 || (s_subq_unblock_log % 50 == 0)) {
+                        fprintf(stderr, "[SUBQ-COUNTER-UNBLOCK #%u] mlr=0x%08X spin_ticks=%u cleared all %u sub-queues\n",
+                                s_subq_unblock_log, mlr, s_subq_spin_ticks, num_q);
                     }
                 }
             }
