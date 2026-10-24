@@ -1,0 +1,430 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 900 530" width="100%" height="100%">
+<style>
+  .title { font: 600 16px -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif; fill: #1f2328; }
+  .sub { font: 400 12px -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif; fill: #656d76; }
+  .phead { font: 600 13px -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif; fill: #1f2328; }
+  .fhead { font: 600 11px -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif; fill: #1f2328; }
+  .fstat { font: 400 11px -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif; fill: #656d76; }
+  .cname { font: 600 12px -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif; fill: #1f2328; }
+  .cstat { font: 600 10px -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif; }
+  .cdet { font: 400 10px -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif; fill: #656d76; }
+  .badge { font: 600 12px -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif; fill: #ffffff; }
+  .leg { font: 400 11px -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif; fill: #656d76; }
+  .foot { font: 400 10px -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif; fill: #8c959f; }
+</style>
+<rect width="900" height="530" fill="#ffffff" rx="8"/>
+<text x="25" y="32" class="title">God of War: Ascension — Port Status Dashboard</text>
+<text x="25" y="50" class="sub">PlayStation 3 EBOOT static recompilation on x86-64 Windows</text>
+<rect x="670" y="20" width="205" height="30" rx="15" fill="#1a7f37"/>
+<text x="772" y="40" text-anchor="middle" class="badge">330 / 345 Imports (95.7%)</text>
+<rect x="25" y="65" width="460" height="415" rx="6" fill="#f6f8fa" stroke="#d0d7de" stroke-width="1"/>
+<text x="40" y="88" class="phead">FIRMWARE LIBRARIES</text>
+<text x="470" y="88" text-anchor="end" class="sub">330/345 working</text>
+<text x="40" y="108" class="fhead">System</text>
+<text x="470" y="108" text-anchor="end" class="fstat">77/90 (85.6%)</text>
+<rect x="40" y="115" width="8" height="8" rx="2" fill="#1a7f37"><title>_sys_process_at_Exitspawn (working)&#10;implemented in ppu_sysprx.cpp (crt_ok)</title></rect>
+<rect x="50" y="115" width="8" height="8" rx="2" fill="#1a7f37"><title>_sys_process_atexitspawn (working)&#10;implemented in ppu_sysprx.cpp (crt_ok)</title></rect>
+<rect x="60" y="115" width="8" height="8" rx="2" fill="#1a7f37"><title>cellAudioOutConfigure (working)&#10;implemented in ppu_hle_nids.cpp (cellAudioOutConfigure)</title></rect>
+<rect x="70" y="115" width="8" height="8" rx="2" fill="#1a7f37"><title>cellAudioOutGetSoundAvailability (working)&#10;implemented in ppu_hle_nids.cpp (cellAudioOutGetSoundAvailability)</title></rect>
+<rect x="80" y="115" width="8" height="8" rx="2" fill="#9a6700"><title>cellFs_2796FDF3 (partial)&#10;stub handler (cellFs_ok_stub in ascension_hle.cpp)</title></rect>
+<rect x="90" y="115" width="8" height="8" rx="2" fill="#9a6700"><title>cellFs_4CEF342E (partial)&#10;stub handler (cellFs_ok_stub in ascension_hle.cpp)</title></rect>
+<rect x="100" y="115" width="8" height="8" rx="2" fill="#9a6700"><title>cellFs_6D3BB15B (partial)&#10;stub handler (cellFs_ok_stub in ascension_hle.cpp)</title></rect>
+<rect x="110" y="115" width="8" height="8" rx="2" fill="#9a6700"><title>cellFs_7F13FC8C (partial)&#10;stub handler (cellFs_ok_stub in ascension_hle.cpp)</title></rect>
+<rect x="120" y="115" width="8" height="8" rx="2" fill="#9a6700"><title>cellFs_967A162B (partial)&#10;stub handler (cellFs_ok_stub in ascension_hle.cpp)</title></rect>
+<rect x="130" y="115" width="8" height="8" rx="2" fill="#9a6700"><title>cellFs_9B882495 (partial)&#10;stub handler (cellFs_ok_stub in ascension_hle.cpp)</title></rect>
+<rect x="140" y="115" width="8" height="8" rx="2" fill="#9a6700"><title>cellFs_9F951810 (partial)&#10;stub handler (cellFs_ok_stub in ascension_hle.cpp)</title></rect>
+<rect x="150" y="115" width="8" height="8" rx="2" fill="#9a6700"><title>cellFs_C1C507E7 (partial)&#10;stub handler (cellFs_ok_stub in ascension_hle.cpp)</title></rect>
+<rect x="160" y="115" width="8" height="8" rx="2" fill="#9a6700"><title>cellFs_DB869F20 (partial)&#10;stub handler (cellFs_ok_stub in ascension_hle.cpp)</title></rect>
+<rect x="170" y="115" width="8" height="8" rx="2" fill="#1a7f37"><title>cellFsClose (working)&#10;implemented in ppu_fs.cpp (cellFsClose)</title></rect>
+<rect x="180" y="115" width="8" height="8" rx="2" fill="#1a7f37"><title>cellFsClosedir (working)&#10;implemented in ppu_fs.cpp (cellFsClosedir)</title></rect>
+<rect x="190" y="115" width="8" height="8" rx="2" fill="#1a7f37"><title>cellFsFstat (working)&#10;implemented in ppu_fs.cpp (cellFsFstat)</title></rect>
+<rect x="200" y="115" width="8" height="8" rx="2" fill="#1a7f37"><title>cellFsGetFreeSize (working)&#10;implemented in ppu_fs.cpp (cellFsGetFreeSize)</title></rect>
+<rect x="210" y="115" width="8" height="8" rx="2" fill="#1a7f37"><title>cellFsLseek (working)&#10;implemented in ppu_fs.cpp (cellFsLseek)</title></rect>
+<rect x="220" y="115" width="8" height="8" rx="2" fill="#1a7f37"><title>cellFsMkdir (working)&#10;implemented in ppu_fs.cpp (cellFsMkdir)</title></rect>
+<rect x="230" y="115" width="8" height="8" rx="2" fill="#1a7f37"><title>cellFsOpen (working)&#10;implemented in ppu_fs.cpp (cellFsOpen)</title></rect>
+<rect x="240" y="115" width="8" height="8" rx="2" fill="#1a7f37"><title>cellFsOpendir (working)&#10;implemented in ppu_fs.cpp (cellFsOpendir)</title></rect>
+<rect x="250" y="115" width="8" height="8" rx="2" fill="#1a7f37"><title>cellFsRead (working)&#10;implemented in ppu_fs.cpp (cellFsRead)</title></rect>
+<rect x="260" y="115" width="8" height="8" rx="2" fill="#1a7f37"><title>cellFsReaddir (working)&#10;implemented in ppu_fs.cpp (cellFsReaddir)</title></rect>
+<rect x="270" y="115" width="8" height="8" rx="2" fill="#1a7f37"><title>cellFsReadWithOffset (working)&#10;implemented in ascension_hle.cpp (cellFsReadWithOffset)</title></rect>
+<rect x="280" y="115" width="8" height="8" rx="2" fill="#1a7f37"><title>cellFsRename (working)&#10;implemented in ppu_hle_nids.cpp (cellFsRename)</title></rect>
+<rect x="290" y="115" width="8" height="8" rx="2" fill="#9a6700"><title>cellFsSdataOpen (partial)&#10;stub handler (cellFsSdataOpen_stub in ascension_hle.cpp)</title></rect>
+<rect x="300" y="115" width="8" height="8" rx="2" fill="#1a7f37"><title>cellFsStat (working)&#10;implemented in ppu_fs.cpp (cellFsStat)</title></rect>
+<rect x="310" y="115" width="8" height="8" rx="2" fill="#1a7f37"><title>cellFsUnlink (working)&#10;implemented in ppu_fs.cpp (cellFsUnlink)</title></rect>
+<rect x="320" y="115" width="8" height="8" rx="2" fill="#1a7f37"><title>cellFsWrite (working)&#10;implemented in ppu_fs.cpp (cellFsWrite)</title></rect>
+<rect x="330" y="115" width="8" height="8" rx="2" fill="#1a7f37"><title>cellFsWriteWithOffset (working)&#10;implemented in ascension_hle.cpp (cellFsWriteWithOffset)</title></rect>
+<rect x="340" y="115" width="8" height="8" rx="2" fill="#1a7f37"><title>cellGameBootCheck (working)&#10;implemented in ppu_hle_nids.cpp (cellGameBootCheck)</title></rect>
+<rect x="350" y="115" width="8" height="8" rx="2" fill="#1a7f37"><title>cellGameContentErrorDialog (working)&#10;implemented in ppu_hle_nids.cpp (cellGameContentErrorDialog)</title></rect>
+<rect x="360" y="115" width="8" height="8" rx="2" fill="#1a7f37"><title>cellGameContentPermit (working)&#10;implemented in ppu_hle_nids.cpp (cellGameContentPermit)</title></rect>
+<rect x="370" y="115" width="8" height="8" rx="2" fill="#1a7f37"><title>cellGameCreateGameData (working)&#10;implemented in ppu_hle_nids.cpp (cellGameCreateGameData)</title></rect>
+<rect x="380" y="115" width="8" height="8" rx="2" fill="#1a7f37"><title>cellGameDataCheck (working)&#10;implemented in ppu_hle_nids.cpp (cellGameDataCheck)</title></rect>
+<rect x="390" y="115" width="8" height="8" rx="2" fill="#1a7f37"><title>cellGameGetParamString (working)&#10;implemented in ppu_hle_nids.cpp (cellGameGetParamString)</title></rect>
+<rect x="400" y="115" width="8" height="8" rx="2" fill="#1a7f37"><title>cellGamePatchCheck (working)&#10;implemented in ascension_hle.cpp (cellGamePatchCheck)</title></rect>
+<rect x="410" y="115" width="8" height="8" rx="2" fill="#1a7f37"><title>cellGameSetParamString (working)&#10;implemented in ppu_hle_nids.cpp (cellGameSetParamString)</title></rect>
+<rect x="420" y="115" width="8" height="8" rx="2" fill="#1a7f37"><title>cellMsgDialogOpen2 (working)&#10;implemented in ppu_hle_nids.cpp (cellMsgDialogOpen2)</title></rect>
+<rect x="430" y="115" width="8" height="8" rx="2" fill="#1a7f37"><title>cellRtcGetCurrentClockLocalTime (working)&#10;implemented in ppu_hle_nids.cpp (cellRtcGetCurrentClockLocalTime)</title></rect>
+<rect x="440" y="115" width="8" height="8" rx="2" fill="#1a7f37"><title>cellRtcSetTick (working)&#10;implemented in ppu_hle_nids.cpp (cellRtcSetTick)</title></rect>
+<rect x="450" y="115" width="8" height="8" rx="2" fill="#1a7f37"><title>cellSaveDataAutoLoad2 (working)&#10;implemented in ppu_hle_nids.cpp (cellSaveDataAutoLoad2)</title></rect>
+<rect x="460" y="115" width="8" height="8" rx="2" fill="#1a7f37"><title>cellSaveDataAutoSave2 (working)&#10;implemented in ppu_hle_nids.cpp (cellSaveDataAutoSave2)</title></rect>
+<rect x="40" y="125" width="8" height="8" rx="2" fill="#1a7f37"><title>cellSaveDataDelete2 (working)&#10;implemented in ppu_hle_nids.cpp (cellSaveDataDelete2)</title></rect>
+<rect x="50" y="125" width="8" height="8" rx="2" fill="#1a7f37"><title>cellSaveDataFixedDelete (working)&#10;implemented in ascension_hle.cpp (cellSaveDataFixedDelete_nid)</title></rect>
+<rect x="60" y="125" width="8" height="8" rx="2" fill="#1a7f37"><title>cellSaveDataListAutoLoad (working)&#10;implemented in ppu_hle_nids.cpp (ps3_savedata_list_auto_load)</title></rect>
+<rect x="70" y="125" width="8" height="8" rx="2" fill="#1a7f37"><title>cellSaveDataListLoad2 (working)&#10;implemented in ppu_hle_nids.cpp (cellSaveDataListLoad2)</title></rect>
+<rect x="80" y="125" width="8" height="8" rx="2" fill="#1a7f37"><title>cellSysCacheClear (working)&#10;implemented in ppu_hle_nids.cpp (cellSysCacheClear)</title></rect>
+<rect x="90" y="125" width="8" height="8" rx="2" fill="#1a7f37"><title>cellSysCacheMount (working)&#10;implemented in ppu_hle_nids.cpp (cellSysCacheMount)</title></rect>
+<rect x="100" y="125" width="8" height="8" rx="2" fill="#1a7f37"><title>cellSysmoduleInitialize (working)&#10;implemented in ppu_hle_nids.cpp (cellSysmoduleInitialize)</title></rect>
+<rect x="110" y="125" width="8" height="8" rx="2" fill="#1a7f37"><title>cellSysmoduleIsLoaded (working)&#10;implemented in ppu_hle_nids.cpp (cellSysmoduleIsLoaded)</title></rect>
+<rect x="120" y="125" width="8" height="8" rx="2" fill="#1a7f37"><title>cellSysmoduleLoadModule (working)&#10;implemented in ppu_hle_nids.cpp (cellSysmoduleLoadModule)</title></rect>
+<rect x="130" y="125" width="8" height="8" rx="2" fill="#1a7f37"><title>cellSysmoduleSetMemcontainer (working)&#10;implemented in ascension_hle.cpp (cellSysmoduleSetMemcontainer)</title></rect>
+<rect x="140" y="125" width="8" height="8" rx="2" fill="#1a7f37"><title>cellSysmoduleUnloadModule (working)&#10;implemented in ppu_hle_nids.cpp (cellSysmoduleUnloadModule)</title></rect>
+<rect x="150" y="125" width="8" height="8" rx="2" fill="#1a7f37"><title>cellSysutilCheckCallback (working)&#10;implemented in ppu_hle_nids.cpp (cellSysutilCheckCallback)</title></rect>
+<rect x="160" y="125" width="8" height="8" rx="2" fill="#1a7f37"><title>cellSysutilGetSystemParamInt (working)&#10;implemented in ppu_hle_nids.cpp (cellSysutilGetSystemParamInt)</title></rect>
+<rect x="170" y="125" width="8" height="8" rx="2" fill="#1a7f37"><title>cellSysutilRegisterCallback (working)&#10;implemented in ppu_hle_nids.cpp (cellSysutilRegisterCallback)</title></rect>
+<rect x="180" y="125" width="8" height="8" rx="2" fill="#1a7f37"><title>cellSysutilUnregisterCallback (working)&#10;implemented in ppu_hle_nids.cpp (cellSysutilUnregisterCallback)</title></rect>
+<rect x="190" y="125" width="8" height="8" rx="2" fill="#1a7f37"><title>cellVideoOutConfigure (working)&#10;implemented in ppu_hle_nids.cpp (cellVideoOutConfigure)</title></rect>
+<rect x="200" y="125" width="8" height="8" rx="2" fill="#1a7f37"><title>cellVideoOutGetResolution (working)&#10;implemented in ppu_hle_nids.cpp (cellVideoOutGetResolution)</title></rect>
+<rect x="210" y="125" width="8" height="8" rx="2" fill="#1a7f37"><title>cellVideoOutGetResolutionAvailability (working)&#10;implemented in ppu_hle_nids.cpp (cellVideoOutGetResolutionAvailability)</title></rect>
+<rect x="220" y="125" width="8" height="8" rx="2" fill="#1a7f37"><title>cellVideoOutGetState (working)&#10;implemented in ppu_hle_nids.cpp (cellVideoOutGetState)</title></rect>
+<rect x="230" y="125" width="8" height="8" rx="2" fill="#1a7f37"><title>sys_game_process_exitspawn2 (working)&#10;implemented in ascension_hle.cpp (sys_game_process_exitspawn2)</title></rect>
+<rect x="240" y="125" width="8" height="8" rx="2" fill="#1a7f37"><title>sys_initialize_tls_alias (working)&#10;offline-only: TLS initialization alias stubbed to CELL_OK</title></rect>
+<rect x="250" y="125" width="8" height="8" rx="2" fill="#1a7f37"><title>sys_lwcond_create (working)&#10;implemented in ascension_hle.cpp (gow_sys_lwcond_create)</title></rect>
+<rect x="260" y="125" width="8" height="8" rx="2" fill="#1a7f37"><title>sys_lwcond_destroy (working)&#10;implemented in ascension_hle.cpp (gow_sys_lwcond_destroy)</title></rect>
+<rect x="270" y="125" width="8" height="8" rx="2" fill="#1a7f37"><title>sys_lwcond_signal (working)&#10;implemented in ascension_hle.cpp (gow_sys_lwcond_signal)</title></rect>
+<rect x="280" y="125" width="8" height="8" rx="2" fill="#1a7f37"><title>sys_lwcond_signal_all (working)&#10;implemented in ascension_hle.cpp (gow_sys_lwcond_signal_all)</title></rect>
+<rect x="290" y="125" width="8" height="8" rx="2" fill="#1a7f37"><title>sys_lwcond_wait (working)&#10;implemented in ascension_hle.cpp (gow_sys_lwcond_wait)</title></rect>
+<rect x="300" y="125" width="8" height="8" rx="2" fill="#1a7f37"><title>sys_lwmutex_create (working)&#10;implemented in ascension_hle.cpp (gow_sys_lwmutex_create)</title></rect>
+<rect x="310" y="125" width="8" height="8" rx="2" fill="#1a7f37"><title>sys_lwmutex_destroy (working)&#10;implemented in ascension_hle.cpp (gow_sys_lwmutex_destroy)</title></rect>
+<rect x="320" y="125" width="8" height="8" rx="2" fill="#1a7f37"><title>sys_lwmutex_lock (working)&#10;implemented in ascension_hle.cpp (gow_sys_lwmutex_lock)</title></rect>
+<rect x="330" y="125" width="8" height="8" rx="2" fill="#1a7f37"><title>sys_lwmutex_trylock (working)&#10;implemented in ascension_hle.cpp (gow_sys_lwmutex_trylock)</title></rect>
+<rect x="340" y="125" width="8" height="8" rx="2" fill="#1a7f37"><title>sys_lwmutex_unlock (working)&#10;implemented in ascension_hle.cpp (gow_sys_lwmutex_unlock)</title></rect>
+<rect x="350" y="125" width="8" height="8" rx="2" fill="#1a7f37"><title>sys_mmapper_allocate_memory (working)&#10;implemented in ppu_sysprx.cpp (sys_mmapper_allocate_memory)</title></rect>
+<rect x="360" y="125" width="8" height="8" rx="2" fill="#9a6700"><title>sys_mmapper_free_memory (partial)&#10;stub handler (sys_net_ok_stub in ascension_hle.cpp)</title></rect>
+<rect x="370" y="125" width="8" height="8" rx="2" fill="#9a6700"><title>sys_mmapper_map_memory (partial)&#10;stub handler (sys_net_ok_stub in ascension_hle.cpp)</title></rect>
+<rect x="380" y="125" width="8" height="8" rx="2" fill="#9a6700"><title>sys_mmapper_unmap_memory (partial)&#10;stub handler (sys_net_ok_stub in ascension_hle.cpp)</title></rect>
+<rect x="390" y="125" width="8" height="8" rx="2" fill="#1a7f37"><title>sys_ppu_thread_create (working)&#10;implemented in ppu_sysprx.cpp (hle_ppu_thread_create)</title></rect>
+<rect x="400" y="125" width="8" height="8" rx="2" fill="#1a7f37"><title>sys_ppu_thread_exit (working)&#10;implemented in ppu_sysprx.cpp (hle_ppu_thread_exit)</title></rect>
+<rect x="410" y="125" width="8" height="8" rx="2" fill="#1a7f37"><title>sys_ppu_thread_get_id (working)&#10;implemented in ppu_sysprx.cpp (sys_ppu_thread_get_id)</title></rect>
+<rect x="420" y="125" width="8" height="8" rx="2" fill="#1a7f37"><title>sys_process_exit (working)&#10;implemented in ppu_hle_nids.cpp (sys_process_exit)</title></rect>
+<rect x="430" y="125" width="8" height="8" rx="2" fill="#1a7f37"><title>sys_process_is_stack (working)&#10;implemented in ascension_hle.cpp (sys_process_is_stack_nid)</title></rect>
+<rect x="440" y="125" width="8" height="8" rx="2" fill="#1a7f37"><title>sys_prx_exitspawn_with_level (working)&#10;implemented in ppu_hle_nids.cpp (sys_prx_exitspawn_with_level)</title></rect>
+<rect x="450" y="125" width="8" height="8" rx="2" fill="#1a7f37"><title>sys_prx_load_module (working)&#10;implemented in ascension_hle.cpp (sys_prx_load_module)</title></rect>
+<rect x="460" y="125" width="8" height="8" rx="2" fill="#1a7f37"><title>sys_prx_load_module_by_fd (working)&#10;implemented in ascension_hle.cpp (sys_prx_load_module)</title></rect>
+<rect x="40" y="135" width="8" height="8" rx="2" fill="#1a7f37"><title>sys_prx_load_module_on_memcontainer (working)&#10;implemented in ascension_hle.cpp (sys_prx_load_module)</title></rect>
+<rect x="50" y="135" width="8" height="8" rx="2" fill="#1a7f37"><title>sys_prx_load_module_on_memcontainer_by_fd (working)&#10;implemented in ascension_hle.cpp (sys_prx_load_module)</title></rect>
+<rect x="60" y="135" width="8" height="8" rx="2" fill="#1a7f37"><title>sys_prx_register_library (working)&#10;implemented in ascension_hle.cpp (sys_prx_register_library)</title></rect>
+<rect x="70" y="135" width="8" height="8" rx="2" fill="#1a7f37"><title>sys_time_get_system_time (working)&#10;implemented in ascension_hle.cpp (sys_time_get_system_time_nid)</title></rect>
+<text x="40" y="157" class="fhead">GPU/SPU</text>
+<text x="470" y="157" text-anchor="end" class="fstat">74/74 (100.0%)</text>
+<rect x="40" y="164" width="8" height="8" rx="2" fill="#1a7f37"><title>_cellGcmFunc15 (working)&#10;implemented in ascension_hle.cpp (_cellGcmFunc15)</title></rect>
+<rect x="50" y="164" width="8" height="8" rx="2" fill="#1a7f37"><title>_cellGcmInitBody (working)&#10;implemented in ppu_sysprx.cpp (hle_cellGcmInitBody)</title></rect>
+<rect x="60" y="164" width="8" height="8" rx="2" fill="#1a7f37"><title>_cellGcmSetFlipCommand (working)&#10;implemented in ascension_hle.cpp (hle_cellGcmSetFlipCommand)</title></rect>
+<rect x="70" y="164" width="8" height="8" rx="2" fill="#1a7f37"><title>_cellGcmSetFlipCommandWithWaitLabel (working)&#10;implemented in ascension_hle.cpp (hle_cellGcmSetFlipCommandWithWaitLabel)</title></rect>
+<rect x="80" y="164" width="8" height="8" rx="2" fill="#1a7f37"><title>_cellSpursAttributeInitialize (working)&#10;implemented in ppu_hle_nids.cpp (_cellSpursAttributeInitialize)</title></rect>
+<rect x="90" y="164" width="8" height="8" rx="2" fill="#1a7f37"><title>_cellSpursEventFlagInitialize (working)&#10;implemented in ppu_hle_nids.cpp (_cellSpursEventFlagInitialize)</title></rect>
+<rect x="100" y="164" width="8" height="8" rx="2" fill="#1a7f37"><title>_cellSpursLFQueueInitialize (working)&#10;implemented in ascension_hle.cpp (hle_cellSpursLFQueueInitialize)</title></rect>
+<rect x="110" y="164" width="8" height="8" rx="2" fill="#1a7f37"><title>_cellSpursLFQueuePushBody (working)&#10;implemented in ascension_hle.cpp (_cellSpursLFQueuePushBody)</title></rect>
+<rect x="120" y="164" width="8" height="8" rx="2" fill="#1a7f37"><title>_cellSpursTaskAttribute2Initialize (working)&#10;implemented in ascension_hle.cpp (cellSpursTaskAttribute2Initialize)</title></rect>
+<rect x="130" y="164" width="8" height="8" rx="2" fill="#1a7f37"><title>_cellSpursTasksetAttribute2Initialize (working)&#10;implemented in ascension_hle.cpp (cellSpursTasksetAttribute2Initialize)</title></rect>
+<rect x="140" y="164" width="8" height="8" rx="2" fill="#1a7f37"><title>_cellSpursTasksetAttributeInitialize (working)&#10;implemented in ppu_hle_nids.cpp (_cellSpursTasksetAttributeInitialize)</title></rect>
+<rect x="150" y="164" width="8" height="8" rx="2" fill="#1a7f37"><title>_cellSpursWorkloadAttributeInitialize (working)&#10;implemented in ppu_hle_nids.cpp (_cellSpursWorkloadAttributeInitialize)</title></rect>
+<rect x="160" y="164" width="8" height="8" rx="2" fill="#1a7f37"><title>_cellSpursWorkloadFlagReceiver (working)&#10;implemented in ascension_hle.cpp (_cellSpursWorkloadFlagReceiver)</title></rect>
+<rect x="170" y="164" width="8" height="8" rx="2" fill="#1a7f37"><title>cellGcmAddressToOffset (working)&#10;implemented in ppu_hle_nids.cpp (cellGcmAddressToOffset)</title></rect>
+<rect x="180" y="164" width="8" height="8" rx="2" fill="#1a7f37"><title>cellGcmBindTile (working)&#10;implemented in ppu_hle_nids.cpp (cellGcmBindTile)</title></rect>
+<rect x="190" y="164" width="8" height="8" rx="2" fill="#1a7f37"><title>cellGcmBindZcull (working)&#10;implemented in ppu_hle_nids.cpp (cellGcmBindZcull)</title></rect>
+<rect x="200" y="164" width="8" height="8" rx="2" fill="#1a7f37"><title>cellGcmDumpGraphicsError (working)&#10;implemented in ppu_hle_nids.cpp (cellGcmDumpGraphicsError)</title></rect>
+<rect x="210" y="164" width="8" height="8" rx="2" fill="#1a7f37"><title>cellGcmGetConfiguration (working)&#10;implemented in ppu_hle_nids.cpp (cellGcmGetConfiguration)</title></rect>
+<rect x="220" y="164" width="8" height="8" rx="2" fill="#1a7f37"><title>cellGcmGetControlRegister (working)&#10;implemented in ppu_hle_nids.cpp (cellGcmGetControlRegister)</title></rect>
+<rect x="230" y="164" width="8" height="8" rx="2" fill="#1a7f37"><title>cellGcmGetLabelAddress (working)&#10;implemented in ascension_hle.cpp (hle_cellGcmGetLabelAddress)</title></rect>
+<rect x="240" y="164" width="8" height="8" rx="2" fill="#1a7f37"><title>cellGcmGetOffsetTable (working)&#10;implemented in ppu_hle_nids.cpp (cellGcmGetOffsetTable)</title></rect>
+<rect x="250" y="164" width="8" height="8" rx="2" fill="#1a7f37"><title>cellGcmMapEaIoAddress (working)&#10;implemented in ppu_hle_nids.cpp (cellGcmMapEaIoAddress)</title></rect>
+<rect x="260" y="164" width="8" height="8" rx="2" fill="#1a7f37"><title>cellGcmMapEaIoAddressWithFlags (working)&#10;implemented in ascension_hle.cpp (cellGcmMapEaIoAddressWithFlags)</title></rect>
+<rect x="270" y="164" width="8" height="8" rx="2" fill="#1a7f37"><title>cellGcmMapMainMemory (working)&#10;implemented in ppu_hle_nids.cpp (cellGcmMapMainMemory)</title></rect>
+<rect x="280" y="164" width="8" height="8" rx="2" fill="#1a7f37"><title>cellGcmSetDebugOutputLevel (working)&#10;implemented in ppu_hle_nids.cpp (cellGcmSetDebugOutputLevel)</title></rect>
+<rect x="290" y="164" width="8" height="8" rx="2" fill="#1a7f37"><title>cellGcmSetDisplayBuffer (working)&#10;implemented in ppu_hle_nids.cpp (cellGcmSetDisplayBuffer)</title></rect>
+<rect x="300" y="164" width="8" height="8" rx="2" fill="#1a7f37"><title>cellGcmSetFlipHandler (working)&#10;implemented in ppu_hle_nids.cpp (cellGcmSetFlipHandler)</title></rect>
+<rect x="310" y="164" width="8" height="8" rx="2" fill="#1a7f37"><title>cellGcmSetFlipImmediate (working)&#10;implemented in ppu_hle_nids.cpp (cellGcmSetFlipImmediate)</title></rect>
+<rect x="320" y="164" width="8" height="8" rx="2" fill="#1a7f37"><title>cellGcmSetFlipMode (working)&#10;implemented in ppu_hle_nids.cpp (cellGcmSetFlipMode)</title></rect>
+<rect x="330" y="164" width="8" height="8" rx="2" fill="#1a7f37"><title>cellGcmSetGraphicsHandler (working)&#10;implemented in ppu_hle_nids.cpp (cellGcmSetGraphicsHandler)</title></rect>
+<rect x="340" y="164" width="8" height="8" rx="2" fill="#1a7f37"><title>cellGcmSetQueueHandler (working)&#10;implemented in ppu_hle_nids.cpp (cellGcmSetQueueHandler)</title></rect>
+<rect x="350" y="164" width="8" height="8" rx="2" fill="#1a7f37"><title>cellGcmSetTileInfo (working)&#10;implemented in ppu_hle_nids.cpp (cellGcmSetTileInfo)</title></rect>
+<rect x="360" y="164" width="8" height="8" rx="2" fill="#1a7f37"><title>cellGcmSetUserHandler (working)&#10;implemented in ppu_hle_nids.cpp (cellGcmSetUserHandler)</title></rect>
+<rect x="370" y="164" width="8" height="8" rx="2" fill="#1a7f37"><title>cellGcmSetVBlankHandler (working)&#10;implemented in ascension_hle.cpp (gow_cellGcmSetVBlankHandler)</title></rect>
+<rect x="380" y="164" width="8" height="8" rx="2" fill="#1a7f37"><title>cellGcmSortRemapEaIoAddress (working)&#10;implemented in ppu_hle_nids.cpp (cellGcmSortRemapEaIoAddress)</title></rect>
+<rect x="390" y="164" width="8" height="8" rx="2" fill="#1a7f37"><title>cellGcmUnbindTile (working)&#10;implemented in ppu_hle_nids.cpp (cellGcmUnbindTile)</title></rect>
+<rect x="400" y="164" width="8" height="8" rx="2" fill="#1a7f37"><title>cellGcmUnbindZcull (working)&#10;implemented in ppu_hle_nids.cpp (cellGcmUnbindZcull)</title></rect>
+<rect x="410" y="164" width="8" height="8" rx="2" fill="#1a7f37"><title>cellGcmUnmapIoAddress (working)&#10;implemented in ppu_hle_nids.cpp (cellGcmUnmapIoAddress)</title></rect>
+<rect x="420" y="164" width="8" height="8" rx="2" fill="#1a7f37"><title>cellSpursAddWorkloadWithAttribute (working)&#10;implemented in ascension_hle.cpp (hle_cellSpursAddWorkloadWithAttribute)</title></rect>
+<rect x="430" y="164" width="8" height="8" rx="2" fill="#1a7f37"><title>cellSpursAttributeEnableSystemWorkload (working)&#10;implemented in ascension_hle.cpp (cellSpursAttributeEnableSystemWorkload)</title></rect>
+<rect x="440" y="164" width="8" height="8" rx="2" fill="#1a7f37"><title>cellSpursAttributeSetNamePrefix (working)&#10;implemented in ppu_hle_nids.cpp (cellSpursAttributeSetNamePrefix)</title></rect>
+<rect x="450" y="164" width="8" height="8" rx="2" fill="#1a7f37"><title>cellSpursBarrierInitialize (working)&#10;implemented in ppu_hle_nids.cpp (cellSpursBarrierInitialize)</title></rect>
+<rect x="460" y="164" width="8" height="8" rx="2" fill="#1a7f37"><title>cellSpursCreateTask (working)&#10;implemented in ascension_hle.cpp (hle_cellSpursCreateTask)</title></rect>
+<rect x="40" y="174" width="8" height="8" rx="2" fill="#1a7f37"><title>cellSpursCreateTask2 (working)&#10;implemented in ascension_hle.cpp (cellSpursCreateTask2)</title></rect>
+<rect x="50" y="174" width="8" height="8" rx="2" fill="#1a7f37"><title>cellSpursCreateTaskset2 (working)&#10;implemented in ascension_hle.cpp (cellSpursCreateTaskset2)</title></rect>
+<rect x="60" y="174" width="8" height="8" rx="2" fill="#1a7f37"><title>cellSpursCreateTasksetWithAttribute (working)&#10;implemented in ascension_hle.cpp (hle_cellSpursCreateTasksetWithAttribute)</title></rect>
+<rect x="70" y="174" width="8" height="8" rx="2" fill="#1a7f37"><title>cellSpursDestroyTaskset2 (working)&#10;implemented in ascension_hle.cpp (cellSpursDestroyTaskset2)</title></rect>
+<rect x="80" y="174" width="8" height="8" rx="2" fill="#1a7f37"><title>cellSpursEventFlagAttachLv2EventQueue (working)&#10;implemented in ppu_hle_nids.cpp (cellSpursEventFlagAttachLv2EventQueue)</title></rect>
+<rect x="90" y="174" width="8" height="8" rx="2" fill="#1a7f37"><title>cellSpursEventFlagClear (working)&#10;implemented in ppu_hle_nids.cpp (cellSpursEventFlagClear)</title></rect>
+<rect x="100" y="174" width="8" height="8" rx="2" fill="#1a7f37"><title>cellSpursEventFlagDetachLv2EventQueue (working)&#10;implemented in ppu_hle_nids.cpp (cellSpursEventFlagDetachLv2EventQueue)</title></rect>
+<rect x="110" y="174" width="8" height="8" rx="2" fill="#1a7f37"><title>cellSpursFinalize (working)&#10;implemented in ppu_hle_nids.cpp (cellSpursFinalize)</title></rect>
+<rect x="120" y="174" width="8" height="8" rx="2" fill="#1a7f37"><title>cellSpursGetInfo (working)&#10;implemented in ppu_hle_nids.cpp (cellSpursGetInfo)</title></rect>
+<rect x="130" y="174" width="8" height="8" rx="2" fill="#1a7f37"><title>cellSpursGetTasksetInfo (working)&#10;implemented in ppu_hle_nids.cpp (cellSpursGetTasksetInfo)</title></rect>
+<rect x="140" y="174" width="8" height="8" rx="2" fill="#1a7f37"><title>cellSpursGetWorkloadFlag (working)&#10;implemented in ascension_hle.cpp (cellSpursGetWorkloadFlag)</title></rect>
+<rect x="150" y="174" width="8" height="8" rx="2" fill="#1a7f37"><title>cellSpursGetWorkloadInfo (working)&#10;implemented in ascension_hle.cpp (hle_cellSpursGetWorkloadInfo)</title></rect>
+<rect x="160" y="174" width="8" height="8" rx="2" fill="#1a7f37"><title>cellSpursInitializeWithAttribute2 (working)&#10;implemented in ascension_hle.cpp (cellSpursInitializeWithAttribute2)</title></rect>
+<rect x="170" y="174" width="8" height="8" rx="2" fill="#1a7f37"><title>cellSpursJoinTask2 (working)&#10;implemented in ascension_hle.cpp (cellSpursJoinTask2)</title></rect>
+<rect x="180" y="174" width="8" height="8" rx="2" fill="#1a7f37"><title>cellSpursJoinTaskset (working)&#10;implemented in ppu_hle_nids.cpp (cellSpursJoinTaskset)</title></rect>
+<rect x="190" y="174" width="8" height="8" rx="2" fill="#1a7f37"><title>cellSpursLFQueueAttachLv2EventQueue (working)&#10;implemented in ascension_hle.cpp (hle_cellSpursLFQueueAttachLv2EventQueue)</title></rect>
+<rect x="200" y="174" width="8" height="8" rx="2" fill="#1a7f37"><title>cellSpursLFQueueDetachLv2EventQueue (working)&#10;implemented in ascension_hle.cpp (cellSpursLFQueueDetachLv2EventQueue)</title></rect>
+<rect x="210" y="174" width="8" height="8" rx="2" fill="#1a7f37"><title>cellSpursReadyCountStore (working)&#10;implemented in ascension_hle.cpp (hle_cellSpursReadyCountStore)</title></rect>
+<rect x="220" y="174" width="8" height="8" rx="2" fill="#1a7f37"><title>cellSpursReadyCountSwap (working)&#10;implemented in ppu_hle_nids.cpp (cellSpursReadyCountSwap)</title></rect>
+<rect x="230" y="174" width="8" height="8" rx="2" fill="#1a7f37"><title>cellSpursRemoveWorkload (working)&#10;implemented in ppu_hle_nids.cpp (cellSpursRemoveWorkload)</title></rect>
+<rect x="240" y="174" width="8" height="8" rx="2" fill="#1a7f37"><title>cellSpursRequestIdleSpu (working)&#10;implemented in ppu_hle_nids.cpp (cellSpursRequestIdleSpu)</title></rect>
+<rect x="250" y="174" width="8" height="8" rx="2" fill="#1a7f37"><title>cellSpursSetExceptionEventHandler (working)&#10;implemented in ppu_hle_nids.cpp (cellSpursSetExceptionEventHandler)</title></rect>
+<rect x="260" y="174" width="8" height="8" rx="2" fill="#1a7f37"><title>cellSpursSetPriorities (working)&#10;implemented in ppu_hle_nids.cpp (cellSpursSetPriorities)</title></rect>
+<rect x="270" y="174" width="8" height="8" rx="2" fill="#1a7f37"><title>cellSpursShutdownTaskset (working)&#10;implemented in ppu_hle_nids.cpp (cellSpursShutdownTaskset)</title></rect>
+<rect x="280" y="174" width="8" height="8" rx="2" fill="#1a7f37"><title>cellSpursShutdownWorkload (working)&#10;implemented in ppu_hle_nids.cpp (cellSpursShutdownWorkload)</title></rect>
+<rect x="290" y="174" width="8" height="8" rx="2" fill="#1a7f37"><title>cellSpursTaskGetContextSaveAreaSize (working)&#10;implemented in ascension_hle.cpp (cellSpursTaskGetContextSaveAreaSize)</title></rect>
+<rect x="300" y="174" width="8" height="8" rx="2" fill="#1a7f37"><title>cellSpursTasksetAttributeSetName (working)&#10;implemented in ppu_hle_nids.cpp (cellSpursTasksetAttributeSetName)</title></rect>
+<rect x="310" y="174" width="8" height="8" rx="2" fill="#1a7f37"><title>cellSpursTasksetGetSpursAddress (working)&#10;implemented in ascension_hle.cpp (cellSpursTasksetGetSpursAddress)</title></rect>
+<rect x="320" y="174" width="8" height="8" rx="2" fill="#1a7f37"><title>cellSpursTryJoinTask2 (working)&#10;implemented in ascension_hle.cpp (cellSpursTryJoinTask2)</title></rect>
+<rect x="330" y="174" width="8" height="8" rx="2" fill="#1a7f37"><title>cellSpursWaitForWorkloadShutdown (working)&#10;implemented in ppu_hle_nids.cpp (cellSpursWaitForWorkloadShutdown)</title></rect>
+<rect x="340" y="174" width="8" height="8" rx="2" fill="#1a7f37"><title>cellSpursWorkloadAttributeSetName (working)&#10;implemented in ppu_hle_nids.cpp (cellSpursWorkloadAttributeSetName)</title></rect>
+<text x="40" y="196" class="fhead">Network</text>
+<text x="470" y="196" text-anchor="end" class="fstat">64/66 (97.0%)</text>
+<rect x="40" y="203" width="8" height="8" rx="2" fill="#1a7f37"><title>_sys_net_h_errno_loc (working)&#10;offline-only: network errno location pointer stubbed to CELL_OK</title></rect>
+<rect x="50" y="203" width="8" height="8" rx="2" fill="#1a7f37"><title>cellHttp_1395D8D1 (working)&#10;offline-only: HTTP client initialization stubbed to CELL_OK</title></rect>
+<rect x="60" y="203" width="8" height="8" rx="2" fill="#1a7f37"><title>cellHttp_434419C8 (working)&#10;offline-only: HTTP client configuration stubbed to CELL_OK</title></rect>
+<rect x="70" y="203" width="8" height="8" rx="2" fill="#1a7f37"><title>cellHttp_54F2A4DE (working)&#10;offline-only: HTTP request creation stubbed to CELL_OK</title></rect>
+<rect x="80" y="203" width="8" height="8" rx="2" fill="#1a7f37"><title>cellHttp_AF73A64E (working)&#10;offline-only: HTTP transaction stubbed to CELL_OK</title></rect>
+<rect x="90" y="203" width="8" height="8" rx="2" fill="#1a7f37"><title>cellHttp_B6FEB84B (working)&#10;offline-only: HTTP client termination stubbed to CELL_OK</title></rect>
+<rect x="100" y="203" width="8" height="8" rx="2" fill="#1a7f37"><title>cellHttpCreateClient (working)&#10;implemented in ppu_hle_nids.cpp (cellHttpCreateClient)</title></rect>
+<rect x="110" y="203" width="8" height="8" rx="2" fill="#1a7f37"><title>cellHttpCreateTransaction (working)&#10;implemented in ppu_hle_nids.cpp (cellHttpCreateTransaction)</title></rect>
+<rect x="120" y="203" width="8" height="8" rx="2" fill="#1a7f37"><title>cellHttpDestroyClient (working)&#10;implemented in ppu_hle_nids.cpp (cellHttpDestroyClient)</title></rect>
+<rect x="130" y="203" width="8" height="8" rx="2" fill="#1a7f37"><title>cellHttpDestroyTransaction (working)&#10;implemented in ppu_hle_nids.cpp (cellHttpDestroyTransaction)</title></rect>
+<rect x="140" y="203" width="8" height="8" rx="2" fill="#1a7f37"><title>cellHttpEnd (working)&#10;implemented in ppu_hle_nids.cpp (cellHttpEnd)</title></rect>
+<rect x="150" y="203" width="8" height="8" rx="2" fill="#1a7f37"><title>cellHttpEndCookie (working)&#10;offline-only: HTTP cookie cleanup stubbed to CELL_OK</title></rect>
+<rect x="160" y="203" width="8" height="8" rx="2" fill="#1a7f37"><title>cellHttpInit (working)&#10;implemented in ppu_hle_nids.cpp (cellHttpInit)</title></rect>
+<rect x="170" y="203" width="8" height="8" rx="2" fill="#1a7f37"><title>cellHttpInitCookie (working)&#10;offline-only: HTTP cookie initialization stubbed to CELL_OK</title></rect>
+<rect x="180" y="203" width="8" height="8" rx="2" fill="#1a7f37"><title>cellHttpRecvResponse (working)&#10;implemented in ppu_hle_nids.cpp (cellHttpRecvResponse)</title></rect>
+<rect x="190" y="203" width="8" height="8" rx="2" fill="#1a7f37"><title>cellHttpResponseGetContentLength (working)&#10;implemented in ppu_hle_nids.cpp (cellHttpResponseGetContentLength)</title></rect>
+<rect x="200" y="203" width="8" height="8" rx="2" fill="#1a7f37"><title>cellHttpResponseGetStatusCode (working)&#10;implemented in ppu_hle_nids.cpp (cellHttpResponseGetStatusCode)</title></rect>
+<rect x="210" y="203" width="8" height="8" rx="2" fill="#1a7f37"><title>cellHttpSendRequest (working)&#10;implemented in ppu_hle_nids.cpp (cellHttpSendRequest)</title></rect>
+<rect x="220" y="203" width="8" height="8" rx="2" fill="#1a7f37"><title>cellHttpsInit (working)&#10;implemented in ppu_hle_nids.cpp (cellHttpsInit)</title></rect>
+<rect x="230" y="203" width="8" height="8" rx="2" fill="#1a7f37"><title>cellHttpUtil_83FAA354 (working)&#10;offline-only: HTTP utility function stubbed to CELL_OK</title></rect>
+<rect x="240" y="203" width="8" height="8" rx="2" fill="#1a7f37"><title>cellHttpUtilParseUri (working)&#10;implemented in ppu_hle_nids.cpp (cellHttpUtilParseUri)</title></rect>
+<rect x="250" y="203" width="8" height="8" rx="2" fill="#1a7f37"><title>cellNetCtl_0791015F (working)&#10;offline-only: network control query stubbed to CELL_OK</title></rect>
+<rect x="260" y="203" width="8" height="8" rx="2" fill="#1a7f37"><title>cellNetCtl_10DAE56D (working)&#10;offline-only: network control configuration stubbed to CELL_OK</title></rect>
+<rect x="270" y="203" width="8" height="8" rx="2" fill="#1a7f37"><title>cellNetCtl_3E359AB6 (working)&#10;offline-only: network control event registration stubbed to CELL_OK</title></rect>
+<rect x="280" y="203" width="8" height="8" rx="2" fill="#1a7f37"><title>cellNetCtl_558700F6 (working)&#10;offline-only: network control status query stubbed to CELL_OK</title></rect>
+<rect x="290" y="203" width="8" height="8" rx="2" fill="#1a7f37"><title>cellNetCtl_99AB1A26 (working)&#10;offline-only: network control interface check stubbed to CELL_OK</title></rect>
+<rect x="300" y="203" width="8" height="8" rx="2" fill="#1a7f37"><title>cellNetCtl_F463981C (working)&#10;offline-only: network control termination stubbed to CELL_OK</title></rect>
+<rect x="310" y="203" width="8" height="8" rx="2" fill="#1a7f37"><title>cellNetCtlAddHandler (working)&#10;implemented in ppu_hle_nids.cpp (cellNetCtlAddHandler)</title></rect>
+<rect x="320" y="203" width="8" height="8" rx="2" fill="#1a7f37"><title>cellNetCtlDelHandler (working)&#10;implemented in ppu_hle_nids.cpp (cellNetCtlDelHandler)</title></rect>
+<rect x="330" y="203" width="8" height="8" rx="2" fill="#1a7f37"><title>cellNetCtlGetInfo (working)&#10;implemented in ppu_hle_nids.cpp (cellNetCtlGetInfo)</title></rect>
+<rect x="340" y="203" width="8" height="8" rx="2" fill="#1a7f37"><title>cellNetCtlGetNatInfo (working)&#10;implemented in ppu_hle_nids.cpp (cellNetCtlGetNatInfo)</title></rect>
+<rect x="350" y="203" width="8" height="8" rx="2" fill="#1a7f37"><title>cellNetCtlGetState (working)&#10;offline-only: returns CELL_NET_CTL_STATE_IP_OBTAINED (3) for network initialization</title></rect>
+<rect x="360" y="203" width="8" height="8" rx="2" fill="#1a7f37"><title>cellNetCtlInit (working)&#10;implemented in ppu_hle_nids.cpp (cellNetCtlInit)</title></rect>
+<rect x="370" y="203" width="8" height="8" rx="2" fill="#1a7f37"><title>cellNetCtlNetStartDialogAbortAsync (working)&#10;implemented in ppu_hle_nids.cpp (cellNetCtlNetStartDialogAbortAsync)</title></rect>
+<rect x="380" y="203" width="8" height="8" rx="2" fill="#1a7f37"><title>cellNetCtlNetStartDialogLoadAsync (working)&#10;implemented in ppu_hle_nids.cpp (cellNetCtlNetStartDialogLoadAsync)</title></rect>
+<rect x="390" y="203" width="8" height="8" rx="2" fill="#1a7f37"><title>cellNetCtlNetStartDialogUnloadAsync (working)&#10;implemented in ppu_hle_nids.cpp (cellNetCtlNetStartDialogUnloadAsync)</title></rect>
+<rect x="400" y="203" width="8" height="8" rx="2" fill="#1a7f37"><title>cellNetCtlTerm (working)&#10;implemented in ppu_hle_nids.cpp (cellNetCtlTerm)</title></rect>
+<rect x="410" y="203" width="8" height="8" rx="2" fill="#1a7f37"><title>cellSsl_006C4900 (working)&#10;offline-only: SSL context initialization stubbed to CELL_OK</title></rect>
+<rect x="420" y="203" width="8" height="8" rx="2" fill="#1a7f37"><title>cellSsl_5E9253CA (working)&#10;offline-only: SSL certificate verification stubbed to CELL_OK</title></rect>
+<rect x="430" y="203" width="8" height="8" rx="2" fill="#1a7f37"><title>cellSsl_766D3CA1 (working)&#10;offline-only: SSL session configuration stubbed to CELL_OK</title></rect>
+<rect x="440" y="203" width="8" height="8" rx="2" fill="#1a7f37"><title>cellSslCertGetPublicKey (working)&#10;implemented in ppu_hle_nids.cpp (cellSslCertGetPublicKey)</title></rect>
+<rect x="450" y="203" width="8" height="8" rx="2" fill="#1a7f37"><title>cellSslCertificateLoader (working)&#10;implemented in ppu_hle_nids.cpp (cellSslCertificateLoader)</title></rect>
+<rect x="460" y="203" width="8" height="8" rx="2" fill="#1a7f37"><title>cellSslEnd (working)&#10;implemented in ppu_hle_nids.cpp (cellSslEnd)</title></rect>
+<rect x="40" y="213" width="8" height="8" rx="2" fill="#1a7f37"><title>cellSslInit (working)&#10;implemented in ppu_hle_nids.cpp (cellSslInit)</title></rect>
+<rect x="50" y="213" width="8" height="8" rx="2" fill="#1a7f37"><title>connect (working)&#10;offline-only: socket connect stubbed to CELL_OK for offline campaign</title></rect>
+<rect x="60" y="213" width="8" height="8" rx="2" fill="#1a7f37"><title>getsockopt (working)&#10;offline-only: socket option query stubbed to CELL_OK</title></rect>
+<rect x="70" y="213" width="8" height="8" rx="2" fill="#1a7f37"><title>inet_addr (working)&#10;offline-only: IPv4 address string conversion stubbed to CELL_OK</title></rect>
+<rect x="80" y="213" width="8" height="8" rx="2" fill="#9a6700"><title>netFinalizeNetwork (partial)&#10;stub handler (hle_net_zero in ppu_sysprx.cpp)</title></rect>
+<rect x="90" y="213" width="8" height="8" rx="2" fill="#9a6700"><title>netInitializeNetworkEx (partial)&#10;stub handler (hle_net_zero in ppu_sysprx.cpp)</title></rect>
+<rect x="100" y="213" width="8" height="8" rx="2" fill="#1a7f37"><title>send (working)&#10;offline-only: socket send stubbed to CELL_OK</title></rect>
+<rect x="110" y="213" width="8" height="8" rx="2" fill="#1a7f37"><title>shutdown (working)&#10;offline-only: socket shutdown stubbed to CELL_OK</title></rect>
+<rect x="120" y="213" width="8" height="8" rx="2" fill="#1a7f37"><title>sys_net_1F953B9F (working)&#10;offline-only: network helper routine stubbed to CELL_OK</title></rect>
+<rect x="130" y="213" width="8" height="8" rx="2" fill="#1a7f37"><title>sys_net_3F09E20A (working)&#10;offline-only: network helper routine stubbed to CELL_OK</title></rect>
+<rect x="140" y="213" width="8" height="8" rx="2" fill="#1a7f37"><title>sys_net_6005CDE1 (working)&#10;offline-only: network helper routine stubbed to CELL_OK</title></rect>
+<rect x="150" y="213" width="8" height="8" rx="2" fill="#1a7f37"><title>sys_net_6DB6E8CD (working)&#10;offline-only: network helper routine stubbed to CELL_OK</title></rect>
+<rect x="160" y="213" width="8" height="8" rx="2" fill="#1a7f37"><title>sys_net_71F4C717 (working)&#10;offline-only: network helper routine stubbed to CELL_OK</title></rect>
+<rect x="170" y="213" width="8" height="8" rx="2" fill="#1a7f37"><title>sys_net_88F03575 (working)&#10;offline-only: network helper routine stubbed to CELL_OK</title></rect>
+<rect x="180" y="213" width="8" height="8" rx="2" fill="#1a7f37"><title>sys_net_8AF3825E (working)&#10;offline-only: network socket option stubbed to CELL_OK</title></rect>
+<rect x="190" y="213" width="8" height="8" rx="2" fill="#1a7f37"><title>sys_net_9647570B (working)&#10;offline-only: network helper routine stubbed to CELL_OK</title></rect>
+<rect x="200" y="213" width="8" height="8" rx="2" fill="#1a7f37"><title>sys_net_9C056962 (working)&#10;offline-only: network helper routine stubbed to CELL_OK</title></rect>
+<rect x="210" y="213" width="8" height="8" rx="2" fill="#1a7f37"><title>sys_net_A9A079E0 (working)&#10;offline-only: socket polling stubbed to CELL_OK</title></rect>
+<rect x="220" y="213" width="8" height="8" rx="2" fill="#1a7f37"><title>sys_net_abort_resolver (working)&#10;offline-only: DNS resolver abort stubbed to CELL_OK</title></rect>
+<rect x="230" y="213" width="8" height="8" rx="2" fill="#1a7f37"><title>sys_net_abort_socket (working)&#10;offline-only: socket abort stubbed to CELL_OK</title></rect>
+<rect x="240" y="213" width="8" height="8" rx="2" fill="#1a7f37"><title>sys_net_B0A59804 (working)&#10;offline-only: network helper routine stubbed to CELL_OK</title></rect>
+<rect x="250" y="213" width="8" height="8" rx="2" fill="#1a7f37"><title>sys_net_C98A3146 (working)&#10;offline-only: socket status query stubbed to CELL_OK</title></rect>
+<rect x="260" y="213" width="8" height="8" rx="2" fill="#1a7f37"><title>sys_net_FBA04F37 (working)&#10;offline-only: network helper routine stubbed to CELL_OK</title></rect>
+<text x="40" y="235" class="fhead">PSN</text>
+<text x="470" y="235" text-anchor="end" class="fstat">93/93 (100.0%)</text>
+<rect x="40" y="242" width="8" height="8" rx="2" fill="#1a7f37"><title>cellSysutilAvconfExt_FAA275A4 (working)&#10;offline-only: extended AV configuration query stubbed to CELL_OK</title></rect>
+<rect x="50" y="242" width="8" height="8" rx="2" fill="#1a7f37"><title>cellSysutilNpEula_59D1629A (working)&#10;offline-only: EULA agreement check bypassed with CELL_OK</title></rect>
+<rect x="60" y="242" width="8" height="8" rx="2" fill="#1a7f37"><title>cellSysutilNpEula_5EC05AD8 (working)&#10;offline-only: EULA dialog display bypassed with CELL_OK</title></rect>
+<rect x="70" y="242" width="8" height="8" rx="2" fill="#1a7f37"><title>cellSysutilNpEula_6599500D (working)&#10;offline-only: EULA version check bypassed with CELL_OK</title></rect>
+<rect x="80" y="242" width="8" height="8" rx="2" fill="#1a7f37"><title>cellVideoOutSetGamma (working)&#10;implemented in ascension_hle.cpp (cellVideoOutSetGamma_nid)</title></rect>
+<rect x="90" y="242" width="8" height="8" rx="2" fill="#1a7f37"><title>cellVoice_2A01013E (working)&#10;offline-only: voice chat initialization stubbed to CELL_OK</title></rect>
+<rect x="100" y="242" width="8" height="8" rx="2" fill="#1a7f37"><title>cellVoice_35D84910 (working)&#10;offline-only: voice chat channel stubbed to CELL_OK</title></rect>
+<rect x="110" y="242" width="8" height="8" rx="2" fill="#1a7f37"><title>cellVoice_DD000886 (working)&#10;offline-only: voice chat volume control stubbed to CELL_OK</title></rect>
+<rect x="120" y="242" width="8" height="8" rx="2" fill="#1a7f37"><title>cellVoice_FF0FA43A (working)&#10;offline-only: voice chat termination stubbed to CELL_OK</title></rect>
+<rect x="130" y="242" width="8" height="8" rx="2" fill="#1a7f37"><title>cellVoiceConnectIPortToOPort (working)&#10;implemented in ppu_hle_nids.cpp (cellVoiceConnectIPortToOPort)</title></rect>
+<rect x="140" y="242" width="8" height="8" rx="2" fill="#1a7f37"><title>cellVoiceCreatePort (working)&#10;implemented in ppu_hle_nids.cpp (cellVoiceCreatePort)</title></rect>
+<rect x="150" y="242" width="8" height="8" rx="2" fill="#1a7f37"><title>cellVoiceDeletePort (working)&#10;implemented in ppu_hle_nids.cpp (cellVoiceDeletePort)</title></rect>
+<rect x="160" y="242" width="8" height="8" rx="2" fill="#1a7f37"><title>cellVoiceDisconnectIPortFromOPort (working)&#10;implemented in ppu_hle_nids.cpp (cellVoiceDisconnectIPortFromOPort)</title></rect>
+<rect x="170" y="242" width="8" height="8" rx="2" fill="#1a7f37"><title>cellVoiceEnd (working)&#10;implemented in ppu_hle_nids.cpp (cellVoiceEnd)</title></rect>
+<rect x="180" y="242" width="8" height="8" rx="2" fill="#1a7f37"><title>cellVoiceGetPortInfo (working)&#10;implemented in ppu_hle_nids.cpp (cellVoiceGetPortInfo)</title></rect>
+<rect x="190" y="242" width="8" height="8" rx="2" fill="#1a7f37"><title>cellVoiceInit (working)&#10;implemented in ppu_hle_nids.cpp (cellVoiceInit)</title></rect>
+<rect x="200" y="242" width="8" height="8" rx="2" fill="#1a7f37"><title>cellVoiceReadFromOPort (working)&#10;implemented in ppu_hle_nids.cpp (cellVoiceReadFromOPort)</title></rect>
+<rect x="210" y="242" width="8" height="8" rx="2" fill="#1a7f37"><title>cellVoiceStart (working)&#10;implemented in ppu_hle_nids.cpp (cellVoiceStart)</title></rect>
+<rect x="220" y="242" width="8" height="8" rx="2" fill="#1a7f37"><title>cellVoiceStop (working)&#10;implemented in ppu_hle_nids.cpp (cellVoiceStop)</title></rect>
+<rect x="230" y="242" width="8" height="8" rx="2" fill="#1a7f37"><title>cellVoiceWriteToIPort (working)&#10;implemented in ppu_hle_nids.cpp (cellVoiceWriteToIPort)</title></rect>
+<rect x="240" y="242" width="8" height="8" rx="2" fill="#1a7f37"><title>sceNp2Init (working)&#10;offline-only: NP2 subsystem init stubbed to CELL_OK</title></rect>
+<rect x="250" y="242" width="8" height="8" rx="2" fill="#1a7f37"><title>sceNp2Term (working)&#10;offline-only: NP2 subsystem shutdown stubbed to CELL_OK</title></rect>
+<rect x="260" y="242" width="8" height="8" rx="2" fill="#1a7f37"><title>sceNp_276C72B2 (working)&#10;offline-only: internal NP manager initialization stubbed to CELL_OK</title></rect>
+<rect x="270" y="242" width="8" height="8" rx="2" fill="#1a7f37"><title>sceNp_FD39AE13 (working)&#10;offline-only: internal NP cleanup stubbed to CELL_OK</title></rect>
+<rect x="280" y="242" width="8" height="8" rx="2" fill="#1a7f37"><title>sceNpBasicAddPlayersHistoryAsync (working)&#10;implemented in ppu_hle_nids.cpp (sceNpBasicAddPlayersHistoryAsync)</title></rect>
+<rect x="290" y="242" width="8" height="8" rx="2" fill="#1a7f37"><title>sceNpBasicGetEvent (working)&#10;implemented in ppu_hle_nids.cpp (sceNpBasicGetEvent)</title></rect>
+<rect x="300" y="242" width="8" height="8" rx="2" fill="#1a7f37"><title>sceNpBasicRegisterContextSensitiveHandler (working)&#10;implemented in ppu_hle_nids.cpp (sceNpBasicRegisterContextSensitiveHandler)</title></rect>
+<rect x="310" y="242" width="8" height="8" rx="2" fill="#1a7f37"><title>sceNpBasicSendMessage (working)&#10;implemented in ppu_hle_nids.cpp (sceNpBasicSendMessage)</title></rect>
+<rect x="320" y="242" width="8" height="8" rx="2" fill="#1a7f37"><title>sceNpBasicSetPresence (working)&#10;implemented in ppu_hle_nids.cpp (sceNpBasicSetPresence)</title></rect>
+<rect x="330" y="242" width="8" height="8" rx="2" fill="#1a7f37"><title>sceNpBasicSetPresenceDetails2 (working)&#10;offline-only: online presence status broadcast disabled</title></rect>
+<rect x="340" y="242" width="8" height="8" rx="2" fill="#1a7f37"><title>sceNpBasicUnregisterHandler (working)&#10;implemented in ppu_hle_nids.cpp (sceNpBasicUnregisterHandler)</title></rect>
+<rect x="350" y="242" width="8" height="8" rx="2" fill="#1a7f37"><title>sceNpCommerce2ExecuteStoreBrowse (working)&#10;offline-only: PlayStation Store browser disabled for offline campaign</title></rect>
+<rect x="360" y="242" width="8" height="8" rx="2" fill="#1a7f37"><title>sceNpCommerce2Init (working)&#10;implemented in ppu_hle_nids.cpp (sceNpCommerce2Init)</title></rect>
+<rect x="370" y="242" width="8" height="8" rx="2" fill="#1a7f37"><title>sceNpDrmIsAvailable (working)&#10;implemented in ppu_hle_nids.cpp (sceNpDrmIsAvailable)</title></rect>
+<rect x="380" y="242" width="8" height="8" rx="2" fill="#1a7f37"><title>sceNpDrmIsAvailable2 (working)&#10;implemented in ppu_hle_nids.cpp (sceNpDrmIsAvailable2)</title></rect>
+<rect x="390" y="242" width="8" height="8" rx="2" fill="#1a7f37"><title>sceNpDrmProcessExitSpawn2 (working)&#10;offline-only: DRM exit spawn stubbed to CELL_OK</title></rect>
+<rect x="400" y="242" width="8" height="8" rx="2" fill="#1a7f37"><title>sceNpInit (working)&#10;implemented in ppu_hle_nids.cpp (sceNpInit)</title></rect>
+<rect x="410" y="242" width="8" height="8" rx="2" fill="#1a7f37"><title>sceNpLookupCreateTitleCtx (working)&#10;implemented in ppu_hle_nids.cpp (sceNpLookupCreateTitleCtx)</title></rect>
+<rect x="420" y="242" width="8" height="8" rx="2" fill="#1a7f37"><title>sceNpLookupCreateTransactionCtx (working)&#10;implemented in ppu_hle_nids.cpp (sceNpLookupCreateTransactionCtx)</title></rect>
+<rect x="430" y="242" width="8" height="8" rx="2" fill="#1a7f37"><title>sceNpLookupDestroyTitleCtx (working)&#10;implemented in ppu_hle_nids.cpp (sceNpLookupDestroyTitleCtx)</title></rect>
+<rect x="440" y="242" width="8" height="8" rx="2" fill="#1a7f37"><title>sceNpLookupDestroyTransactionCtx (working)&#10;implemented in ppu_hle_nids.cpp (sceNpLookupDestroyTransactionCtx)</title></rect>
+<rect x="450" y="242" width="8" height="8" rx="2" fill="#1a7f37"><title>sceNpLookupInit (working)&#10;implemented in ppu_hle_nids.cpp (sceNpLookupInit)</title></rect>
+<rect x="460" y="242" width="8" height="8" rx="2" fill="#1a7f37"><title>sceNpLookupPollAsync (working)&#10;implemented in ppu_hle_nids.cpp (sceNpLookupPollAsync)</title></rect>
+<rect x="40" y="252" width="8" height="8" rx="2" fill="#1a7f37"><title>sceNpLookupTerm (working)&#10;implemented in ppu_hle_nids.cpp (sceNpLookupTerm)</title></rect>
+<rect x="50" y="252" width="8" height="8" rx="2" fill="#1a7f37"><title>sceNpLookupTitleSmallStorageAsync (working)&#10;offline-only: title storage query stubbed to CELL_OK</title></rect>
+<rect x="60" y="252" width="8" height="8" rx="2" fill="#1a7f37"><title>sceNpManagerGetAccountRegion (working)&#10;offline-only: provides mock US region code (0x5553) for campaign execution</title></rect>
+<rect x="70" y="252" width="8" height="8" rx="2" fill="#1a7f37"><title>sceNpManagerGetChatRestrictionFlag (working)&#10;implemented in ppu_hle_nids.cpp (sceNpManagerGetChatRestrictionFlag)</title></rect>
+<rect x="80" y="252" width="8" height="8" rx="2" fill="#1a7f37"><title>sceNpManagerGetContentRatingFlag (working)&#10;implemented in ppu_hle_nids.cpp (sceNpManagerGetContentRatingFlag)</title></rect>
+<rect x="90" y="252" width="8" height="8" rx="2" fill="#1a7f37"><title>sceNpManagerGetEntitlementById (working)&#10;offline-only: entitlement check stubbed to CELL_OK</title></rect>
+<rect x="100" y="252" width="8" height="8" rx="2" fill="#1a7f37"><title>sceNpManagerGetEntitlementIdList (working)&#10;offline-only: entitlement list query stubbed to CELL_OK</title></rect>
+<rect x="110" y="252" width="8" height="8" rx="2" fill="#1a7f37"><title>sceNpManagerGetNetworkTime (working)&#10;offline-only: network time synchronization stubbed to CELL_OK</title></rect>
+<rect x="120" y="252" width="8" height="8" rx="2" fill="#1a7f37"><title>sceNpManagerGetNpId (working)&#10;implemented in ppu_hle_nids.cpp (sceNpManagerGetNpId)</title></rect>
+<rect x="130" y="252" width="8" height="8" rx="2" fill="#1a7f37"><title>sceNpManagerGetStatus (working)&#10;implemented in ppu_hle_nids.cpp (sceNpManagerGetStatus)</title></rect>
+<rect x="140" y="252" width="8" height="8" rx="2" fill="#1a7f37"><title>sceNpManagerGetTicket (working)&#10;offline-only: Sony PSN ticket server is permanently offline; no-op success enables offline boot</title></rect>
+<rect x="150" y="252" width="8" height="8" rx="2" fill="#1a7f37"><title>sceNpManagerGetTicketParam (working)&#10;offline-only: ticket parameter query stubbed to CELL_OK</title></rect>
+<rect x="160" y="252" width="8" height="8" rx="2" fill="#1a7f37"><title>sceNpManagerRegisterCallback (working)&#10;implemented in ppu_hle_nids.cpp (sceNpManagerRegisterCallback)</title></rect>
+<rect x="170" y="252" width="8" height="8" rx="2" fill="#1a7f37"><title>sceNpManagerRequestTicket2 (working)&#10;offline-only: ticket request stubbed to CELL_OK</title></rect>
+<rect x="180" y="252" width="8" height="8" rx="2" fill="#1a7f37"><title>sceNpManagerUnregisterCallback (working)&#10;implemented in ppu_hle_nids.cpp (sceNpManagerUnregisterCallback)</title></rect>
+<rect x="190" y="252" width="8" height="8" rx="2" fill="#1a7f37"><title>sceNpSignalingActivateConnection (working)&#10;implemented in ppu_hle_nids.cpp (sceNpSignalingActivateConnection)</title></rect>
+<rect x="200" y="252" width="8" height="8" rx="2" fill="#1a7f37"><title>sceNpSignalingAddExtendedHandler (working)&#10;offline-only: multiplayer signaling handler unregistered for offline play</title></rect>
+<rect x="210" y="252" width="8" height="8" rx="2" fill="#1a7f37"><title>sceNpSignalingCreateCtx (working)&#10;implemented in ppu_hle_nids.cpp (sceNpSignalingCreateCtx)</title></rect>
+<rect x="220" y="252" width="8" height="8" rx="2" fill="#1a7f37"><title>sceNpSignalingDeactivateConnection (working)&#10;implemented in ppu_hle_nids.cpp (sceNpSignalingDeactivateConnection)</title></rect>
+<rect x="230" y="252" width="8" height="8" rx="2" fill="#1a7f37"><title>sceNpSignalingDestroyCtx (working)&#10;implemented in ppu_hle_nids.cpp (sceNpSignalingDestroyCtx)</title></rect>
+<rect x="240" y="252" width="8" height="8" rx="2" fill="#1a7f37"><title>sceNpSignalingGetConnectionInfo (working)&#10;implemented in ppu_hle_nids.cpp (sceNpSignalingGetConnectionInfo)</title></rect>
+<rect x="250" y="252" width="8" height="8" rx="2" fill="#1a7f37"><title>sceNpSignalingGetConnectionStatus (working)&#10;implemented in ppu_hle_nids.cpp (sceNpSignalingGetConnectionStatus)</title></rect>
+<rect x="260" y="252" width="8" height="8" rx="2" fill="#1a7f37"><title>sceNpSignalingGetLocalNetInfo (working)&#10;implemented in ppu_hle_nids.cpp (sceNpSignalingGetLocalNetInfo)</title></rect>
+<rect x="270" y="252" width="8" height="8" rx="2" fill="#1a7f37"><title>sceNpTerm (working)&#10;implemented in ppu_hle_nids.cpp (sceNpTerm)</title></rect>
+<rect x="280" y="252" width="8" height="8" rx="2" fill="#1a7f37"><title>sceNpTrophyAbortHandle (working)&#10;offline-only: trophy system abort stubbed to CELL_OK</title></rect>
+<rect x="290" y="252" width="8" height="8" rx="2" fill="#1a7f37"><title>sceNpTrophyCreateContext (working)&#10;implemented in ppu_hle_nids.cpp (sceNpTrophyCreateContext)</title></rect>
+<rect x="300" y="252" width="8" height="8" rx="2" fill="#1a7f37"><title>sceNpTrophyCreateHandle (working)&#10;implemented in ppu_hle_nids.cpp (sceNpTrophyCreateHandle)</title></rect>
+<rect x="310" y="252" width="8" height="8" rx="2" fill="#1a7f37"><title>sceNpTrophyDestroyContext (working)&#10;implemented in ppu_hle_nids.cpp (sceNpTrophyDestroyContext)</title></rect>
+<rect x="320" y="252" width="8" height="8" rx="2" fill="#1a7f37"><title>sceNpTrophyDestroyHandle (working)&#10;implemented in ppu_hle_nids.cpp (sceNpTrophyDestroyHandle)</title></rect>
+<rect x="330" y="252" width="8" height="8" rx="2" fill="#1a7f37"><title>sceNpTrophyGetRequiredDiskSpace (working)&#10;implemented in ppu_hle_nids.cpp (sceNpTrophyGetRequiredDiskSpace)</title></rect>
+<rect x="340" y="252" width="8" height="8" rx="2" fill="#1a7f37"><title>sceNpTrophyGetTrophyUnlockState (working)&#10;implemented in ppu_hle_nids.cpp (sceNpTrophyGetTrophyUnlockState)</title></rect>
+<rect x="350" y="252" width="8" height="8" rx="2" fill="#1a7f37"><title>sceNpTrophyInit (working)&#10;implemented in ppu_hle_nids.cpp (sceNpTrophyInit)</title></rect>
+<rect x="360" y="252" width="8" height="8" rx="2" fill="#1a7f37"><title>sceNpTrophyRegisterContext (working)&#10;implemented in ppu_hle_nids.cpp (sceNpTrophyRegisterContext)</title></rect>
+<rect x="370" y="252" width="8" height="8" rx="2" fill="#1a7f37"><title>sceNpTrophyTerm (working)&#10;implemented in ppu_hle_nids.cpp (sceNpTrophyTerm)</title></rect>
+<rect x="380" y="252" width="8" height="8" rx="2" fill="#1a7f37"><title>sceNpTrophyUnlockTrophy (working)&#10;implemented in ppu_hle_nids.cpp (sceNpTrophyUnlockTrophy)</title></rect>
+<rect x="390" y="252" width="8" height="8" rx="2" fill="#1a7f37"><title>sceNpTus_325C6284 (working)&#10;offline-only: title user storage internal stubbed to CELL_OK</title></rect>
+<rect x="400" y="252" width="8" height="8" rx="2" fill="#1a7f37"><title>sceNpTusCreateTitleCtx (working)&#10;offline-only: title user storage mock context (1)</title></rect>
+<rect x="410" y="252" width="8" height="8" rx="2" fill="#1a7f37"><title>sceNpTusCreateTransactionCtx (working)&#10;offline-only: title user storage transaction mock context (1)</title></rect>
+<rect x="420" y="252" width="8" height="8" rx="2" fill="#1a7f37"><title>sceNpTusDestroyTitleCtx (working)&#10;offline-only: title user storage cleanup stubbed to CELL_OK</title></rect>
+<rect x="430" y="252" width="8" height="8" rx="2" fill="#1a7f37"><title>sceNpTusDestroyTransactionCtx (working)&#10;offline-only: transaction cleanup stubbed to CELL_OK</title></rect>
+<rect x="440" y="252" width="8" height="8" rx="2" fill="#1a7f37"><title>sceNpTusGetDataAsync (working)&#10;offline-only: cloud data query stubbed to CELL_OK</title></rect>
+<rect x="450" y="252" width="8" height="8" rx="2" fill="#1a7f37"><title>sceNpTusInit (working)&#10;implemented in ppu_hle_nids.cpp (sceNpTusInit)</title></rect>
+<rect x="460" y="252" width="8" height="8" rx="2" fill="#1a7f37"><title>sceNpTusPollAsync (working)&#10;implemented in ppu_hle_nids.cpp (sceNpTusPollAsync)</title></rect>
+<rect x="40" y="262" width="8" height="8" rx="2" fill="#1a7f37"><title>sceNpTusSetDataAsync (working)&#10;offline-only: cloud data upload stubbed to CELL_OK</title></rect>
+<rect x="50" y="262" width="8" height="8" rx="2" fill="#1a7f37"><title>sceNpTusTerm (working)&#10;implemented in ppu_hle_nids.cpp (sceNpTusTerm)</title></rect>
+<rect x="60" y="262" width="8" height="8" rx="2" fill="#1a7f37"><title>sceNpUtilBandwidthTestAbort (working)&#10;implemented in ppu_hle_nids.cpp (sceNpUtilBandwidthTestAbort)</title></rect>
+<rect x="70" y="262" width="8" height="8" rx="2" fill="#1a7f37"><title>sceNpUtilBandwidthTestGetStatus (working)&#10;implemented in ppu_hle_nids.cpp (sceNpUtilBandwidthTestGetStatus)</title></rect>
+<rect x="80" y="262" width="8" height="8" rx="2" fill="#1a7f37"><title>sceNpUtilBandwidthTestInitStart (working)&#10;implemented in ppu_hle_nids.cpp (sceNpUtilBandwidthTestInitStart)</title></rect>
+<rect x="90" y="262" width="8" height="8" rx="2" fill="#1a7f37"><title>sceNpUtilBandwidthTestShutdown (working)&#10;implemented in ppu_hle_nids.cpp (sceNpUtilBandwidthTestShutdown)</title></rect>
+<rect x="100" y="262" width="8" height="8" rx="2" fill="#1a7f37"><title>sceNpUtilCmpNpId (working)&#10;implemented in ppu_hle_nids.cpp (sceNpUtilCmpNpId)</title></rect>
+<text x="40" y="284" class="fhead">Media/Input</text>
+<text x="470" y="284" text-anchor="end" class="fstat">22/22 (100.0%)</text>
+<rect x="40" y="291" width="8" height="8" rx="2" fill="#1a7f37"><title>cellAudioGetPortConfig (working)&#10;implemented in ppu_hle_nids.cpp (cellAudioGetPortConfig)</title></rect>
+<rect x="50" y="291" width="8" height="8" rx="2" fill="#1a7f37"><title>cellAudioInit (working)&#10;implemented in ppu_hle_nids.cpp (cellAudioInit)</title></rect>
+<rect x="60" y="291" width="8" height="8" rx="2" fill="#1a7f37"><title>cellAudioPortClose (working)&#10;implemented in ppu_hle_nids.cpp (cellAudioPortClose)</title></rect>
+<rect x="70" y="291" width="8" height="8" rx="2" fill="#1a7f37"><title>cellAudioPortOpen (working)&#10;implemented in ppu_hle_nids.cpp (cellAudioPortOpen)</title></rect>
+<rect x="80" y="291" width="8" height="8" rx="2" fill="#1a7f37"><title>cellAudioPortStart (working)&#10;implemented in ppu_hle_nids.cpp (cellAudioPortStart)</title></rect>
+<rect x="90" y="291" width="8" height="8" rx="2" fill="#1a7f37"><title>cellAudioPortStop (working)&#10;implemented in ppu_hle_nids.cpp (cellAudioPortStop)</title></rect>
+<rect x="100" y="291" width="8" height="8" rx="2" fill="#1a7f37"><title>cellAudioQuit (working)&#10;implemented in ppu_hle_nids.cpp (cellAudioQuit)</title></rect>
+<rect x="110" y="291" width="8" height="8" rx="2" fill="#1a7f37"><title>cellPadClearBuf (working)&#10;implemented in ppu_hle_nids.cpp (cellPadClearBuf)</title></rect>
+<rect x="120" y="291" width="8" height="8" rx="2" fill="#1a7f37"><title>cellPadEnd (working)&#10;implemented in ppu_hle_nids.cpp (cellPadEnd)</title></rect>
+<rect x="130" y="291" width="8" height="8" rx="2" fill="#1a7f37"><title>cellPadGetData (working)&#10;implemented in ppu_hle_nids.cpp (cellPadGetData)</title></rect>
+<rect x="140" y="291" width="8" height="8" rx="2" fill="#1a7f37"><title>cellPadGetInfo2 (working)&#10;implemented in ppu_hle_nids.cpp (cellPadGetInfo2)</title></rect>
+<rect x="150" y="291" width="8" height="8" rx="2" fill="#1a7f37"><title>cellPadInit (working)&#10;implemented in ppu_hle_nids.cpp (cellPadInit)</title></rect>
+<rect x="160" y="291" width="8" height="8" rx="2" fill="#1a7f37"><title>cellPadSetActDirect (working)&#10;implemented in ppu_hle_nids.cpp (cellPadSetActDirect)</title></rect>
+<rect x="170" y="291" width="8" height="8" rx="2" fill="#1a7f37"><title>cellPadSetPortSetting (working)&#10;implemented in ppu_hle_nids.cpp (cellPadSetPortSetting)</title></rect>
+<rect x="180" y="291" width="8" height="8" rx="2" fill="#1a7f37"><title>cellVdecClose (working)&#10;implemented in ppu_hle_nids.cpp (cellVdecClose)</title></rect>
+<rect x="190" y="291" width="8" height="8" rx="2" fill="#1a7f37"><title>cellVdecDecodeAu (working)&#10;implemented in ppu_hle_nids.cpp (cellVdecDecodeAu)</title></rect>
+<rect x="200" y="291" width="8" height="8" rx="2" fill="#1a7f37"><title>cellVdecEndSeq (working)&#10;implemented in ppu_hle_nids.cpp (cellVdecEndSeq)</title></rect>
+<rect x="210" y="291" width="8" height="8" rx="2" fill="#1a7f37"><title>cellVdecGetPicItem (working)&#10;implemented in ppu_hle_nids.cpp (cellVdecGetPicItem)</title></rect>
+<rect x="220" y="291" width="8" height="8" rx="2" fill="#1a7f37"><title>cellVdecGetPicture (working)&#10;implemented in ppu_hle_nids.cpp (cellVdecGetPicture)</title></rect>
+<rect x="230" y="291" width="8" height="8" rx="2" fill="#1a7f37"><title>cellVdecOpenEx (working)&#10;implemented in ascension_hle.cpp (cellVdecOpenEx)</title></rect>
+<rect x="240" y="291" width="8" height="8" rx="2" fill="#1a7f37"><title>cellVdecQueryAttrEx (working)&#10;implemented in ascension_hle.cpp (cellVdecQueryAttrEx)</title></rect>
+<rect x="250" y="291" width="8" height="8" rx="2" fill="#1a7f37"><title>cellVdecStartSeq (working)&#10;implemented in ppu_hle_nids.cpp (cellVdecStartSeq)</title></rect>
+<rect x="500" y="65" width="375" height="415" rx="6" fill="#f6f8fa" stroke="#d0d7de" stroke-width="1"/>
+<text x="515" y="88" class="phead">PS3 HARDWARE</text>
+<text x="860" y="88" text-anchor="end" class="sub">Measured Live Telemetry</text>
+<rect x="515" y="105" width="160" height="105" rx="6" fill="#ffffff" stroke="#d0d7de" stroke-width="1"/>
+<text x="525" y="125" class="cname">PPU</text>
+<text x="665" y="125" text-anchor="end" class="cdet">w=25</text>
+<rect x="525" y="133" width="75" height="18" rx="4" fill="#dafbe1"/>
+<text x="530" y="146" fill="#1a7f37" class="cstat">Working</text>
+<text x="525" y="173" class="cdet">8 recompiled code chunks</text>
+<text x="525" y="190" class="cdet">17 active guest PPU threads</text>
+<rect x="690" y="105" width="160" height="105" rx="6" fill="#ffffff" stroke="#d0d7de" stroke-width="1"/>
+<text x="700" y="125" class="cname">SPU</text>
+<text x="840" y="125" text-anchor="end" class="cdet">w=20</text>
+<rect x="700" y="133" width="75" height="18" rx="4" fill="#dafbe1"/>
+<text x="705" y="146" fill="#1a7f37" class="cstat">Working</text>
+<text x="700" y="173" class="cdet">5 lifted SPU ELF images</text>
+<text x="700" y="190" class="cdet">0 interpreter fallbacks</text>
+<rect x="515" y="225" width="160" height="105" rx="6" fill="#ffffff" stroke="#d0d7de" stroke-width="1"/>
+<text x="525" y="245" class="cname">SPURS</text>
+<text x="665" y="245" text-anchor="end" class="cdet">w=15</text>
+<rect x="525" y="253" width="75" height="18" rx="4" fill="#dafbe1"/>
+<text x="530" y="266" fill="#1a7f37" class="cstat">Working</text>
+<text x="525" y="293" class="cdet">15 active workloads (WID 0..18)</text>
+<text x="525" y="310" class="cdet">Wws_Job policy module running</text>
+<rect x="690" y="225" width="160" height="105" rx="6" fill="#ffffff" stroke="#d0d7de" stroke-width="1"/>
+<text x="700" y="245" class="cname">RSX</text>
+<text x="840" y="245" text-anchor="end" class="cdet">w=20</text>
+<rect x="700" y="253" width="75" height="18" rx="4" fill="#dafbe1"/>
+<text x="705" y="266" fill="#1a7f37" class="cstat">Working</text>
+<text x="700" y="293" class="cdet">672 live-draw frames presented</text>
+<text x="700" y="310" class="cdet">41 clears, 13.3 Hz VBlank</text>
+<rect x="515" y="345" width="160" height="105" rx="6" fill="#ffffff" stroke="#d0d7de" stroke-width="1"/>
+<text x="525" y="365" class="cname">I/O</text>
+<text x="665" y="365" text-anchor="end" class="cdet">w=10</text>
+<rect x="525" y="373" width="75" height="18" rx="4" fill="#fff8c5"/>
+<text x="530" y="386" fill="#9a6700" class="cstat">Partial</text>
+<text x="525" y="413" class="cdet">Async VFS (22 open fds)</text>
+<text x="525" y="430" class="cdet">CellPad polled; audio stubbed</text>
+<rect x="690" y="345" width="160" height="105" rx="6" fill="#ffffff" stroke="#d0d7de" stroke-width="1"/>
+<text x="700" y="365" class="cname">Speed</text>
+<text x="840" y="365" text-anchor="end" class="cdet">w=10</text>
+<rect x="700" y="373" width="100" height="18" rx="4" fill="#f6f8fa"/>
+<text x="705" y="386" fill="#6e7781" class="cstat">0% (not reached)</text>
+<text x="700" y="413" class="cdet">First-level fps / 30</text>
+<text x="700" y="430" class="cdet">In-game level not loaded yet</text>
+<rect x="25" y="493" width="10" height="10" rx="2" fill="#1a7f37"/>
+<text x="40" y="502" class="leg">Working</text>
+<rect x="95" y="493" width="10" height="10" rx="2" fill="#9a6700"/>
+<text x="110" y="502" class="leg">Partial</text>
+<rect x="160" y="493" width="10" height="10" rx="2" fill="#6e7781"/>
+<text x="175" y="502" class="leg">Pending</text>
+<text x="875" y="502" text-anchor="end" class="foot">Firmware NIDs cross-referenced with HLE tables &amp; offline exceptions. Hardware measured from live logs.</text>
+</svg>

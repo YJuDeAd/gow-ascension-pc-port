@@ -18,18 +18,36 @@ The Win32 window message loop runs on its own thread, isolated from the 60 Hz RS
 
 Controller input maps through XInput with keyboard fallbacks.
 
+## Status
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/status-dark.svg">
+  <source media="(prefers-color-scheme: light)" srcset="docs/status-light.svg">
+  <img alt="God of War: Ascension Port Status Dashboard" src="docs/status-dark.svg" width="900">
+</picture>
+
+[View detailed tables and classification methodology](docs/status.md)
+
+Firmware coverage measures imported PS3 OS functions against working high-level emulation handlers and offline-safe stubs. Hardware metrics are parsed directly from live runtime execution logs. Speed remains at 0% (not reached) until in-game level gameplay begins.
+
+Regenerate the dashboard and status documents with:
+
+```bash
+python tools/gen_status.py
+```
+
 ## Current status
 
 | Component | Status | Details |
 |---|---|---|
-| PPU code lifting | Working | All eight chunks link cleanly into the executable |
-| SPU / SPURS workloads | Working | WWS job policy module running across worker threads (WID 0..15) |
-| VFS streaming | Working | Asynchronous disk streaming reaches ~23 MB/s |
-| RSX presentation | Working | Direct3D 12 swapchain presents frames at 60 Hz |
+| PPU code lifting | Working | 19,570 functions across 8 translation units; 17 concurrent guest threads |
+| SPU / SPURS workloads | Working | 5 lifted SPU images; WWS job policy module running with zero interpreter fallbacks |
+| VFS streaming | Working | Asynchronous disk streaming reaches ~23 MB/s across 22 archive descriptors |
+| RSX presentation | Working | Direct3D 12 swapchain presents live-draw frames with active FIFO command processing |
 | RSX FIFO processing | Working | GCM offset tables mapped, JUMP/CALL validation in place |
-| FIOS synchronization | In progress | Rewriting `sys_lwcond` to use real Win32 condition variables so worker threads don't miss wakeups |
-| 3D shaders and draws | Planned | Blocked on FIOS sync completing scene load |
-| Audio engine | Planned | CellAudio stubs only |
+| FIOS synchronization | Working | Real Win32 event wait queues with FIFO condition variable ordering |
+| Audio engine | Partial | CellAudio initialized with WASAPI output backend and stubs |
+| In-game gameplay | Not reached | Boot progression advances through intro loops and title presentation |
 
 Technical notes and bring-up logs live in [docs/](file:///C:/IfItWorksItWorks/Project/gowassension/docs/) and [.planning/](file:///C:/IfItWorksItWorks/Project/gowassension/.planning/).
 

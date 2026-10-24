@@ -1,0 +1,2474 @@
+{
+  "generated_at": "2026-10-24T12:48:36.605506+00:00",
+  "git_commit": "09dfe446ee7694e3393a7ccc1d600c2d44968a2b",
+  "log_parsed": "build/logs/run_20261024_035814_stderr.log",
+  "summary": {
+    "total_imports": 345,
+    "working": 330,
+    "partial": 15,
+    "pending": 0,
+    "percentage": 95.65
+  },
+  "families": {
+    "System": {
+      "total": 90,
+      "working": 77,
+      "partial": 13,
+      "pending": 0
+    },
+    "GPU/SPU": {
+      "total": 74,
+      "working": 74,
+      "partial": 0,
+      "pending": 0
+    },
+    "Network": {
+      "total": 66,
+      "working": 64,
+      "partial": 2,
+      "pending": 0
+    },
+    "PSN": {
+      "total": 93,
+      "working": 93,
+      "partial": 0,
+      "pending": 0
+    },
+    "Media/Input": {
+      "total": 22,
+      "working": 22,
+      "partial": 0,
+      "pending": 0
+    }
+  },
+  "hardware": {
+    "log_path": "build/logs/run_20261024_035814_stderr.log",
+    "ppu_threads": 17,
+    "spu_hits": 1,
+    "spu_misses": 0,
+    "spurs_workloads": 15,
+    "rsx_frames": 672,
+    "rsx_clears": 41,
+    "rsx_vblank_hz": 13.3,
+    "io_fds": 22,
+    "speed_pct": 0.0,
+    "speed_label": "not reached"
+  },
+  "functions": [
+    {
+      "name": "_sys_process_at_Exitspawn",
+      "library": "sysPrxForUser",
+      "family": "System",
+      "status": "working",
+      "reason": "implemented in ppu_sysprx.cpp (crt_ok)"
+    },
+    {
+      "name": "_sys_process_atexitspawn",
+      "library": "sysPrxForUser",
+      "family": "System",
+      "status": "working",
+      "reason": "implemented in ppu_sysprx.cpp (crt_ok)"
+    },
+    {
+      "name": "cellAudioOutConfigure",
+      "library": "cellSysutil",
+      "family": "System",
+      "status": "working",
+      "reason": "implemented in ppu_hle_nids.cpp (cellAudioOutConfigure)"
+    },
+    {
+      "name": "cellAudioOutGetSoundAvailability",
+      "library": "cellSysutil",
+      "family": "System",
+      "status": "working",
+      "reason": "implemented in ppu_hle_nids.cpp (cellAudioOutGetSoundAvailability)"
+    },
+    {
+      "name": "cellFs_2796FDF3",
+      "library": "sys_fs",
+      "family": "System",
+      "status": "partial",
+      "reason": "stub handler (cellFs_ok_stub in ascension_hle.cpp)"
+    },
+    {
+      "name": "cellFs_4CEF342E",
+      "library": "sys_fs",
+      "family": "System",
+      "status": "partial",
+      "reason": "stub handler (cellFs_ok_stub in ascension_hle.cpp)"
+    },
+    {
+      "name": "cellFs_6D3BB15B",
+      "library": "sys_fs",
+      "family": "System",
+      "status": "partial",
+      "reason": "stub handler (cellFs_ok_stub in ascension_hle.cpp)"
+    },
+    {
+      "name": "cellFs_7F13FC8C",
+      "library": "sys_fs",
+      "family": "System",
+      "status": "partial",
+      "reason": "stub handler (cellFs_ok_stub in ascension_hle.cpp)"
+    },
+    {
+      "name": "cellFs_967A162B",
+      "library": "sys_fs",
+      "family": "System",
+      "status": "partial",
+      "reason": "stub handler (cellFs_ok_stub in ascension_hle.cpp)"
+    },
+    {
+      "name": "cellFs_9B882495",
+      "library": "sys_fs",
+      "family": "System",
+      "status": "partial",
+      "reason": "stub handler (cellFs_ok_stub in ascension_hle.cpp)"
+    },
+    {
+      "name": "cellFs_9F951810",
+      "library": "sys_fs",
+      "family": "System",
+      "status": "partial",
+      "reason": "stub handler (cellFs_ok_stub in ascension_hle.cpp)"
+    },
+    {
+      "name": "cellFs_C1C507E7",
+      "library": "sys_fs",
+      "family": "System",
+      "status": "partial",
+      "reason": "stub handler (cellFs_ok_stub in ascension_hle.cpp)"
+    },
+    {
+      "name": "cellFs_DB869F20",
+      "library": "sys_fs",
+      "family": "System",
+      "status": "partial",
+      "reason": "stub handler (cellFs_ok_stub in ascension_hle.cpp)"
+    },
+    {
+      "name": "cellFsClose",
+      "library": "sys_fs",
+      "family": "System",
+      "status": "working",
+      "reason": "implemented in ppu_fs.cpp (cellFsClose)"
+    },
+    {
+      "name": "cellFsClosedir",
+      "library": "sys_fs",
+      "family": "System",
+      "status": "working",
+      "reason": "implemented in ppu_fs.cpp (cellFsClosedir)"
+    },
+    {
+      "name": "cellFsFstat",
+      "library": "sys_fs",
+      "family": "System",
+      "status": "working",
+      "reason": "implemented in ppu_fs.cpp (cellFsFstat)"
+    },
+    {
+      "name": "cellFsGetFreeSize",
+      "library": "sys_fs",
+      "family": "System",
+      "status": "working",
+      "reason": "implemented in ppu_fs.cpp (cellFsGetFreeSize)"
+    },
+    {
+      "name": "cellFsLseek",
+      "library": "sys_fs",
+      "family": "System",
+      "status": "working",
+      "reason": "implemented in ppu_fs.cpp (cellFsLseek)"
+    },
+    {
+      "name": "cellFsMkdir",
+      "library": "sys_fs",
+      "family": "System",
+      "status": "working",
+      "reason": "implemented in ppu_fs.cpp (cellFsMkdir)"
+    },
+    {
+      "name": "cellFsOpen",
+      "library": "sys_fs",
+      "family": "System",
+      "status": "working",
+      "reason": "implemented in ppu_fs.cpp (cellFsOpen)"
+    },
+    {
+      "name": "cellFsOpendir",
+      "library": "sys_fs",
+      "family": "System",
+      "status": "working",
+      "reason": "implemented in ppu_fs.cpp (cellFsOpendir)"
+    },
+    {
+      "name": "cellFsRead",
+      "library": "sys_fs",
+      "family": "System",
+      "status": "working",
+      "reason": "implemented in ppu_fs.cpp (cellFsRead)"
+    },
+    {
+      "name": "cellFsReaddir",
+      "library": "sys_fs",
+      "family": "System",
+      "status": "working",
+      "reason": "implemented in ppu_fs.cpp (cellFsReaddir)"
+    },
+    {
+      "name": "cellFsReadWithOffset",
+      "library": "sys_fs",
+      "family": "System",
+      "status": "working",
+      "reason": "implemented in ascension_hle.cpp (cellFsReadWithOffset)"
+    },
+    {
+      "name": "cellFsRename",
+      "library": "sys_fs",
+      "family": "System",
+      "status": "working",
+      "reason": "implemented in ppu_hle_nids.cpp (cellFsRename)"
+    },
+    {
+      "name": "cellFsSdataOpen",
+      "library": "sys_fs",
+      "family": "System",
+      "status": "partial",
+      "reason": "stub handler (cellFsSdataOpen_stub in ascension_hle.cpp)"
+    },
+    {
+      "name": "cellFsStat",
+      "library": "sys_fs",
+      "family": "System",
+      "status": "working",
+      "reason": "implemented in ppu_fs.cpp (cellFsStat)"
+    },
+    {
+      "name": "cellFsUnlink",
+      "library": "sys_fs",
+      "family": "System",
+      "status": "working",
+      "reason": "implemented in ppu_fs.cpp (cellFsUnlink)"
+    },
+    {
+      "name": "cellFsWrite",
+      "library": "sys_fs",
+      "family": "System",
+      "status": "working",
+      "reason": "implemented in ppu_fs.cpp (cellFsWrite)"
+    },
+    {
+      "name": "cellFsWriteWithOffset",
+      "library": "sys_fs",
+      "family": "System",
+      "status": "working",
+      "reason": "implemented in ascension_hle.cpp (cellFsWriteWithOffset)"
+    },
+    {
+      "name": "cellGameBootCheck",
+      "library": "cellGame",
+      "family": "System",
+      "status": "working",
+      "reason": "implemented in ppu_hle_nids.cpp (cellGameBootCheck)"
+    },
+    {
+      "name": "cellGameContentErrorDialog",
+      "library": "cellGame",
+      "family": "System",
+      "status": "working",
+      "reason": "implemented in ppu_hle_nids.cpp (cellGameContentErrorDialog)"
+    },
+    {
+      "name": "cellGameContentPermit",
+      "library": "cellGame",
+      "family": "System",
+      "status": "working",
+      "reason": "implemented in ppu_hle_nids.cpp (cellGameContentPermit)"
+    },
+    {
+      "name": "cellGameCreateGameData",
+      "library": "cellGame",
+      "family": "System",
+      "status": "working",
+      "reason": "implemented in ppu_hle_nids.cpp (cellGameCreateGameData)"
+    },
+    {
+      "name": "cellGameDataCheck",
+      "library": "cellGame",
+      "family": "System",
+      "status": "working",
+      "reason": "implemented in ppu_hle_nids.cpp (cellGameDataCheck)"
+    },
+    {
+      "name": "cellGameGetParamString",
+      "library": "cellGame",
+      "family": "System",
+      "status": "working",
+      "reason": "implemented in ppu_hle_nids.cpp (cellGameGetParamString)"
+    },
+    {
+      "name": "cellGamePatchCheck",
+      "library": "cellGame",
+      "family": "System",
+      "status": "working",
+      "reason": "implemented in ascension_hle.cpp (cellGamePatchCheck)"
+    },
+    {
+      "name": "cellGameSetParamString",
+      "library": "cellGame",
+      "family": "System",
+      "status": "working",
+      "reason": "implemented in ppu_hle_nids.cpp (cellGameSetParamString)"
+    },
+    {
+      "name": "cellMsgDialogOpen2",
+      "library": "cellSysutil",
+      "family": "System",
+      "status": "working",
+      "reason": "implemented in ppu_hle_nids.cpp (cellMsgDialogOpen2)"
+    },
+    {
+      "name": "cellRtcGetCurrentClockLocalTime",
+      "library": "cellRtc",
+      "family": "System",
+      "status": "working",
+      "reason": "implemented in ppu_hle_nids.cpp (cellRtcGetCurrentClockLocalTime)"
+    },
+    {
+      "name": "cellRtcSetTick",
+      "library": "cellRtc",
+      "family": "System",
+      "status": "working",
+      "reason": "implemented in ppu_hle_nids.cpp (cellRtcSetTick)"
+    },
+    {
+      "name": "cellSaveDataAutoLoad2",
+      "library": "cellSysutil",
+      "family": "System",
+      "status": "working",
+      "reason": "implemented in ppu_hle_nids.cpp (cellSaveDataAutoLoad2)"
+    },
+    {
+      "name": "cellSaveDataAutoSave2",
+      "library": "cellSysutil",
+      "family": "System",
+      "status": "working",
+      "reason": "implemented in ppu_hle_nids.cpp (cellSaveDataAutoSave2)"
+    },
+    {
+      "name": "cellSaveDataDelete2",
+      "library": "cellSysutil",
+      "family": "System",
+      "status": "working",
+      "reason": "implemented in ppu_hle_nids.cpp (cellSaveDataDelete2)"
+    },
+    {
+      "name": "cellSaveDataFixedDelete",
+      "library": "cellSysutil",
+      "family": "System",
+      "status": "working",
+      "reason": "implemented in ascension_hle.cpp (cellSaveDataFixedDelete_nid)"
+    },
+    {
+      "name": "cellSaveDataListAutoLoad",
+      "library": "cellSysutil",
+      "family": "System",
+      "status": "working",
+      "reason": "implemented in ppu_hle_nids.cpp (ps3_savedata_list_auto_load)"
+    },
+    {
+      "name": "cellSaveDataListLoad2",
+      "library": "cellSysutil",
+      "family": "System",
+      "status": "working",
+      "reason": "implemented in ppu_hle_nids.cpp (cellSaveDataListLoad2)"
+    },
+    {
+      "name": "cellSysCacheClear",
+      "library": "cellSysutil",
+      "family": "System",
+      "status": "working",
+      "reason": "implemented in ppu_hle_nids.cpp (cellSysCacheClear)"
+    },
+    {
+      "name": "cellSysCacheMount",
+      "library": "cellSysutil",
+      "family": "System",
+      "status": "working",
+      "reason": "implemented in ppu_hle_nids.cpp (cellSysCacheMount)"
+    },
+    {
+      "name": "cellSysmoduleInitialize",
+      "library": "cellSysmodule",
+      "family": "System",
+      "status": "working",
+      "reason": "implemented in ppu_hle_nids.cpp (cellSysmoduleInitialize)"
+    },
+    {
+      "name": "cellSysmoduleIsLoaded",
+      "library": "cellSysmodule",
+      "family": "System",
+      "status": "working",
+      "reason": "implemented in ppu_hle_nids.cpp (cellSysmoduleIsLoaded)"
+    },
+    {
+      "name": "cellSysmoduleLoadModule",
+      "library": "cellSysmodule",
+      "family": "System",
+      "status": "working",
+      "reason": "implemented in ppu_hle_nids.cpp (cellSysmoduleLoadModule)"
+    },
+    {
+      "name": "cellSysmoduleSetMemcontainer",
+      "library": "cellSysmodule",
+      "family": "System",
+      "status": "working",
+      "reason": "implemented in ascension_hle.cpp (cellSysmoduleSetMemcontainer)"
+    },
+    {
+      "name": "cellSysmoduleUnloadModule",
+      "library": "cellSysmodule",
+      "family": "System",
+      "status": "working",
+      "reason": "implemented in ppu_hle_nids.cpp (cellSysmoduleUnloadModule)"
+    },
+    {
+      "name": "cellSysutilCheckCallback",
+      "library": "cellSysutil",
+      "family": "System",
+      "status": "working",
+      "reason": "implemented in ppu_hle_nids.cpp (cellSysutilCheckCallback)"
+    },
+    {
+      "name": "cellSysutilGetSystemParamInt",
+      "library": "cellSysutil",
+      "family": "System",
+      "status": "working",
+      "reason": "implemented in ppu_hle_nids.cpp (cellSysutilGetSystemParamInt)"
+    },
+    {
+      "name": "cellSysutilRegisterCallback",
+      "library": "cellSysutil",
+      "family": "System",
+      "status": "working",
+      "reason": "implemented in ppu_hle_nids.cpp (cellSysutilRegisterCallback)"
+    },
+    {
+      "name": "cellSysutilUnregisterCallback",
+      "library": "cellSysutil",
+      "family": "System",
+      "status": "working",
+      "reason": "implemented in ppu_hle_nids.cpp (cellSysutilUnregisterCallback)"
+    },
+    {
+      "name": "cellVideoOutConfigure",
+      "library": "cellSysutil",
+      "family": "System",
+      "status": "working",
+      "reason": "implemented in ppu_hle_nids.cpp (cellVideoOutConfigure)"
+    },
+    {
+      "name": "cellVideoOutGetResolution",
+      "library": "cellSysutil",
+      "family": "System",
+      "status": "working",
+      "reason": "implemented in ppu_hle_nids.cpp (cellVideoOutGetResolution)"
+    },
+    {
+      "name": "cellVideoOutGetResolutionAvailability",
+      "library": "cellSysutil",
+      "family": "System",
+      "status": "working",
+      "reason": "implemented in ppu_hle_nids.cpp (cellVideoOutGetResolutionAvailability)"
+    },
+    {
+      "name": "cellVideoOutGetState",
+      "library": "cellSysutil",
+      "family": "System",
+      "status": "working",
+      "reason": "implemented in ppu_hle_nids.cpp (cellVideoOutGetState)"
+    },
+    {
+      "name": "sys_game_process_exitspawn2",
+      "library": "sysPrxForUser",
+      "family": "System",
+      "status": "working",
+      "reason": "implemented in ascension_hle.cpp (sys_game_process_exitspawn2)"
+    },
+    {
+      "name": "sys_initialize_tls_alias",
+      "library": "sysPrxForUser",
+      "family": "System",
+      "status": "working",
+      "reason": "offline-only: TLS initialization alias stubbed to CELL_OK"
+    },
+    {
+      "name": "sys_lwcond_create",
+      "library": "sysPrxForUser",
+      "family": "System",
+      "status": "working",
+      "reason": "implemented in ascension_hle.cpp (gow_sys_lwcond_create)"
+    },
+    {
+      "name": "sys_lwcond_destroy",
+      "library": "sysPrxForUser",
+      "family": "System",
+      "status": "working",
+      "reason": "implemented in ascension_hle.cpp (gow_sys_lwcond_destroy)"
+    },
+    {
+      "name": "sys_lwcond_signal",
+      "library": "sysPrxForUser",
+      "family": "System",
+      "status": "working",
+      "reason": "implemented in ascension_hle.cpp (gow_sys_lwcond_signal)"
+    },
+    {
+      "name": "sys_lwcond_signal_all",
+      "library": "sysPrxForUser",
+      "family": "System",
+      "status": "working",
+      "reason": "implemented in ascension_hle.cpp (gow_sys_lwcond_signal_all)"
+    },
+    {
+      "name": "sys_lwcond_wait",
+      "library": "sysPrxForUser",
+      "family": "System",
+      "status": "working",
+      "reason": "implemented in ascension_hle.cpp (gow_sys_lwcond_wait)"
+    },
+    {
+      "name": "sys_lwmutex_create",
+      "library": "sysPrxForUser",
+      "family": "System",
+      "status": "working",
+      "reason": "implemented in ascension_hle.cpp (gow_sys_lwmutex_create)"
+    },
+    {
+      "name": "sys_lwmutex_destroy",
+      "library": "sysPrxForUser",
+      "family": "System",
+      "status": "working",
+      "reason": "implemented in ascension_hle.cpp (gow_sys_lwmutex_destroy)"
+    },
+    {
+      "name": "sys_lwmutex_lock",
+      "library": "sysPrxForUser",
+      "family": "System",
+      "status": "working",
+      "reason": "implemented in ascension_hle.cpp (gow_sys_lwmutex_lock)"
+    },
+    {
+      "name": "sys_lwmutex_trylock",
+      "library": "sysPrxForUser",
+      "family": "System",
+      "status": "working",
+      "reason": "implemented in ascension_hle.cpp (gow_sys_lwmutex_trylock)"
+    },
+    {
+      "name": "sys_lwmutex_unlock",
+      "library": "sysPrxForUser",
+      "family": "System",
+      "status": "working",
+      "reason": "implemented in ascension_hle.cpp (gow_sys_lwmutex_unlock)"
+    },
+    {
+      "name": "sys_mmapper_allocate_memory",
+      "library": "sysPrxForUser",
+      "family": "System",
+      "status": "working",
+      "reason": "implemented in ppu_sysprx.cpp (sys_mmapper_allocate_memory)"
+    },
+    {
+      "name": "sys_mmapper_free_memory",
+      "library": "sysPrxForUser",
+      "family": "System",
+      "status": "partial",
+      "reason": "stub handler (sys_net_ok_stub in ascension_hle.cpp)"
+    },
+    {
+      "name": "sys_mmapper_map_memory",
+      "library": "sysPrxForUser",
+      "family": "System",
+      "status": "partial",
+      "reason": "stub handler (sys_net_ok_stub in ascension_hle.cpp)"
+    },
+    {
+      "name": "sys_mmapper_unmap_memory",
+      "library": "sysPrxForUser",
+      "family": "System",
+      "status": "partial",
+      "reason": "stub handler (sys_net_ok_stub in ascension_hle.cpp)"
+    },
+    {
+      "name": "sys_ppu_thread_create",
+      "library": "sysPrxForUser",
+      "family": "System",
+      "status": "working",
+      "reason": "implemented in ppu_sysprx.cpp (hle_ppu_thread_create)"
+    },
+    {
+      "name": "sys_ppu_thread_exit",
+      "library": "sysPrxForUser",
+      "family": "System",
+      "status": "working",
+      "reason": "implemented in ppu_sysprx.cpp (hle_ppu_thread_exit)"
+    },
+    {
+      "name": "sys_ppu_thread_get_id",
+      "library": "sysPrxForUser",
+      "family": "System",
+      "status": "working",
+      "reason": "implemented in ppu_sysprx.cpp (sys_ppu_thread_get_id)"
+    },
+    {
+      "name": "sys_process_exit",
+      "library": "sysPrxForUser",
+      "family": "System",
+      "status": "working",
+      "reason": "implemented in ppu_hle_nids.cpp (sys_process_exit)"
+    },
+    {
+      "name": "sys_process_is_stack",
+      "library": "sysPrxForUser",
+      "family": "System",
+      "status": "working",
+      "reason": "implemented in ascension_hle.cpp (sys_process_is_stack_nid)"
+    },
+    {
+      "name": "sys_prx_exitspawn_with_level",
+      "library": "sysPrxForUser",
+      "family": "System",
+      "status": "working",
+      "reason": "implemented in ppu_hle_nids.cpp (sys_prx_exitspawn_with_level)"
+    },
+    {
+      "name": "sys_prx_load_module",
+      "library": "sysPrxForUser",
+      "family": "System",
+      "status": "working",
+      "reason": "implemented in ascension_hle.cpp (sys_prx_load_module)"
+    },
+    {
+      "name": "sys_prx_load_module_by_fd",
+      "library": "sysPrxForUser",
+      "family": "System",
+      "status": "working",
+      "reason": "implemented in ascension_hle.cpp (sys_prx_load_module)"
+    },
+    {
+      "name": "sys_prx_load_module_on_memcontainer",
+      "library": "sysPrxForUser",
+      "family": "System",
+      "status": "working",
+      "reason": "implemented in ascension_hle.cpp (sys_prx_load_module)"
+    },
+    {
+      "name": "sys_prx_load_module_on_memcontainer_by_fd",
+      "library": "sysPrxForUser",
+      "family": "System",
+      "status": "working",
+      "reason": "implemented in ascension_hle.cpp (sys_prx_load_module)"
+    },
+    {
+      "name": "sys_prx_register_library",
+      "library": "sysPrxForUser",
+      "family": "System",
+      "status": "working",
+      "reason": "implemented in ascension_hle.cpp (sys_prx_register_library)"
+    },
+    {
+      "name": "sys_time_get_system_time",
+      "library": "sysPrxForUser",
+      "family": "System",
+      "status": "working",
+      "reason": "implemented in ascension_hle.cpp (sys_time_get_system_time_nid)"
+    },
+    {
+      "name": "_cellGcmFunc15",
+      "library": "cellGcmSys",
+      "family": "GPU/SPU",
+      "status": "working",
+      "reason": "implemented in ascension_hle.cpp (_cellGcmFunc15)"
+    },
+    {
+      "name": "_cellGcmInitBody",
+      "library": "cellGcmSys",
+      "family": "GPU/SPU",
+      "status": "working",
+      "reason": "implemented in ppu_sysprx.cpp (hle_cellGcmInitBody)"
+    },
+    {
+      "name": "_cellGcmSetFlipCommand",
+      "library": "cellGcmSys",
+      "family": "GPU/SPU",
+      "status": "working",
+      "reason": "implemented in ascension_hle.cpp (hle_cellGcmSetFlipCommand)"
+    },
+    {
+      "name": "_cellGcmSetFlipCommandWithWaitLabel",
+      "library": "cellGcmSys",
+      "family": "GPU/SPU",
+      "status": "working",
+      "reason": "implemented in ascension_hle.cpp (hle_cellGcmSetFlipCommandWithWaitLabel)"
+    },
+    {
+      "name": "_cellSpursAttributeInitialize",
+      "library": "cellSpurs",
+      "family": "GPU/SPU",
+      "status": "working",
+      "reason": "implemented in ppu_hle_nids.cpp (_cellSpursAttributeInitialize)"
+    },
+    {
+      "name": "_cellSpursEventFlagInitialize",
+      "library": "cellSpurs",
+      "family": "GPU/SPU",
+      "status": "working",
+      "reason": "implemented in ppu_hle_nids.cpp (_cellSpursEventFlagInitialize)"
+    },
+    {
+      "name": "_cellSpursLFQueueInitialize",
+      "library": "cellSpurs",
+      "family": "GPU/SPU",
+      "status": "working",
+      "reason": "implemented in ascension_hle.cpp (hle_cellSpursLFQueueInitialize)"
+    },
+    {
+      "name": "_cellSpursLFQueuePushBody",
+      "library": "cellSpurs",
+      "family": "GPU/SPU",
+      "status": "working",
+      "reason": "implemented in ascension_hle.cpp (_cellSpursLFQueuePushBody)"
+    },
+    {
+      "name": "_cellSpursTaskAttribute2Initialize",
+      "library": "cellSpurs",
+      "family": "GPU/SPU",
+      "status": "working",
+      "reason": "implemented in ascension_hle.cpp (cellSpursTaskAttribute2Initialize)"
+    },
+    {
+      "name": "_cellSpursTasksetAttribute2Initialize",
+      "library": "cellSpurs",
+      "family": "GPU/SPU",
+      "status": "working",
+      "reason": "implemented in ascension_hle.cpp (cellSpursTasksetAttribute2Initialize)"
+    },
+    {
+      "name": "_cellSpursTasksetAttributeInitialize",
+      "library": "cellSpurs",
+      "family": "GPU/SPU",
+      "status": "working",
+      "reason": "implemented in ppu_hle_nids.cpp (_cellSpursTasksetAttributeInitialize)"
+    },
+    {
+      "name": "_cellSpursWorkloadAttributeInitialize",
+      "library": "cellSpurs",
+      "family": "GPU/SPU",
+      "status": "working",
+      "reason": "implemented in ppu_hle_nids.cpp (_cellSpursWorkloadAttributeInitialize)"
+    },
+    {
+      "name": "_cellSpursWorkloadFlagReceiver",
+      "library": "cellSpurs",
+      "family": "GPU/SPU",
+      "status": "working",
+      "reason": "implemented in ascension_hle.cpp (_cellSpursWorkloadFlagReceiver)"
+    },
+    {
+      "name": "cellGcmAddressToOffset",
+      "library": "cellGcmSys",
+      "family": "GPU/SPU",
+      "status": "working",
+      "reason": "implemented in ppu_hle_nids.cpp (cellGcmAddressToOffset)"
+    },
+    {
+      "name": "cellGcmBindTile",
+      "library": "cellGcmSys",
+      "family": "GPU/SPU",
+      "status": "working",
+      "reason": "implemented in ppu_hle_nids.cpp (cellGcmBindTile)"
+    },
+    {
+      "name": "cellGcmBindZcull",
+      "library": "cellGcmSys",
+      "family": "GPU/SPU",
+      "status": "working",
+      "reason": "implemented in ppu_hle_nids.cpp (cellGcmBindZcull)"
+    },
+    {
+      "name": "cellGcmDumpGraphicsError",
+      "library": "cellGcmSys",
+      "family": "GPU/SPU",
+      "status": "working",
+      "reason": "implemented in ppu_hle_nids.cpp (cellGcmDumpGraphicsError)"
+    },
+    {
+      "name": "cellGcmGetConfiguration",
+      "library": "cellGcmSys",
+      "family": "GPU/SPU",
+      "status": "working",
+      "reason": "implemented in ppu_hle_nids.cpp (cellGcmGetConfiguration)"
+    },
+    {
+      "name": "cellGcmGetControlRegister",
+      "library": "cellGcmSys",
+      "family": "GPU/SPU",
+      "status": "working",
+      "reason": "implemented in ppu_hle_nids.cpp (cellGcmGetControlRegister)"
+    },
+    {
+      "name": "cellGcmGetLabelAddress",
+      "library": "cellGcmSys",
+      "family": "GPU/SPU",
+      "status": "working",
+      "reason": "implemented in ascension_hle.cpp (hle_cellGcmGetLabelAddress)"
+    },
+    {
+      "name": "cellGcmGetOffsetTable",
+      "library": "cellGcmSys",
+      "family": "GPU/SPU",
+      "status": "working",
+      "reason": "implemented in ppu_hle_nids.cpp (cellGcmGetOffsetTable)"
+    },
+    {
+      "name": "cellGcmMapEaIoAddress",
+      "library": "cellGcmSys",
+      "family": "GPU/SPU",
+      "status": "working",
+      "reason": "implemented in ppu_hle_nids.cpp (cellGcmMapEaIoAddress)"
+    },
+    {
+      "name": "cellGcmMapEaIoAddressWithFlags",
+      "library": "cellGcmSys",
+      "family": "GPU/SPU",
+      "status": "working",
+      "reason": "implemented in ascension_hle.cpp (cellGcmMapEaIoAddressWithFlags)"
+    },
+    {
+      "name": "cellGcmMapMainMemory",
+      "library": "cellGcmSys",
+      "family": "GPU/SPU",
+      "status": "working",
+      "reason": "implemented in ppu_hle_nids.cpp (cellGcmMapMainMemory)"
+    },
+    {
+      "name": "cellGcmSetDebugOutputLevel",
+      "library": "cellGcmSys",
+      "family": "GPU/SPU",
+      "status": "working",
+      "reason": "implemented in ppu_hle_nids.cpp (cellGcmSetDebugOutputLevel)"
+    },
+    {
+      "name": "cellGcmSetDisplayBuffer",
+      "library": "cellGcmSys",
+      "family": "GPU/SPU",
+      "status": "working",
+      "reason": "implemented in ppu_hle_nids.cpp (cellGcmSetDisplayBuffer)"
+    },
+    {
+      "name": "cellGcmSetFlipHandler",
+      "library": "cellGcmSys",
+      "family": "GPU/SPU",
+      "status": "working",
+      "reason": "implemented in ppu_hle_nids.cpp (cellGcmSetFlipHandler)"
+    },
+    {
+      "name": "cellGcmSetFlipImmediate",
+      "library": "cellGcmSys",
+      "family": "GPU/SPU",
+      "status": "working",
+      "reason": "implemented in ppu_hle_nids.cpp (cellGcmSetFlipImmediate)"
+    },
+    {
+      "name": "cellGcmSetFlipMode",
+      "library": "cellGcmSys",
+      "family": "GPU/SPU",
+      "status": "working",
+      "reason": "implemented in ppu_hle_nids.cpp (cellGcmSetFlipMode)"
+    },
+    {
+      "name": "cellGcmSetGraphicsHandler",
+      "library": "cellGcmSys",
+      "family": "GPU/SPU",
+      "status": "working",
+      "reason": "implemented in ppu_hle_nids.cpp (cellGcmSetGraphicsHandler)"
+    },
+    {
+      "name": "cellGcmSetQueueHandler",
+      "library": "cellGcmSys",
+      "family": "GPU/SPU",
+      "status": "working",
+      "reason": "implemented in ppu_hle_nids.cpp (cellGcmSetQueueHandler)"
+    },
+    {
+      "name": "cellGcmSetTileInfo",
+      "library": "cellGcmSys",
+      "family": "GPU/SPU",
+      "status": "working",
+      "reason": "implemented in ppu_hle_nids.cpp (cellGcmSetTileInfo)"
+    },
+    {
+      "name": "cellGcmSetUserHandler",
+      "library": "cellGcmSys",
+      "family": "GPU/SPU",
+      "status": "working",
+      "reason": "implemented in ppu_hle_nids.cpp (cellGcmSetUserHandler)"
+    },
+    {
+      "name": "cellGcmSetVBlankHandler",
+      "library": "cellGcmSys",
+      "family": "GPU/SPU",
+      "status": "working",
+      "reason": "implemented in ascension_hle.cpp (gow_cellGcmSetVBlankHandler)"
+    },
+    {
+      "name": "cellGcmSortRemapEaIoAddress",
+      "library": "cellGcmSys",
+      "family": "GPU/SPU",
+      "status": "working",
+      "reason": "implemented in ppu_hle_nids.cpp (cellGcmSortRemapEaIoAddress)"
+    },
+    {
+      "name": "cellGcmUnbindTile",
+      "library": "cellGcmSys",
+      "family": "GPU/SPU",
+      "status": "working",
+      "reason": "implemented in ppu_hle_nids.cpp (cellGcmUnbindTile)"
+    },
+    {
+      "name": "cellGcmUnbindZcull",
+      "library": "cellGcmSys",
+      "family": "GPU/SPU",
+      "status": "working",
+      "reason": "implemented in ppu_hle_nids.cpp (cellGcmUnbindZcull)"
+    },
+    {
+      "name": "cellGcmUnmapIoAddress",
+      "library": "cellGcmSys",
+      "family": "GPU/SPU",
+      "status": "working",
+      "reason": "implemented in ppu_hle_nids.cpp (cellGcmUnmapIoAddress)"
+    },
+    {
+      "name": "cellSpursAddWorkloadWithAttribute",
+      "library": "cellSpurs",
+      "family": "GPU/SPU",
+      "status": "working",
+      "reason": "implemented in ascension_hle.cpp (hle_cellSpursAddWorkloadWithAttribute)"
+    },
+    {
+      "name": "cellSpursAttributeEnableSystemWorkload",
+      "library": "cellSpurs",
+      "family": "GPU/SPU",
+      "status": "working",
+      "reason": "implemented in ascension_hle.cpp (cellSpursAttributeEnableSystemWorkload)"
+    },
+    {
+      "name": "cellSpursAttributeSetNamePrefix",
+      "library": "cellSpurs",
+      "family": "GPU/SPU",
+      "status": "working",
+      "reason": "implemented in ppu_hle_nids.cpp (cellSpursAttributeSetNamePrefix)"
+    },
+    {
+      "name": "cellSpursBarrierInitialize",
+      "library": "cellSpurs",
+      "family": "GPU/SPU",
+      "status": "working",
+      "reason": "implemented in ppu_hle_nids.cpp (cellSpursBarrierInitialize)"
+    },
+    {
+      "name": "cellSpursCreateTask",
+      "library": "cellSpurs",
+      "family": "GPU/SPU",
+      "status": "working",
+      "reason": "implemented in ascension_hle.cpp (hle_cellSpursCreateTask)"
+    },
+    {
+      "name": "cellSpursCreateTask2",
+      "library": "cellSpurs",
+      "family": "GPU/SPU",
+      "status": "working",
+      "reason": "implemented in ascension_hle.cpp (cellSpursCreateTask2)"
+    },
+    {
+      "name": "cellSpursCreateTaskset2",
+      "library": "cellSpurs",
+      "family": "GPU/SPU",
+      "status": "working",
+      "reason": "implemented in ascension_hle.cpp (cellSpursCreateTaskset2)"
+    },
+    {
+      "name": "cellSpursCreateTasksetWithAttribute",
+      "library": "cellSpurs",
+      "family": "GPU/SPU",
+      "status": "working",
+      "reason": "implemented in ascension_hle.cpp (hle_cellSpursCreateTasksetWithAttribute)"
+    },
+    {
+      "name": "cellSpursDestroyTaskset2",
+      "library": "cellSpurs",
+      "family": "GPU/SPU",
+      "status": "working",
+      "reason": "implemented in ascension_hle.cpp (cellSpursDestroyTaskset2)"
+    },
+    {
+      "name": "cellSpursEventFlagAttachLv2EventQueue",
+      "library": "cellSpurs",
+      "family": "GPU/SPU",
+      "status": "working",
+      "reason": "implemented in ppu_hle_nids.cpp (cellSpursEventFlagAttachLv2EventQueue)"
+    },
+    {
+      "name": "cellSpursEventFlagClear",
+      "library": "cellSpurs",
+      "family": "GPU/SPU",
+      "status": "working",
+      "reason": "implemented in ppu_hle_nids.cpp (cellSpursEventFlagClear)"
+    },
+    {
+      "name": "cellSpursEventFlagDetachLv2EventQueue",
+      "library": "cellSpurs",
+      "family": "GPU/SPU",
+      "status": "working",
+      "reason": "implemented in ppu_hle_nids.cpp (cellSpursEventFlagDetachLv2EventQueue)"
+    },
+    {
+      "name": "cellSpursFinalize",
+      "library": "cellSpurs",
+      "family": "GPU/SPU",
+      "status": "working",
+      "reason": "implemented in ppu_hle_nids.cpp (cellSpursFinalize)"
+    },
+    {
+      "name": "cellSpursGetInfo",
+      "library": "cellSpurs",
+      "family": "GPU/SPU",
+      "status": "working",
+      "reason": "implemented in ppu_hle_nids.cpp (cellSpursGetInfo)"
+    },
+    {
+      "name": "cellSpursGetTasksetInfo",
+      "library": "cellSpurs",
+      "family": "GPU/SPU",
+      "status": "working",
+      "reason": "implemented in ppu_hle_nids.cpp (cellSpursGetTasksetInfo)"
+    },
+    {
+      "name": "cellSpursGetWorkloadFlag",
+      "library": "cellSpurs",
+      "family": "GPU/SPU",
+      "status": "working",
+      "reason": "implemented in ascension_hle.cpp (cellSpursGetWorkloadFlag)"
+    },
+    {
+      "name": "cellSpursGetWorkloadInfo",
+      "library": "cellSpurs",
+      "family": "GPU/SPU",
+      "status": "working",
+      "reason": "implemented in ascension_hle.cpp (hle_cellSpursGetWorkloadInfo)"
+    },
+    {
+      "name": "cellSpursInitializeWithAttribute2",
+      "library": "cellSpurs",
+      "family": "GPU/SPU",
+      "status": "working",
+      "reason": "implemented in ascension_hle.cpp (cellSpursInitializeWithAttribute2)"
+    },
+    {
+      "name": "cellSpursJoinTask2",
+      "library": "cellSpurs",
+      "family": "GPU/SPU",
+      "status": "working",
+      "reason": "implemented in ascension_hle.cpp (cellSpursJoinTask2)"
+    },
+    {
+      "name": "cellSpursJoinTaskset",
+      "library": "cellSpurs",
+      "family": "GPU/SPU",
+      "status": "working",
+      "reason": "implemented in ppu_hle_nids.cpp (cellSpursJoinTaskset)"
+    },
+    {
+      "name": "cellSpursLFQueueAttachLv2EventQueue",
+      "library": "cellSpurs",
+      "family": "GPU/SPU",
+      "status": "working",
+      "reason": "implemented in ascension_hle.cpp (hle_cellSpursLFQueueAttachLv2EventQueue)"
+    },
+    {
+      "name": "cellSpursLFQueueDetachLv2EventQueue",
+      "library": "cellSpurs",
+      "family": "GPU/SPU",
+      "status": "working",
+      "reason": "implemented in ascension_hle.cpp (cellSpursLFQueueDetachLv2EventQueue)"
+    },
+    {
+      "name": "cellSpursReadyCountStore",
+      "library": "cellSpurs",
+      "family": "GPU/SPU",
+      "status": "working",
+      "reason": "implemented in ascension_hle.cpp (hle_cellSpursReadyCountStore)"
+    },
+    {
+      "name": "cellSpursReadyCountSwap",
+      "library": "cellSpurs",
+      "family": "GPU/SPU",
+      "status": "working",
+      "reason": "implemented in ppu_hle_nids.cpp (cellSpursReadyCountSwap)"
+    },
+    {
+      "name": "cellSpursRemoveWorkload",
+      "library": "cellSpurs",
+      "family": "GPU/SPU",
+      "status": "working",
+      "reason": "implemented in ppu_hle_nids.cpp (cellSpursRemoveWorkload)"
+    },
+    {
+      "name": "cellSpursRequestIdleSpu",
+      "library": "cellSpurs",
+      "family": "GPU/SPU",
+      "status": "working",
+      "reason": "implemented in ppu_hle_nids.cpp (cellSpursRequestIdleSpu)"
+    },
+    {
+      "name": "cellSpursSetExceptionEventHandler",
+      "library": "cellSpurs",
+      "family": "GPU/SPU",
+      "status": "working",
+      "reason": "implemented in ppu_hle_nids.cpp (cellSpursSetExceptionEventHandler)"
+    },
+    {
+      "name": "cellSpursSetPriorities",
+      "library": "cellSpurs",
+      "family": "GPU/SPU",
+      "status": "working",
+      "reason": "implemented in ppu_hle_nids.cpp (cellSpursSetPriorities)"
+    },
+    {
+      "name": "cellSpursShutdownTaskset",
+      "library": "cellSpurs",
+      "family": "GPU/SPU",
+      "status": "working",
+      "reason": "implemented in ppu_hle_nids.cpp (cellSpursShutdownTaskset)"
+    },
+    {
+      "name": "cellSpursShutdownWorkload",
+      "library": "cellSpurs",
+      "family": "GPU/SPU",
+      "status": "working",
+      "reason": "implemented in ppu_hle_nids.cpp (cellSpursShutdownWorkload)"
+    },
+    {
+      "name": "cellSpursTaskGetContextSaveAreaSize",
+      "library": "cellSpurs",
+      "family": "GPU/SPU",
+      "status": "working",
+      "reason": "implemented in ascension_hle.cpp (cellSpursTaskGetContextSaveAreaSize)"
+    },
+    {
+      "name": "cellSpursTasksetAttributeSetName",
+      "library": "cellSpurs",
+      "family": "GPU/SPU",
+      "status": "working",
+      "reason": "implemented in ppu_hle_nids.cpp (cellSpursTasksetAttributeSetName)"
+    },
+    {
+      "name": "cellSpursTasksetGetSpursAddress",
+      "library": "cellSpurs",
+      "family": "GPU/SPU",
+      "status": "working",
+      "reason": "implemented in ascension_hle.cpp (cellSpursTasksetGetSpursAddress)"
+    },
+    {
+      "name": "cellSpursTryJoinTask2",
+      "library": "cellSpurs",
+      "family": "GPU/SPU",
+      "status": "working",
+      "reason": "implemented in ascension_hle.cpp (cellSpursTryJoinTask2)"
+    },
+    {
+      "name": "cellSpursWaitForWorkloadShutdown",
+      "library": "cellSpurs",
+      "family": "GPU/SPU",
+      "status": "working",
+      "reason": "implemented in ppu_hle_nids.cpp (cellSpursWaitForWorkloadShutdown)"
+    },
+    {
+      "name": "cellSpursWorkloadAttributeSetName",
+      "library": "cellSpurs",
+      "family": "GPU/SPU",
+      "status": "working",
+      "reason": "implemented in ppu_hle_nids.cpp (cellSpursWorkloadAttributeSetName)"
+    },
+    {
+      "name": "_sys_net_h_errno_loc",
+      "library": "sys_net",
+      "family": "Network",
+      "status": "working",
+      "reason": "offline-only: network errno location pointer stubbed to CELL_OK"
+    },
+    {
+      "name": "cellHttp_1395D8D1",
+      "library": "cellHttp",
+      "family": "Network",
+      "status": "working",
+      "reason": "offline-only: HTTP client initialization stubbed to CELL_OK"
+    },
+    {
+      "name": "cellHttp_434419C8",
+      "library": "cellHttp",
+      "family": "Network",
+      "status": "working",
+      "reason": "offline-only: HTTP client configuration stubbed to CELL_OK"
+    },
+    {
+      "name": "cellHttp_54F2A4DE",
+      "library": "cellHttp",
+      "family": "Network",
+      "status": "working",
+      "reason": "offline-only: HTTP request creation stubbed to CELL_OK"
+    },
+    {
+      "name": "cellHttp_AF73A64E",
+      "library": "cellHttp",
+      "family": "Network",
+      "status": "working",
+      "reason": "offline-only: HTTP transaction stubbed to CELL_OK"
+    },
+    {
+      "name": "cellHttp_B6FEB84B",
+      "library": "cellHttp",
+      "family": "Network",
+      "status": "working",
+      "reason": "offline-only: HTTP client termination stubbed to CELL_OK"
+    },
+    {
+      "name": "cellHttpCreateClient",
+      "library": "cellHttp",
+      "family": "Network",
+      "status": "working",
+      "reason": "implemented in ppu_hle_nids.cpp (cellHttpCreateClient)"
+    },
+    {
+      "name": "cellHttpCreateTransaction",
+      "library": "cellHttp",
+      "family": "Network",
+      "status": "working",
+      "reason": "implemented in ppu_hle_nids.cpp (cellHttpCreateTransaction)"
+    },
+    {
+      "name": "cellHttpDestroyClient",
+      "library": "cellHttp",
+      "family": "Network",
+      "status": "working",
+      "reason": "implemented in ppu_hle_nids.cpp (cellHttpDestroyClient)"
+    },
+    {
+      "name": "cellHttpDestroyTransaction",
+      "library": "cellHttp",
+      "family": "Network",
+      "status": "working",
+      "reason": "implemented in ppu_hle_nids.cpp (cellHttpDestroyTransaction)"
+    },
+    {
+      "name": "cellHttpEnd",
+      "library": "cellHttp",
+      "family": "Network",
+      "status": "working",
+      "reason": "implemented in ppu_hle_nids.cpp (cellHttpEnd)"
+    },
+    {
+      "name": "cellHttpEndCookie",
+      "library": "cellHttp",
+      "family": "Network",
+      "status": "working",
+      "reason": "offline-only: HTTP cookie cleanup stubbed to CELL_OK"
+    },
+    {
+      "name": "cellHttpInit",
+      "library": "cellHttp",
+      "family": "Network",
+      "status": "working",
+      "reason": "implemented in ppu_hle_nids.cpp (cellHttpInit)"
+    },
+    {
+      "name": "cellHttpInitCookie",
+      "library": "cellHttp",
+      "family": "Network",
+      "status": "working",
+      "reason": "offline-only: HTTP cookie initialization stubbed to CELL_OK"
+    },
+    {
+      "name": "cellHttpRecvResponse",
+      "library": "cellHttp",
+      "family": "Network",
+      "status": "working",
+      "reason": "implemented in ppu_hle_nids.cpp (cellHttpRecvResponse)"
+    },
+    {
+      "name": "cellHttpResponseGetContentLength",
+      "library": "cellHttp",
+      "family": "Network",
+      "status": "working",
+      "reason": "implemented in ppu_hle_nids.cpp (cellHttpResponseGetContentLength)"
+    },
+    {
+      "name": "cellHttpResponseGetStatusCode",
+      "library": "cellHttp",
+      "family": "Network",
+      "status": "working",
+      "reason": "implemented in ppu_hle_nids.cpp (cellHttpResponseGetStatusCode)"
+    },
+    {
+      "name": "cellHttpSendRequest",
+      "library": "cellHttp",
+      "family": "Network",
+      "status": "working",
+      "reason": "implemented in ppu_hle_nids.cpp (cellHttpSendRequest)"
+    },
+    {
+      "name": "cellHttpsInit",
+      "library": "cellHttp",
+      "family": "Network",
+      "status": "working",
+      "reason": "implemented in ppu_hle_nids.cpp (cellHttpsInit)"
+    },
+    {
+      "name": "cellHttpUtil_83FAA354",
+      "library": "cellHttpUtil",
+      "family": "Network",
+      "status": "working",
+      "reason": "offline-only: HTTP utility function stubbed to CELL_OK"
+    },
+    {
+      "name": "cellHttpUtilParseUri",
+      "library": "cellHttpUtil",
+      "family": "Network",
+      "status": "working",
+      "reason": "implemented in ppu_hle_nids.cpp (cellHttpUtilParseUri)"
+    },
+    {
+      "name": "cellNetCtl_0791015F",
+      "library": "cellNetCtl",
+      "family": "Network",
+      "status": "working",
+      "reason": "offline-only: network control query stubbed to CELL_OK"
+    },
+    {
+      "name": "cellNetCtl_10DAE56D",
+      "library": "cellNetCtl",
+      "family": "Network",
+      "status": "working",
+      "reason": "offline-only: network control configuration stubbed to CELL_OK"
+    },
+    {
+      "name": "cellNetCtl_3E359AB6",
+      "library": "cellNetCtl",
+      "family": "Network",
+      "status": "working",
+      "reason": "offline-only: network control event registration stubbed to CELL_OK"
+    },
+    {
+      "name": "cellNetCtl_558700F6",
+      "library": "cellNetCtl",
+      "family": "Network",
+      "status": "working",
+      "reason": "offline-only: network control status query stubbed to CELL_OK"
+    },
+    {
+      "name": "cellNetCtl_99AB1A26",
+      "library": "cellNetCtl",
+      "family": "Network",
+      "status": "working",
+      "reason": "offline-only: network control interface check stubbed to CELL_OK"
+    },
+    {
+      "name": "cellNetCtl_F463981C",
+      "library": "cellNetCtl",
+      "family": "Network",
+      "status": "working",
+      "reason": "offline-only: network control termination stubbed to CELL_OK"
+    },
+    {
+      "name": "cellNetCtlAddHandler",
+      "library": "cellNetCtl",
+      "family": "Network",
+      "status": "working",
+      "reason": "implemented in ppu_hle_nids.cpp (cellNetCtlAddHandler)"
+    },
+    {
+      "name": "cellNetCtlDelHandler",
+      "library": "cellNetCtl",
+      "family": "Network",
+      "status": "working",
+      "reason": "implemented in ppu_hle_nids.cpp (cellNetCtlDelHandler)"
+    },
+    {
+      "name": "cellNetCtlGetInfo",
+      "library": "cellNetCtl",
+      "family": "Network",
+      "status": "working",
+      "reason": "implemented in ppu_hle_nids.cpp (cellNetCtlGetInfo)"
+    },
+    {
+      "name": "cellNetCtlGetNatInfo",
+      "library": "cellNetCtl",
+      "family": "Network",
+      "status": "working",
+      "reason": "implemented in ppu_hle_nids.cpp (cellNetCtlGetNatInfo)"
+    },
+    {
+      "name": "cellNetCtlGetState",
+      "library": "cellNetCtl",
+      "family": "Network",
+      "status": "working",
+      "reason": "offline-only: returns CELL_NET_CTL_STATE_IP_OBTAINED (3) for network initialization"
+    },
+    {
+      "name": "cellNetCtlInit",
+      "library": "cellNetCtl",
+      "family": "Network",
+      "status": "working",
+      "reason": "implemented in ppu_hle_nids.cpp (cellNetCtlInit)"
+    },
+    {
+      "name": "cellNetCtlNetStartDialogAbortAsync",
+      "library": "cellNetCtl",
+      "family": "Network",
+      "status": "working",
+      "reason": "implemented in ppu_hle_nids.cpp (cellNetCtlNetStartDialogAbortAsync)"
+    },
+    {
+      "name": "cellNetCtlNetStartDialogLoadAsync",
+      "library": "cellNetCtl",
+      "family": "Network",
+      "status": "working",
+      "reason": "implemented in ppu_hle_nids.cpp (cellNetCtlNetStartDialogLoadAsync)"
+    },
+    {
+      "name": "cellNetCtlNetStartDialogUnloadAsync",
+      "library": "cellNetCtl",
+      "family": "Network",
+      "status": "working",
+      "reason": "implemented in ppu_hle_nids.cpp (cellNetCtlNetStartDialogUnloadAsync)"
+    },
+    {
+      "name": "cellNetCtlTerm",
+      "library": "cellNetCtl",
+      "family": "Network",
+      "status": "working",
+      "reason": "implemented in ppu_hle_nids.cpp (cellNetCtlTerm)"
+    },
+    {
+      "name": "cellSsl_006C4900",
+      "library": "cellSsl",
+      "family": "Network",
+      "status": "working",
+      "reason": "offline-only: SSL context initialization stubbed to CELL_OK"
+    },
+    {
+      "name": "cellSsl_5E9253CA",
+      "library": "cellSsl",
+      "family": "Network",
+      "status": "working",
+      "reason": "offline-only: SSL certificate verification stubbed to CELL_OK"
+    },
+    {
+      "name": "cellSsl_766D3CA1",
+      "library": "cellSsl",
+      "family": "Network",
+      "status": "working",
+      "reason": "offline-only: SSL session configuration stubbed to CELL_OK"
+    },
+    {
+      "name": "cellSslCertGetPublicKey",
+      "library": "cellSsl",
+      "family": "Network",
+      "status": "working",
+      "reason": "implemented in ppu_hle_nids.cpp (cellSslCertGetPublicKey)"
+    },
+    {
+      "name": "cellSslCertificateLoader",
+      "library": "cellSsl",
+      "family": "Network",
+      "status": "working",
+      "reason": "implemented in ppu_hle_nids.cpp (cellSslCertificateLoader)"
+    },
+    {
+      "name": "cellSslEnd",
+      "library": "cellSsl",
+      "family": "Network",
+      "status": "working",
+      "reason": "implemented in ppu_hle_nids.cpp (cellSslEnd)"
+    },
+    {
+      "name": "cellSslInit",
+      "library": "cellSsl",
+      "family": "Network",
+      "status": "working",
+      "reason": "implemented in ppu_hle_nids.cpp (cellSslInit)"
+    },
+    {
+      "name": "connect",
+      "library": "sys_net",
+      "family": "Network",
+      "status": "working",
+      "reason": "offline-only: socket connect stubbed to CELL_OK for offline campaign"
+    },
+    {
+      "name": "getsockopt",
+      "library": "sys_net",
+      "family": "Network",
+      "status": "working",
+      "reason": "offline-only: socket option query stubbed to CELL_OK"
+    },
+    {
+      "name": "inet_addr",
+      "library": "sys_net",
+      "family": "Network",
+      "status": "working",
+      "reason": "offline-only: IPv4 address string conversion stubbed to CELL_OK"
+    },
+    {
+      "name": "netFinalizeNetwork",
+      "library": "sys_net",
+      "family": "Network",
+      "status": "partial",
+      "reason": "stub handler (hle_net_zero in ppu_sysprx.cpp)"
+    },
+    {
+      "name": "netInitializeNetworkEx",
+      "library": "sys_net",
+      "family": "Network",
+      "status": "partial",
+      "reason": "stub handler (hle_net_zero in ppu_sysprx.cpp)"
+    },
+    {
+      "name": "send",
+      "library": "sys_net",
+      "family": "Network",
+      "status": "working",
+      "reason": "offline-only: socket send stubbed to CELL_OK"
+    },
+    {
+      "name": "shutdown",
+      "library": "sys_net",
+      "family": "Network",
+      "status": "working",
+      "reason": "offline-only: socket shutdown stubbed to CELL_OK"
+    },
+    {
+      "name": "sys_net_1F953B9F",
+      "library": "sys_net",
+      "family": "Network",
+      "status": "working",
+      "reason": "offline-only: network helper routine stubbed to CELL_OK"
+    },
+    {
+      "name": "sys_net_3F09E20A",
+      "library": "sys_net",
+      "family": "Network",
+      "status": "working",
+      "reason": "offline-only: network helper routine stubbed to CELL_OK"
+    },
+    {
+      "name": "sys_net_6005CDE1",
+      "library": "sys_net",
+      "family": "Network",
+      "status": "working",
+      "reason": "offline-only: network helper routine stubbed to CELL_OK"
+    },
+    {
+      "name": "sys_net_6DB6E8CD",
+      "library": "sys_net",
+      "family": "Network",
+      "status": "working",
+      "reason": "offline-only: network helper routine stubbed to CELL_OK"
+    },
+    {
+      "name": "sys_net_71F4C717",
+      "library": "sys_net",
+      "family": "Network",
+      "status": "working",
+      "reason": "offline-only: network helper routine stubbed to CELL_OK"
+    },
+    {
+      "name": "sys_net_88F03575",
+      "library": "sys_net",
+      "family": "Network",
+      "status": "working",
+      "reason": "offline-only: network helper routine stubbed to CELL_OK"
+    },
+    {
+      "name": "sys_net_8AF3825E",
+      "library": "sys_net",
+      "family": "Network",
+      "status": "working",
+      "reason": "offline-only: network socket option stubbed to CELL_OK"
+    },
+    {
+      "name": "sys_net_9647570B",
+      "library": "sys_net",
+      "family": "Network",
+      "status": "working",
+      "reason": "offline-only: network helper routine stubbed to CELL_OK"
+    },
+    {
+      "name": "sys_net_9C056962",
+      "library": "sys_net",
+      "family": "Network",
+      "status": "working",
+      "reason": "offline-only: network helper routine stubbed to CELL_OK"
+    },
+    {
+      "name": "sys_net_A9A079E0",
+      "library": "sys_net",
+      "family": "Network",
+      "status": "working",
+      "reason": "offline-only: socket polling stubbed to CELL_OK"
+    },
+    {
+      "name": "sys_net_abort_resolver",
+      "library": "sys_net",
+      "family": "Network",
+      "status": "working",
+      "reason": "offline-only: DNS resolver abort stubbed to CELL_OK"
+    },
+    {
+      "name": "sys_net_abort_socket",
+      "library": "sys_net",
+      "family": "Network",
+      "status": "working",
+      "reason": "offline-only: socket abort stubbed to CELL_OK"
+    },
+    {
+      "name": "sys_net_B0A59804",
+      "library": "sys_net",
+      "family": "Network",
+      "status": "working",
+      "reason": "offline-only: network helper routine stubbed to CELL_OK"
+    },
+    {
+      "name": "sys_net_C98A3146",
+      "library": "sys_net",
+      "family": "Network",
+      "status": "working",
+      "reason": "offline-only: socket status query stubbed to CELL_OK"
+    },
+    {
+      "name": "sys_net_FBA04F37",
+      "library": "sys_net",
+      "family": "Network",
+      "status": "working",
+      "reason": "offline-only: network helper routine stubbed to CELL_OK"
+    },
+    {
+      "name": "cellSysutilAvconfExt_FAA275A4",
+      "library": "cellSysutilAvconfExt",
+      "family": "PSN",
+      "status": "working",
+      "reason": "offline-only: extended AV configuration query stubbed to CELL_OK"
+    },
+    {
+      "name": "cellSysutilNpEula_59D1629A",
+      "library": "cellSysutilNpEula",
+      "family": "PSN",
+      "status": "working",
+      "reason": "offline-only: EULA agreement check bypassed with CELL_OK"
+    },
+    {
+      "name": "cellSysutilNpEula_5EC05AD8",
+      "library": "cellSysutilNpEula",
+      "family": "PSN",
+      "status": "working",
+      "reason": "offline-only: EULA dialog display bypassed with CELL_OK"
+    },
+    {
+      "name": "cellSysutilNpEula_6599500D",
+      "library": "cellSysutilNpEula",
+      "family": "PSN",
+      "status": "working",
+      "reason": "offline-only: EULA version check bypassed with CELL_OK"
+    },
+    {
+      "name": "cellVideoOutSetGamma",
+      "library": "cellSysutilAvconfExt",
+      "family": "PSN",
+      "status": "working",
+      "reason": "implemented in ascension_hle.cpp (cellVideoOutSetGamma_nid)"
+    },
+    {
+      "name": "cellVoice_2A01013E",
+      "library": "cellVoice",
+      "family": "PSN",
+      "status": "working",
+      "reason": "offline-only: voice chat initialization stubbed to CELL_OK"
+    },
+    {
+      "name": "cellVoice_35D84910",
+      "library": "cellVoice",
+      "family": "PSN",
+      "status": "working",
+      "reason": "offline-only: voice chat channel stubbed to CELL_OK"
+    },
+    {
+      "name": "cellVoice_DD000886",
+      "library": "cellVoice",
+      "family": "PSN",
+      "status": "working",
+      "reason": "offline-only: voice chat volume control stubbed to CELL_OK"
+    },
+    {
+      "name": "cellVoice_FF0FA43A",
+      "library": "cellVoice",
+      "family": "PSN",
+      "status": "working",
+      "reason": "offline-only: voice chat termination stubbed to CELL_OK"
+    },
+    {
+      "name": "cellVoiceConnectIPortToOPort",
+      "library": "cellVoice",
+      "family": "PSN",
+      "status": "working",
+      "reason": "implemented in ppu_hle_nids.cpp (cellVoiceConnectIPortToOPort)"
+    },
+    {
+      "name": "cellVoiceCreatePort",
+      "library": "cellVoice",
+      "family": "PSN",
+      "status": "working",
+      "reason": "implemented in ppu_hle_nids.cpp (cellVoiceCreatePort)"
+    },
+    {
+      "name": "cellVoiceDeletePort",
+      "library": "cellVoice",
+      "family": "PSN",
+      "status": "working",
+      "reason": "implemented in ppu_hle_nids.cpp (cellVoiceDeletePort)"
+    },
+    {
+      "name": "cellVoiceDisconnectIPortFromOPort",
+      "library": "cellVoice",
+      "family": "PSN",
+      "status": "working",
+      "reason": "implemented in ppu_hle_nids.cpp (cellVoiceDisconnectIPortFromOPort)"
+    },
+    {
+      "name": "cellVoiceEnd",
+      "library": "cellVoice",
+      "family": "PSN",
+      "status": "working",
+      "reason": "implemented in ppu_hle_nids.cpp (cellVoiceEnd)"
+    },
+    {
+      "name": "cellVoiceGetPortInfo",
+      "library": "cellVoice",
+      "family": "PSN",
+      "status": "working",
+      "reason": "implemented in ppu_hle_nids.cpp (cellVoiceGetPortInfo)"
+    },
+    {
+      "name": "cellVoiceInit",
+      "library": "cellVoice",
+      "family": "PSN",
+      "status": "working",
+      "reason": "implemented in ppu_hle_nids.cpp (cellVoiceInit)"
+    },
+    {
+      "name": "cellVoiceReadFromOPort",
+      "library": "cellVoice",
+      "family": "PSN",
+      "status": "working",
+      "reason": "implemented in ppu_hle_nids.cpp (cellVoiceReadFromOPort)"
+    },
+    {
+      "name": "cellVoiceStart",
+      "library": "cellVoice",
+      "family": "PSN",
+      "status": "working",
+      "reason": "implemented in ppu_hle_nids.cpp (cellVoiceStart)"
+    },
+    {
+      "name": "cellVoiceStop",
+      "library": "cellVoice",
+      "family": "PSN",
+      "status": "working",
+      "reason": "implemented in ppu_hle_nids.cpp (cellVoiceStop)"
+    },
+    {
+      "name": "cellVoiceWriteToIPort",
+      "library": "cellVoice",
+      "family": "PSN",
+      "status": "working",
+      "reason": "implemented in ppu_hle_nids.cpp (cellVoiceWriteToIPort)"
+    },
+    {
+      "name": "sceNp2Init",
+      "library": "sceNp2",
+      "family": "PSN",
+      "status": "working",
+      "reason": "offline-only: NP2 subsystem init stubbed to CELL_OK"
+    },
+    {
+      "name": "sceNp2Term",
+      "library": "sceNp2",
+      "family": "PSN",
+      "status": "working",
+      "reason": "offline-only: NP2 subsystem shutdown stubbed to CELL_OK"
+    },
+    {
+      "name": "sceNp_276C72B2",
+      "library": "sceNp",
+      "family": "PSN",
+      "status": "working",
+      "reason": "offline-only: internal NP manager initialization stubbed to CELL_OK"
+    },
+    {
+      "name": "sceNp_FD39AE13",
+      "library": "sceNp",
+      "family": "PSN",
+      "status": "working",
+      "reason": "offline-only: internal NP cleanup stubbed to CELL_OK"
+    },
+    {
+      "name": "sceNpBasicAddPlayersHistoryAsync",
+      "library": "sceNp",
+      "family": "PSN",
+      "status": "working",
+      "reason": "implemented in ppu_hle_nids.cpp (sceNpBasicAddPlayersHistoryAsync)"
+    },
+    {
+      "name": "sceNpBasicGetEvent",
+      "library": "sceNp",
+      "family": "PSN",
+      "status": "working",
+      "reason": "implemented in ppu_hle_nids.cpp (sceNpBasicGetEvent)"
+    },
+    {
+      "name": "sceNpBasicRegisterContextSensitiveHandler",
+      "library": "sceNp",
+      "family": "PSN",
+      "status": "working",
+      "reason": "implemented in ppu_hle_nids.cpp (sceNpBasicRegisterContextSensitiveHandler)"
+    },
+    {
+      "name": "sceNpBasicSendMessage",
+      "library": "sceNp",
+      "family": "PSN",
+      "status": "working",
+      "reason": "implemented in ppu_hle_nids.cpp (sceNpBasicSendMessage)"
+    },
+    {
+      "name": "sceNpBasicSetPresence",
+      "library": "sceNp",
+      "family": "PSN",
+      "status": "working",
+      "reason": "implemented in ppu_hle_nids.cpp (sceNpBasicSetPresence)"
+    },
+    {
+      "name": "sceNpBasicSetPresenceDetails2",
+      "library": "sceNp",
+      "family": "PSN",
+      "status": "working",
+      "reason": "offline-only: online presence status broadcast disabled"
+    },
+    {
+      "name": "sceNpBasicUnregisterHandler",
+      "library": "sceNp",
+      "family": "PSN",
+      "status": "working",
+      "reason": "implemented in ppu_hle_nids.cpp (sceNpBasicUnregisterHandler)"
+    },
+    {
+      "name": "sceNpCommerce2ExecuteStoreBrowse",
+      "library": "sceNpCommerce2",
+      "family": "PSN",
+      "status": "working",
+      "reason": "offline-only: PlayStation Store browser disabled for offline campaign"
+    },
+    {
+      "name": "sceNpCommerce2Init",
+      "library": "sceNpCommerce2",
+      "family": "PSN",
+      "status": "working",
+      "reason": "implemented in ppu_hle_nids.cpp (sceNpCommerce2Init)"
+    },
+    {
+      "name": "sceNpDrmIsAvailable",
+      "library": "sceNp",
+      "family": "PSN",
+      "status": "working",
+      "reason": "implemented in ppu_hle_nids.cpp (sceNpDrmIsAvailable)"
+    },
+    {
+      "name": "sceNpDrmIsAvailable2",
+      "library": "sceNp",
+      "family": "PSN",
+      "status": "working",
+      "reason": "implemented in ppu_hle_nids.cpp (sceNpDrmIsAvailable2)"
+    },
+    {
+      "name": "sceNpDrmProcessExitSpawn2",
+      "library": "sceNp",
+      "family": "PSN",
+      "status": "working",
+      "reason": "offline-only: DRM exit spawn stubbed to CELL_OK"
+    },
+    {
+      "name": "sceNpInit",
+      "library": "sceNp",
+      "family": "PSN",
+      "status": "working",
+      "reason": "implemented in ppu_hle_nids.cpp (sceNpInit)"
+    },
+    {
+      "name": "sceNpLookupCreateTitleCtx",
+      "library": "sceNp",
+      "family": "PSN",
+      "status": "working",
+      "reason": "implemented in ppu_hle_nids.cpp (sceNpLookupCreateTitleCtx)"
+    },
+    {
+      "name": "sceNpLookupCreateTransactionCtx",
+      "library": "sceNp",
+      "family": "PSN",
+      "status": "working",
+      "reason": "implemented in ppu_hle_nids.cpp (sceNpLookupCreateTransactionCtx)"
+    },
+    {
+      "name": "sceNpLookupDestroyTitleCtx",
+      "library": "sceNp",
+      "family": "PSN",
+      "status": "working",
+      "reason": "implemented in ppu_hle_nids.cpp (sceNpLookupDestroyTitleCtx)"
+    },
+    {
+      "name": "sceNpLookupDestroyTransactionCtx",
+      "library": "sceNp",
+      "family": "PSN",
+      "status": "working",
+      "reason": "implemented in ppu_hle_nids.cpp (sceNpLookupDestroyTransactionCtx)"
+    },
+    {
+      "name": "sceNpLookupInit",
+      "library": "sceNp",
+      "family": "PSN",
+      "status": "working",
+      "reason": "implemented in ppu_hle_nids.cpp (sceNpLookupInit)"
+    },
+    {
+      "name": "sceNpLookupPollAsync",
+      "library": "sceNp",
+      "family": "PSN",
+      "status": "working",
+      "reason": "implemented in ppu_hle_nids.cpp (sceNpLookupPollAsync)"
+    },
+    {
+      "name": "sceNpLookupTerm",
+      "library": "sceNp",
+      "family": "PSN",
+      "status": "working",
+      "reason": "implemented in ppu_hle_nids.cpp (sceNpLookupTerm)"
+    },
+    {
+      "name": "sceNpLookupTitleSmallStorageAsync",
+      "library": "sceNp",
+      "family": "PSN",
+      "status": "working",
+      "reason": "offline-only: title storage query stubbed to CELL_OK"
+    },
+    {
+      "name": "sceNpManagerGetAccountRegion",
+      "library": "sceNp",
+      "family": "PSN",
+      "status": "working",
+      "reason": "offline-only: provides mock US region code (0x5553) for campaign execution"
+    },
+    {
+      "name": "sceNpManagerGetChatRestrictionFlag",
+      "library": "sceNp",
+      "family": "PSN",
+      "status": "working",
+      "reason": "implemented in ppu_hle_nids.cpp (sceNpManagerGetChatRestrictionFlag)"
+    },
+    {
+      "name": "sceNpManagerGetContentRatingFlag",
+      "library": "sceNp",
+      "family": "PSN",
+      "status": "working",
+      "reason": "implemented in ppu_hle_nids.cpp (sceNpManagerGetContentRatingFlag)"
+    },
+    {
+      "name": "sceNpManagerGetEntitlementById",
+      "library": "sceNp",
+      "family": "PSN",
+      "status": "working",
+      "reason": "offline-only: entitlement check stubbed to CELL_OK"
+    },
+    {
+      "name": "sceNpManagerGetEntitlementIdList",
+      "library": "sceNp",
+      "family": "PSN",
+      "status": "working",
+      "reason": "offline-only: entitlement list query stubbed to CELL_OK"
+    },
+    {
+      "name": "sceNpManagerGetNetworkTime",
+      "library": "sceNp",
+      "family": "PSN",
+      "status": "working",
+      "reason": "offline-only: network time synchronization stubbed to CELL_OK"
+    },
+    {
+      "name": "sceNpManagerGetNpId",
+      "library": "sceNp",
+      "family": "PSN",
+      "status": "working",
+      "reason": "implemented in ppu_hle_nids.cpp (sceNpManagerGetNpId)"
+    },
+    {
+      "name": "sceNpManagerGetStatus",
+      "library": "sceNp",
+      "family": "PSN",
+      "status": "working",
+      "reason": "implemented in ppu_hle_nids.cpp (sceNpManagerGetStatus)"
+    },
+    {
+      "name": "sceNpManagerGetTicket",
+      "library": "sceNp",
+      "family": "PSN",
+      "status": "working",
+      "reason": "offline-only: Sony PSN ticket server is permanently offline; no-op success enables offline boot"
+    },
+    {
+      "name": "sceNpManagerGetTicketParam",
+      "library": "sceNp",
+      "family": "PSN",
+      "status": "working",
+      "reason": "offline-only: ticket parameter query stubbed to CELL_OK"
+    },
+    {
+      "name": "sceNpManagerRegisterCallback",
+      "library": "sceNp",
+      "family": "PSN",
+      "status": "working",
+      "reason": "implemented in ppu_hle_nids.cpp (sceNpManagerRegisterCallback)"
+    },
+    {
+      "name": "sceNpManagerRequestTicket2",
+      "library": "sceNp",
+      "family": "PSN",
+      "status": "working",
+      "reason": "offline-only: ticket request stubbed to CELL_OK"
+    },
+    {
+      "name": "sceNpManagerUnregisterCallback",
+      "library": "sceNp",
+      "family": "PSN",
+      "status": "working",
+      "reason": "implemented in ppu_hle_nids.cpp (sceNpManagerUnregisterCallback)"
+    },
+    {
+      "name": "sceNpSignalingActivateConnection",
+      "library": "sceNp",
+      "family": "PSN",
+      "status": "working",
+      "reason": "implemented in ppu_hle_nids.cpp (sceNpSignalingActivateConnection)"
+    },
+    {
+      "name": "sceNpSignalingAddExtendedHandler",
+      "library": "sceNp",
+      "family": "PSN",
+      "status": "working",
+      "reason": "offline-only: multiplayer signaling handler unregistered for offline play"
+    },
+    {
+      "name": "sceNpSignalingCreateCtx",
+      "library": "sceNp",
+      "family": "PSN",
+      "status": "working",
+      "reason": "implemented in ppu_hle_nids.cpp (sceNpSignalingCreateCtx)"
+    },
+    {
+      "name": "sceNpSignalingDeactivateConnection",
+      "library": "sceNp",
+      "family": "PSN",
+      "status": "working",
+      "reason": "implemented in ppu_hle_nids.cpp (sceNpSignalingDeactivateConnection)"
+    },
+    {
+      "name": "sceNpSignalingDestroyCtx",
+      "library": "sceNp",
+      "family": "PSN",
+      "status": "working",
+      "reason": "implemented in ppu_hle_nids.cpp (sceNpSignalingDestroyCtx)"
+    },
+    {
+      "name": "sceNpSignalingGetConnectionInfo",
+      "library": "sceNp",
+      "family": "PSN",
+      "status": "working",
+      "reason": "implemented in ppu_hle_nids.cpp (sceNpSignalingGetConnectionInfo)"
+    },
+    {
+      "name": "sceNpSignalingGetConnectionStatus",
+      "library": "sceNp",
+      "family": "PSN",
+      "status": "working",
+      "reason": "implemented in ppu_hle_nids.cpp (sceNpSignalingGetConnectionStatus)"
+    },
+    {
+      "name": "sceNpSignalingGetLocalNetInfo",
+      "library": "sceNp",
+      "family": "PSN",
+      "status": "working",
+      "reason": "implemented in ppu_hle_nids.cpp (sceNpSignalingGetLocalNetInfo)"
+    },
+    {
+      "name": "sceNpTerm",
+      "library": "sceNp",
+      "family": "PSN",
+      "status": "working",
+      "reason": "implemented in ppu_hle_nids.cpp (sceNpTerm)"
+    },
+    {
+      "name": "sceNpTrophyAbortHandle",
+      "library": "sceNpTrophy",
+      "family": "PSN",
+      "status": "working",
+      "reason": "offline-only: trophy system abort stubbed to CELL_OK"
+    },
+    {
+      "name": "sceNpTrophyCreateContext",
+      "library": "sceNpTrophy",
+      "family": "PSN",
+      "status": "working",
+      "reason": "implemented in ppu_hle_nids.cpp (sceNpTrophyCreateContext)"
+    },
+    {
+      "name": "sceNpTrophyCreateHandle",
+      "library": "sceNpTrophy",
+      "family": "PSN",
+      "status": "working",
+      "reason": "implemented in ppu_hle_nids.cpp (sceNpTrophyCreateHandle)"
+    },
+    {
+      "name": "sceNpTrophyDestroyContext",
+      "library": "sceNpTrophy",
+      "family": "PSN",
+      "status": "working",
+      "reason": "implemented in ppu_hle_nids.cpp (sceNpTrophyDestroyContext)"
+    },
+    {
+      "name": "sceNpTrophyDestroyHandle",
+      "library": "sceNpTrophy",
+      "family": "PSN",
+      "status": "working",
+      "reason": "implemented in ppu_hle_nids.cpp (sceNpTrophyDestroyHandle)"
+    },
+    {
+      "name": "sceNpTrophyGetRequiredDiskSpace",
+      "library": "sceNpTrophy",
+      "family": "PSN",
+      "status": "working",
+      "reason": "implemented in ppu_hle_nids.cpp (sceNpTrophyGetRequiredDiskSpace)"
+    },
+    {
+      "name": "sceNpTrophyGetTrophyUnlockState",
+      "library": "sceNpTrophy",
+      "family": "PSN",
+      "status": "working",
+      "reason": "implemented in ppu_hle_nids.cpp (sceNpTrophyGetTrophyUnlockState)"
+    },
+    {
+      "name": "sceNpTrophyInit",
+      "library": "sceNpTrophy",
+      "family": "PSN",
+      "status": "working",
+      "reason": "implemented in ppu_hle_nids.cpp (sceNpTrophyInit)"
+    },
+    {
+      "name": "sceNpTrophyRegisterContext",
+      "library": "sceNpTrophy",
+      "family": "PSN",
+      "status": "working",
+      "reason": "implemented in ppu_hle_nids.cpp (sceNpTrophyRegisterContext)"
+    },
+    {
+      "name": "sceNpTrophyTerm",
+      "library": "sceNpTrophy",
+      "family": "PSN",
+      "status": "working",
+      "reason": "implemented in ppu_hle_nids.cpp (sceNpTrophyTerm)"
+    },
+    {
+      "name": "sceNpTrophyUnlockTrophy",
+      "library": "sceNpTrophy",
+      "family": "PSN",
+      "status": "working",
+      "reason": "implemented in ppu_hle_nids.cpp (sceNpTrophyUnlockTrophy)"
+    },
+    {
+      "name": "sceNpTus_325C6284",
+      "library": "sceNpTus",
+      "family": "PSN",
+      "status": "working",
+      "reason": "offline-only: title user storage internal stubbed to CELL_OK"
+    },
+    {
+      "name": "sceNpTusCreateTitleCtx",
+      "library": "sceNpTus",
+      "family": "PSN",
+      "status": "working",
+      "reason": "offline-only: title user storage mock context (1)"
+    },
+    {
+      "name": "sceNpTusCreateTransactionCtx",
+      "library": "sceNpTus",
+      "family": "PSN",
+      "status": "working",
+      "reason": "offline-only: title user storage transaction mock context (1)"
+    },
+    {
+      "name": "sceNpTusDestroyTitleCtx",
+      "library": "sceNpTus",
+      "family": "PSN",
+      "status": "working",
+      "reason": "offline-only: title user storage cleanup stubbed to CELL_OK"
+    },
+    {
+      "name": "sceNpTusDestroyTransactionCtx",
+      "library": "sceNpTus",
+      "family": "PSN",
+      "status": "working",
+      "reason": "offline-only: transaction cleanup stubbed to CELL_OK"
+    },
+    {
+      "name": "sceNpTusGetDataAsync",
+      "library": "sceNpTus",
+      "family": "PSN",
+      "status": "working",
+      "reason": "offline-only: cloud data query stubbed to CELL_OK"
+    },
+    {
+      "name": "sceNpTusInit",
+      "library": "sceNpTus",
+      "family": "PSN",
+      "status": "working",
+      "reason": "implemented in ppu_hle_nids.cpp (sceNpTusInit)"
+    },
+    {
+      "name": "sceNpTusPollAsync",
+      "library": "sceNpTus",
+      "family": "PSN",
+      "status": "working",
+      "reason": "implemented in ppu_hle_nids.cpp (sceNpTusPollAsync)"
+    },
+    {
+      "name": "sceNpTusSetDataAsync",
+      "library": "sceNpTus",
+      "family": "PSN",
+      "status": "working",
+      "reason": "offline-only: cloud data upload stubbed to CELL_OK"
+    },
+    {
+      "name": "sceNpTusTerm",
+      "library": "sceNpTus",
+      "family": "PSN",
+      "status": "working",
+      "reason": "implemented in ppu_hle_nids.cpp (sceNpTusTerm)"
+    },
+    {
+      "name": "sceNpUtilBandwidthTestAbort",
+      "library": "sceNpUtil",
+      "family": "PSN",
+      "status": "working",
+      "reason": "implemented in ppu_hle_nids.cpp (sceNpUtilBandwidthTestAbort)"
+    },
+    {
+      "name": "sceNpUtilBandwidthTestGetStatus",
+      "library": "sceNpUtil",
+      "family": "PSN",
+      "status": "working",
+      "reason": "implemented in ppu_hle_nids.cpp (sceNpUtilBandwidthTestGetStatus)"
+    },
+    {
+      "name": "sceNpUtilBandwidthTestInitStart",
+      "library": "sceNpUtil",
+      "family": "PSN",
+      "status": "working",
+      "reason": "implemented in ppu_hle_nids.cpp (sceNpUtilBandwidthTestInitStart)"
+    },
+    {
+      "name": "sceNpUtilBandwidthTestShutdown",
+      "library": "sceNpUtil",
+      "family": "PSN",
+      "status": "working",
+      "reason": "implemented in ppu_hle_nids.cpp (sceNpUtilBandwidthTestShutdown)"
+    },
+    {
+      "name": "sceNpUtilCmpNpId",
+      "library": "sceNp",
+      "family": "PSN",
+      "status": "working",
+      "reason": "implemented in ppu_hle_nids.cpp (sceNpUtilCmpNpId)"
+    },
+    {
+      "name": "cellAudioGetPortConfig",
+      "library": "cellAudio",
+      "family": "Media/Input",
+      "status": "working",
+      "reason": "implemented in ppu_hle_nids.cpp (cellAudioGetPortConfig)"
+    },
+    {
+      "name": "cellAudioInit",
+      "library": "cellAudio",
+      "family": "Media/Input",
+      "status": "working",
+      "reason": "implemented in ppu_hle_nids.cpp (cellAudioInit)"
+    },
+    {
+      "name": "cellAudioPortClose",
+      "library": "cellAudio",
+      "family": "Media/Input",
+      "status": "working",
+      "reason": "implemented in ppu_hle_nids.cpp (cellAudioPortClose)"
+    },
+    {
+      "name": "cellAudioPortOpen",
+      "library": "cellAudio",
+      "family": "Media/Input",
+      "status": "working",
+      "reason": "implemented in ppu_hle_nids.cpp (cellAudioPortOpen)"
+    },
+    {
+      "name": "cellAudioPortStart",
+      "library": "cellAudio",
+      "family": "Media/Input",
+      "status": "working",
+      "reason": "implemented in ppu_hle_nids.cpp (cellAudioPortStart)"
+    },
+    {
+      "name": "cellAudioPortStop",
+      "library": "cellAudio",
+      "family": "Media/Input",
+      "status": "working",
+      "reason": "implemented in ppu_hle_nids.cpp (cellAudioPortStop)"
+    },
+    {
+      "name": "cellAudioQuit",
+      "library": "cellAudio",
+      "family": "Media/Input",
+      "status": "working",
+      "reason": "implemented in ppu_hle_nids.cpp (cellAudioQuit)"
+    },
+    {
+      "name": "cellPadClearBuf",
+      "library": "sys_io",
+      "family": "Media/Input",
+      "status": "working",
+      "reason": "implemented in ppu_hle_nids.cpp (cellPadClearBuf)"
+    },
+    {
+      "name": "cellPadEnd",
+      "library": "sys_io",
+      "family": "Media/Input",
+      "status": "working",
+      "reason": "implemented in ppu_hle_nids.cpp (cellPadEnd)"
+    },
+    {
+      "name": "cellPadGetData",
+      "library": "sys_io",
+      "family": "Media/Input",
+      "status": "working",
+      "reason": "implemented in ppu_hle_nids.cpp (cellPadGetData)"
+    },
+    {
+      "name": "cellPadGetInfo2",
+      "library": "sys_io",
+      "family": "Media/Input",
+      "status": "working",
+      "reason": "implemented in ppu_hle_nids.cpp (cellPadGetInfo2)"
+    },
+    {
+      "name": "cellPadInit",
+      "library": "sys_io",
+      "family": "Media/Input",
+      "status": "working",
+      "reason": "implemented in ppu_hle_nids.cpp (cellPadInit)"
+    },
+    {
+      "name": "cellPadSetActDirect",
+      "library": "sys_io",
+      "family": "Media/Input",
+      "status": "working",
+      "reason": "implemented in ppu_hle_nids.cpp (cellPadSetActDirect)"
+    },
+    {
+      "name": "cellPadSetPortSetting",
+      "library": "sys_io",
+      "family": "Media/Input",
+      "status": "working",
+      "reason": "implemented in ppu_hle_nids.cpp (cellPadSetPortSetting)"
+    },
+    {
+      "name": "cellVdecClose",
+      "library": "libvdec",
+      "family": "Media/Input",
+      "status": "working",
+      "reason": "implemented in ppu_hle_nids.cpp (cellVdecClose)"
+    },
+    {
+      "name": "cellVdecDecodeAu",
+      "library": "libvdec",
+      "family": "Media/Input",
+      "status": "working",
+      "reason": "implemented in ppu_hle_nids.cpp (cellVdecDecodeAu)"
+    },
+    {
+      "name": "cellVdecEndSeq",
+      "library": "libvdec",
+      "family": "Media/Input",
+      "status": "working",
+      "reason": "implemented in ppu_hle_nids.cpp (cellVdecEndSeq)"
+    },
+    {
+      "name": "cellVdecGetPicItem",
+      "library": "libvdec",
+      "family": "Media/Input",
+      "status": "working",
+      "reason": "implemented in ppu_hle_nids.cpp (cellVdecGetPicItem)"
+    },
+    {
+      "name": "cellVdecGetPicture",
+      "library": "libvdec",
+      "family": "Media/Input",
+      "status": "working",
+      "reason": "implemented in ppu_hle_nids.cpp (cellVdecGetPicture)"
+    },
+    {
+      "name": "cellVdecOpenEx",
+      "library": "libvdec",
+      "family": "Media/Input",
+      "status": "working",
+      "reason": "implemented in ascension_hle.cpp (cellVdecOpenEx)"
+    },
+    {
+      "name": "cellVdecQueryAttrEx",
+      "library": "libvdec",
+      "family": "Media/Input",
+      "status": "working",
+      "reason": "implemented in ascension_hle.cpp (cellVdecQueryAttrEx)"
+    },
+    {
+      "name": "cellVdecStartSeq",
+      "library": "libvdec",
+      "family": "Media/Input",
+      "status": "working",
+      "reason": "implemented in ppu_hle_nids.cpp (cellVdecStartSeq)"
+    }
+  ]
+}

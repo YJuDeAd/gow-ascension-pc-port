@@ -117,6 +117,8 @@
 | `fix-fios-boot-progression` | 2026-10-17 | Complete | Fixed sys_process_is_stack address ranges, bypassed corrupt HDD cache, progressed boot through all PSARCs into IntroLoaderThread |
 | `fix-wws-job-464-and-spurs-task-sync` | 2026-10-21 | Complete | Implemented gow_unblock_wws_464_mgr & gow_unblock_spurs_tasks_3a5; unblocked 0x00464F10 & 0x003A5A94; reached 892 live frames, 998 3D draw groups (0 drops), 2455 surface binds, 634 flips |
 | `gcm-immediate-stepover-and-spurs-throttle` | 2026-10-22 | Complete | Removed GCM_PARK_GRACE_MS for ready DLs in cellGcmSys.c; throttled cellSpursCreateTask2 & armed spurs unblock; reached 4,064 frames (4.5x), 0 backlogged DLs, cellVoice init |
+| `gcm-pump-and-vblank-telemetry` | 2026-10-24 | Complete | Added timestamped logs and 5s telemetry counters (ppu_gcm_pump/tid, cellGcmTickVBlank, vblank handler, dl_head/tail, ref) |
+| `status-dashboard` | 2026-10-24 | Complete | Created tools/gen_status.py, dark/light SVGs, status.md, status_data.json, and embedded dashboard into README |
 
 ## Blockers
 
