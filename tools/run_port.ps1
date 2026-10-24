@@ -6,9 +6,15 @@ param(
     [switch]$Interactive,
     [int]$Width = 0,
     [int]$Height = 0,
-    [string]$OutLog = "build/run_port_stdout.log",
-    [string]$ErrLog = "build/run_port_stderr.log"
+    [string]$OutLog = "",
+    [string]$ErrLog = "",
+    [switch]$NoWwsHack
 )
+
+if ($NoWwsHack) {
+    $env:GOW_NO_WWS_HACK = "1"
+    Write-Host "[run_port] GOW_NO_WWS_HACK=1 enabled"
+}
 
 $ErrorActionPreference = "Stop"
 Remove-Item env:PPU_OPD_RECOVER -ErrorAction SilentlyContinue
@@ -114,9 +120,21 @@ if (!(Test-Path $exe)) {
     exit 1
 }
 
-# 4. Launch executable with timeout capture
+# 4. Configure timestamped logging
+$logDir = "build/logs"
+if (!(Test-Path $logDir)) {
+    New-Item -ItemType Directory -Path $logDir -Force | Out-Null
+}
+$timestamp = Get-Date -Format "yyyyMMdd_HHmmss"
+$tsOutLog = "$logDir/run_${timestamp}_stdout.log"
+$tsErrLog = "$logDir/run_${timestamp}_stderr.log"
+
+$targetOutLog = if (![string]::IsNullOrEmpty($OutLog)) { $OutLog } else { $tsOutLog }
+$targetErrLog = if (![string]::IsNullOrEmpty($ErrLog)) { $ErrLog } else { $tsErrLog }
+
+# 5. Launch executable with timeout capture
 Write-Host "[run_port] Launching $exe with ELF=$ElfPath (Timeout=${TimeoutSeconds}s)..."
-$proc = Start-Process -FilePath $exe -ArgumentList $ElfPath -PassThru -RedirectStandardOutput $OutLog -RedirectStandardError $ErrLog
+$proc = Start-Process -FilePath $exe -ArgumentList $ElfPath -PassThru -RedirectStandardOutput $targetOutLog -RedirectStandardError $targetErrLog
 
 if ($TimeoutSeconds -gt 0) {
     $elapsed = 0
@@ -136,4 +154,11 @@ if ($TimeoutSeconds -gt 0) {
     Write-Host "[run_port] Process exited with code: $($proc.ExitCode)"
 }
 
-Write-Host "[run_port] Execution logs saved to $OutLog and $ErrLog"
+if ($targetOutLog -ne "build/run_port_stdout.log" -and (Test-Path $targetOutLog)) {
+    Copy-Item -Path $targetOutLog -Destination "build/run_port_stdout.log" -Force
+}
+if ($targetErrLog -ne "build/run_port_stderr.log" -and (Test-Path $targetErrLog)) {
+    Copy-Item -Path $targetErrLog -Destination "build/run_port_stderr.log" -Force
+}
+
+Write-Host "[run_port] Execution logs saved to $targetOutLog and $targetErrLog"

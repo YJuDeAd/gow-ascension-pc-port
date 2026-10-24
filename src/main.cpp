@@ -12,6 +12,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <signal.h>
+#include <chrono>
 
 #ifdef _WIN32
 #include <windows.h>
@@ -197,6 +198,76 @@ static HANDLE s_hwnd_ready_event = NULL;
 static void*  s_shared_hwnd = NULL;
 static volatile LONG s_window_closed = 0;
 
+extern "C" volatile uint64_t g_vblank_ticks_count;
+extern "C" volatile uint64_t g_vblank_handler_invocations;
+extern "C" volatile uint64_t g_ppu_gcm_pump_calls_by_tid[64];
+extern "C" void gow_print_pump_callers(void);
+uint32_t vm_read32(uint64_t addr);
+
+static DWORD WINAPI gow_telemetry_5s_thread(LPVOID)
+{
+    auto start_time = std::chrono::steady_clock::now();
+    auto last_time = start_time;
+    uint64_t last_vblank_ticks = 0;
+    uint64_t last_vblank_invocations = 0;
+    uint64_t last_pump_calls[64] = {0};
+
+    while (!s_window_closed) {
+        Sleep(5000);
+        auto now = std::chrono::steady_clock::now();
+        double dt = std::chrono::duration<double>(now - last_time).count();
+        double wall_sec = std::chrono::duration<double>(now - start_time).count();
+        last_time = now;
+
+        uint64_t cur_vblank_ticks = g_vblank_ticks_count;
+        uint64_t cur_vblank_invocations = g_vblank_handler_invocations;
+        double vblank_tick_rate = (dt > 0.0) ? (double)(cur_vblank_ticks - last_vblank_ticks) / dt : 0.0;
+        double vblank_inv_rate  = (dt > 0.0) ? (double)(cur_vblank_invocations - last_vblank_invocations) / dt : 0.0;
+        last_vblank_ticks = cur_vblank_ticks;
+        last_vblank_invocations = cur_vblank_invocations;
+
+        uint32_t dl_head = 0, dl_tail = 0, cur_ref = 0;
+        if (vm_base) {
+            dl_head = vm_read32(0x009711D4u);
+            dl_tail = vm_read32(0x009711D8u);
+            uint32_t ctrl_ea = vm_read32(0x009BE004u);
+            if (ctrl_ea >= 0x10000u) {
+                cur_ref = vm_read32(ctrl_ea + 0x08);
+            }
+        }
+
+        char pump_buf[512] = {0};
+        int offset = 0;
+        offset += snprintf(pump_buf + offset, sizeof(pump_buf) - offset, "[");
+        bool first = true;
+        for (uint32_t tid = 1; tid < 64; tid++) {
+            uint64_t cur_calls = g_ppu_gcm_pump_calls_by_tid[tid];
+            uint64_t prev_calls = last_pump_calls[tid];
+            last_pump_calls[tid] = cur_calls;
+            if (cur_calls > 0 || prev_calls > 0) {
+                double rate = (dt > 0.0) ? (double)(cur_calls - prev_calls) / dt : 0.0;
+                offset += snprintf(pump_buf + offset, sizeof(pump_buf) - offset,
+                                  "%stid%u=%.1f", first ? "" : ", ", tid, rate);
+                first = false;
+            }
+        }
+        if (first) {
+            offset += snprintf(pump_buf + offset, sizeof(pump_buf) - offset, "none");
+        }
+        offset += snprintf(pump_buf + offset, sizeof(pump_buf) - offset, "]");
+
+        fprintf(stderr, "[TELEMETRY 5s] wall=%.1fs | dl_head=%u dl_tail=%u ref=%u | cellGcmTickVBlank=%.1f/s | vblank_handler=%.1f/s | ppu_gcm_pump/s: %s\n",
+                wall_sec, dl_head, dl_tail, cur_ref, vblank_tick_rate, vblank_inv_rate, pump_buf);
+        fflush(stderr);
+
+        static int s_dump_t = 0;
+        if (++s_dump_t % 2 == 0) {
+            gow_print_pump_callers();
+        }
+    }
+    return 0;
+}
+
 static DWORD WINAPI gow_watchdog_thread(LPVOID)
 {
     while (!s_window_closed) {
@@ -232,8 +303,8 @@ static DWORD WINAPI gow_watchdog_thread(LPVOID)
                     tid, tname[0] ? tname : "unnamed", lr, nid, name ? name : "none", blk_str);
         }
 
-        fprintf(stderr, "=== [WATCHDOG T=3s] SPURS Workloads (WID 0..15) ===\n");
-        for (uint32_t wid = 0; wid < 16; wid++) {
+        fprintf(stderr, "=== [WATCHDOG T=3s] SPURS Workloads (WID 0..31) ===\n");
+        for (uint32_t wid = 0; wid < 32; wid++) {
             uint64_t disp = g_spurs_wid_diags[wid].dispatched_count;
             uint64_t started = g_spurs_wid_diags[wid].started_count;
             if (disp == 0 && started == 0) continue;
@@ -490,6 +561,7 @@ int main(int argc, char** argv)
     CreateThread(NULL, 1024 * 1024, window_message_thread, NULL, 0, NULL);
     CreateThread(NULL, 4u * 1024 * 1024, rsx_vblank_thread, NULL, 0, NULL);
     CreateThread(NULL, 1024 * 1024, gow_watchdog_thread, NULL, 0, NULL);
+    CreateThread(NULL, 1024 * 1024, gow_telemetry_5s_thread, NULL, 0, NULL);
 #endif
 
     printf("\n[boot] Dispatching entry OPD 0x%08X (stack top 0x%08X)...\n\n", entry, STACK_TOP);
