@@ -1,0 +1,179 @@
+From 53c42234b8781a9cf2d91187b7460d32dfd7e053 Mon Sep 17 00:00:00 2001
+From: YJuDeAd <robinrashi@gmail.com>
+Date: Sun, 25 Oct 2026 04:50:33 +0530
+Subject: [PATCH 38/47] Apply ps3recomp-0038-inline-guest-stores.patch
+
+---
+ runtime/ppu/ppu_hle.cpp     |  1 +
+ runtime/ppu/ppu_loader.cpp  |  8 +++++
+ runtime/ppu/ppu_sysprx.cpp  |  1 +
+ runtime/spu/spu_coherency.c |  8 +++--
+ tools/ppu_lifter.py         | 70 +++++++++++++++++++++++++++++++++++++
+ 5 files changed, 86 insertions(+), 2 deletions(-)
+
+diff --git a/runtime/ppu/ppu_hle.cpp b/runtime/ppu/ppu_hle.cpp
+index bcd740b..9060243 100644
+--- a/runtime/ppu/ppu_hle.cpp
++++ b/runtime/ppu/ppu_hle.cpp
+@@ -18,6 +18,7 @@
+  */
+ #define PPU_NO_INLINE_LOADS   /* declares its own out-of-line vm_read* below */
+ #include <chrono>
++#define PPU_NO_INLINE_STORES  /* ...and the stores */
+ #include "ppu_recomp.h"   /* ppu_context */
+ #include "ps3emu/nid.h"   /* ps3_nid_table, ps3_nid_entry */
+ #include "ps3emu/milestone.h" /* ps3_msf -- boot milestone log */
+diff --git a/runtime/ppu/ppu_loader.cpp b/runtime/ppu/ppu_loader.cpp
+index 3a569bc..421ee57 100644
+--- a/runtime/ppu/ppu_loader.cpp
++++ b/runtime/ppu/ppu_loader.cpp
+@@ -33,6 +33,7 @@
+ 
+ #include "ppu_tls.h"   /* PPU_THREAD_LOCAL, without a second ppu_context */
+ #define PPU_NO_INLINE_LOADS   /* this file defines the out-of-line accessors */
++#define PPU_NO_INLINE_STORES  /* ...and the stores */
+ #include "ppu_recomp.h"
+ #include "ps3emu/ps3_ftrace.h"   /* PS3_FTRACE timeline */
+ #include "ps3emu/milestone.h"   /* ps3_ms / ps3_msf -- boot milestone log */     /* ppu_context, func decls, ppu_recomp_register */
+@@ -1604,6 +1605,7 @@ static inline void ppu_null_read_report(uint32_t a, int width, void* ra)
+ /* ppu_recomp.h's inline loads (vm_read*_inl) skip the out-of-line accessors'
+  * probes, so they run only while no read diagnostic is armed. */
+ extern "C" int vm_inline_ok = 0;
++extern "C" int vm_store_inline_ok = 0;
+ static struct VmInlineInit {
+     VmInlineInit() {
+         static const char* const vars[] = {
+@@ -1612,6 +1614,12 @@ static struct VmInlineInit {
+         int d = 0;
+         for (int i = 0; vars[i]; i++) if (getenv(vars[i])) d = 1;
+         vm_inline_ok = !d;
++        /* ...and the inline stores (vm_write*_inl) while no write one is. */
++        static const char* const wvars[] = {
++            "PPU_WWATCH", "PPU_WVAL", "PPU_WW_GUARD", "PT", "PS3_NULL_SWEEP", "SPU_ATOM_EA", 0 };
++        int w = 0;
++        for (int i = 0; wvars[i]; i++) if (getenv(wvars[i])) w = 1;
++        vm_store_inline_ok = !w;
+     }
+ } s_vm_inline_init;
+ 
+diff --git a/runtime/ppu/ppu_sysprx.cpp b/runtime/ppu/ppu_sysprx.cpp
+index 1cb7518..f6464e7 100644
+--- a/runtime/ppu/ppu_sysprx.cpp
++++ b/runtime/ppu/ppu_sysprx.cpp
+@@ -11,6 +11,7 @@
+  * without hand-written NID literals.
+  */
+ #define PPU_NO_INLINE_LOADS   /* declares its own out-of-line vm_read* below */
++#define PPU_NO_INLINE_STORES  /* ...and the stores */
+ #include "ppu_recomp.h"     /* ppu_context */
+ #include "ps3emu/nid.h"     /* ps3_compute_nid */
+ #include <stdint.h>
+diff --git a/runtime/spu/spu_coherency.c b/runtime/spu/spu_coherency.c
+index bc7017d..a0deec2 100644
+--- a/runtime/spu/spu_coherency.c
++++ b/runtime/spu/spu_coherency.c
+@@ -73,14 +73,18 @@ void spu_lockline_unlock(void) { atomic_flag_clear_explicit(&g_lockline, memory_
+ #define SPU_COH_LINES       (1u << (32 - SPU_COH_LINE_SHIFT))   /* 2^25 lines */
+ #define SPU_COH_BITMAP_SZ   (SPU_COH_LINES / 8)                 /* 4 MiB */
+ 
+-static unsigned char s_coh_bitmap[SPU_COH_BITMAP_SZ];
++/* Exported (with g_spu_coh_armed) for the inline PPU stores in ppu_recomp.h,
++ * which test a line's bit themselves before taking the out-of-line path. */
++unsigned char g_spu_coh_bitmap[SPU_COH_BITMAP_SZ];
++#define s_coh_bitmap g_spu_coh_bitmap
+ 
+ /* Zero until the first GETLLAR anywhere. Keeps the PPU fast path off the
+  * bitmap entirely for a title that runs no SPU code, and keeps every existing
+  * test that stores through vm_write* paying one compare against a hot global.
+  * Written once, under the lock; read unlocked, where a stale zero costs at most
+  * one missed event on the very first reservation of the run. */
+-static int s_coh_armed;
++int g_spu_coh_armed;
++#define s_coh_armed g_spu_coh_armed
+ 
+ /* Every live virtual context may retain a reservation between scheduling
+  * quanta; physical SPU count is not a bound on this set. All access is under
+diff --git a/tools/ppu_lifter.py b/tools/ppu_lifter.py
+index 9d9df71..e750855 100644
+--- a/tools/ppu_lifter.py
++++ b/tools/ppu_lifter.py
+@@ -215,6 +215,76 @@ static inline uint64_t vm_read64_inl(uint64_t a)
+ #define vm_read64(a) vm_read64_inl(a)
+ #endif
+ 
++/* Inline guest-store fast paths, as for the loads. The out-of-line stores
++ * carry the write diagnostics (PPU_WWATCH, PPU_WVAL, ...), the null page and
++ * the raw-SPU windows, and the SPU coherency rule: a store into a line an SPU
++ * holds a reservation on takes the lock-line lock and breaks it. The runtime
++ * sets vm_store_inline_ok while no write diagnostic is armed; a line marked
++ * reserved (the bitmap spu_coh_is_reserved reads) still goes out of line.
++ * God of War: Ascension's main thread spent ~10% of its time in the calls. */
++#ifdef __cplusplus
++extern "C" {
++#endif
++extern int           vm_store_inline_ok;
++extern int           g_spu_coh_armed;
++extern unsigned char g_spu_coh_bitmap[];
++extern uint32_t      g_barrier_sync_watch;
++#ifdef __cplusplus
++}
++#endif
++static inline int vm_st_inl_ok(uint32_t ea, uint32_t n)
++{
++    if (!__builtin_expect(vm_store_inline_ok, 1) || g_barrier_sync_watch || !vm_inl_ok(ea, n)) return 0;
++    if (g_spu_coh_armed) {
++        const uint32_t l0 = ea >> 7, l1 = (ea + n - 1) >> 7;   /* 128-byte lines */
++        if (((g_spu_coh_bitmap[l0 >> 3] >> (l0 & 7)) | (g_spu_coh_bitmap[l1 >> 3] >> (l1 & 7))) & 1u)
++            return 0;
++    }
++    return 1;
++}
++static inline void vm_write8_inl(uint64_t a, uint8_t v)
++{
++    const uint32_t ea = (uint32_t)a;
++    if (vm_st_inl_ok(ea, 1)) { __atomic_store_n(vm_base + ea, v, __ATOMIC_RELAXED); return; }
++    vm_write8(a, v);
++}
++static inline void vm_write16_inl(uint64_t a, uint16_t v)
++{
++    const uint32_t ea = (uint32_t)a;
++    if (vm_st_inl_ok(ea, 2)) {   /* aligned: single-copy atomic, as on Cell */
++        v = __builtin_bswap16(v);
++        if (!(ea & 1u)) __atomic_store_n((uint16_t*)(vm_base + ea), v, __ATOMIC_RELAXED);
++        else memcpy(vm_base + ea, &v, 2);
++        return; }
++    vm_write16(a, v);
++}
++static inline void vm_write32_inl(uint64_t a, uint32_t v)
++{
++    const uint32_t ea = (uint32_t)a;
++    if (vm_st_inl_ok(ea, 4)) {
++        v = __builtin_bswap32(v);
++        if (!(ea & 3u)) __atomic_store_n((uint32_t*)(vm_base + ea), v, __ATOMIC_RELAXED);
++        else memcpy(vm_base + ea, &v, 4);
++        return; }
++    vm_write32(a, v);
++}
++static inline void vm_write64_inl(uint64_t a, uint64_t v)
++{
++    const uint32_t ea = (uint32_t)a;
++    if (vm_st_inl_ok(ea, 8)) {
++        v = __builtin_bswap64(v);
++        if (!(ea & 7u)) __atomic_store_n((uint64_t*)(vm_base + ea), v, __ATOMIC_RELAXED);
++        else memcpy(vm_base + ea, &v, 8);
++        return; }
++    vm_write64(a, v);
++}
++#ifndef PPU_NO_INLINE_STORES
++#define vm_write8(a, v)  vm_write8_inl(a, v)
++#define vm_write16(a, v) vm_write16_inl(a, v)
++#define vm_write32(a, v) vm_write32_inl(a, v)
++#define vm_write64(a, v) vm_write64_inl(a, v)
++#endif
++
+ /* Syscall handler */
+ #ifdef __cplusplus
+ extern "C"
+-- 
+2.48.1.windows.1
+

@@ -93,6 +93,7 @@ venv/
 
 # ---- Editor, OS, agent local state ----
 scratch/
+tools/scratch/
 .vs/
 .vscode/
 .idea/

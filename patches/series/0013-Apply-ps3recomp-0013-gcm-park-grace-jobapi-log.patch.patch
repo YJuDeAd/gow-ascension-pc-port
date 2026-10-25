@@ -1,0 +1,104 @@
+From 169b54413084f7e5d28bc7903c6b0f8a380076cb Mon Sep 17 00:00:00 2001
+From: YJuDeAd <robinrashi@gmail.com>
+Date: Sun, 25 Oct 2026 04:35:16 +0530
+Subject: [PATCH 13/47] Apply ps3recomp-0013-gcm-park-grace-jobapi-log.patch
+
+---
+ libs/video/cellGcmSys.c  | 18 +++++++++++++++++-
+ runtime/spu/spu_interp.c | 23 +++++++++++++++++++++--
+ 2 files changed, 38 insertions(+), 3 deletions(-)
+
+diff --git a/libs/video/cellGcmSys.c b/libs/video/cellGcmSys.c
+index 78e9924..0ea2ae1 100644
+--- a/libs/video/cellGcmSys.c
++++ b/libs/video/cellGcmSys.c
+@@ -2333,7 +2333,11 @@ static void gcm_rsx_process_fifo_unlocked(void)
+                         const u32 val = (v >> 24) == 1u ? 0xFFFFu : 0u;
+                         const u64 ts = gcm_report_timestamp();
+                         const int main_mem = s_report_dma == 0xFEED0001u || s_report_dma == 0xBAD68000u;
+-                        { static int rn = 0; if (PS3_LOG_FIRST(rn, 6)) printf("[GET_REPORT] type=%u off=0x%X dma=0x%08X%c", v >> 24, off, s_report_dma, 10); }
++                        { /* GCM_REPORTLOG=<n>: the first n reports (default 6), with the time. */
++                          static long rn = 0, rmax = -1;
++                          if (rmax < 0) { const char* e = getenv("GCM_REPORTLOG"); rmax = e ? atol(e) : 6; }
++                          if (rn++ < rmax) printf("[GET_REPORT] t=%llu type=%u off=0x%X dma=0x%08X%c",
++                                                  (unsigned long long)ps3_ms_now(), v >> 24, off, s_report_dma, 10); }
+                         if (main_mem) {
+                             /* CellGcmReportData, big-endian: u64 timer, u32 value, u32 padding. */
+                             const u32 rea = gcm_io2ea(off);
+@@ -2412,6 +2416,7 @@ static void gcm_rsx_process_fifo_unlocked(void)
+           }
+       } else burned = 0; }
+ 
++<<<<<<< ours
+     /* A drain stopped on a semaphore acquire (GCM_SEMA_ACQUIRE) holds `get`
+      * on purpose: that is the wait, not a stuck walker, and the acquire's own
+      * bound (GCM_SEMA_ACQUIRE_MS) is what ends it. So is a self-JUMP park,
+@@ -2425,6 +2430,17 @@ static void gcm_rsx_process_fifo_unlocked(void)
+     { static u32 last = 0xFFFFFFFFu; static int stuck = 0;
+       if (s_sema_blocked_pass || s_park_pass) {
+           stuck = 0; last = s_fifo_getoff; s_sema_blocked_pass = 0; s_park_pass = 0; }
++=======
++    /* A pass that stopped on a self-JUMP park is not stuck: the park has its
++     * own grace before it gives up (gcm_park_grace_ms, GCM_PARK_WAIT_MS), and
++     * this rule -- eight passes, some 30 ms -- overrode it. God of War:
++     * Ascension parks the RSX while its SPU jobs fill the next segment and
++     * patches the park afterwards; resyncing to put dropped those segments,
++     * the GPU reports in them were never written, the RsxSync workload's
++     * barrier never passed, and the frames stopped after the fifth. */
++    { static u32 last = 0xFFFFFFFFu; static int stuck = 0;
++      if (why && strcmp(why, "parked") == 0) { stuck = 0; last = s_fifo_getoff; }
++>>>>>>> theirs
+       else if (s_fifo_getoff == last && s_fifo_getoff != put) {
+           if (++stuck >= 8) { gcm_fifo_dump_around(s_fifo_getoff);
+                              gcm_fifo_resync_why("stuck-get", &s_fifo_getoff, put); stuck = 0; }
+diff --git a/runtime/spu/spu_interp.c b/runtime/spu/spu_interp.c
+index fdef652..7305c73 100644
+--- a/runtime/spu/spu_interp.c
++++ b/runtime/spu/spu_interp.c
+@@ -107,6 +107,25 @@ static void spu_decode1(uint32_t insn, uint32_t pc, spu_ins* d) {
+ #define I   (d.imm)
+ #define PREF(r) ((r)._u32[0])
+ 
++/* SPU_JOBAPI_LOG=1: calls from interpreted job code (LS >= 0x4000) into the
++ * resident policy module below it -- a Wws job's job-API calls -- with the
++ * job module (the word at LS 0x4000), the workload and the argument
++ * registers (first 4000). */
++static void spu_jobapi_log(spu_context* ctx, uint32_t pc, uint32_t tgt)
++{
++    static int s_on = -1; if (s_on < 0) s_on = getenv("SPU_JOBAPI_LOG") ? 1 : 0;
++    if (!s_on || pc < 0x4000u || tgt >= 0x4000u || !ctx->policy_mode) return;
++    static int s_wid = -2; if (s_wid == -2) { const char* w = getenv("SPU_JOBAPI_WID"); s_wid = w ? atoi(w) : -1; }
++    if (s_wid >= 0 && ctx->ls[0x1DF] != (unsigned)s_wid) return;
++    static long n; if (n++ >= 4000) return;
++    const uint8_t* m = ctx->ls + 0x4000;
++    fprintf(stderr, "[jobapi] wid=%u spu=%u mod=%02X%02X%02X%02X pc=0x%05X -> 0x%05X"
++                    " r3=%08X %08X r4=%08X %08X r5=%08X r6=%08X\n",
++            ctx->ls[0x1DF], ctx->ls[0x1CB], m[0], m[1], m[2], m[3], pc, tgt,
++            ctx->gpr[3]._u32[0], ctx->gpr[3]._u32[1], ctx->gpr[4]._u32[0], ctx->gpr[4]._u32[1],
++            ctx->gpr[5]._u32[0], ctx->gpr[6]._u32[0]);
++}
++
+ static int spu_step(spu_context* ctx) {
+     uint32_t pc = ctx->pc, m = pc & SPU_LS_MASK;
+     const uint8_t* p = ctx->ls;
+@@ -303,7 +322,7 @@ static int spu_step(spu_context* ctx) {
+     case SPU_dftsv:  DST = spu_dftsv(A, (int32_t)(d.rb & 0x7F)); break;   /* I7 sits in the rb field */
+     /* control flow */
+     case SPU_br: case SPU_bra: next = d.tgt; break;
+-    case SPU_brsl: case SPU_brasl: DST = spu_link((pc + 4) & 0x3FFFC); next = d.tgt;
++    case SPU_brsl: case SPU_brasl: spu_jobapi_log(ctx, pc, d.tgt); DST = spu_link((pc + 4) & 0x3FFFC); next = d.tgt;
+         { extern void spu_trace_call(uint32_t,uint32_t); spu_trace_call(pc, d.tgt); } break;
+     case SPU_brz:  if (PREF(DST) == 0) next = d.tgt; break;
+     case SPU_brnz: if (PREF(DST) != 0) next = d.tgt; break;
+@@ -318,7 +337,7 @@ static int spu_step(spu_context* ctx) {
+     } while (0)
+     case SPU_bi:   next = PREF(A) & 0x3FFFC; SPU_IED_BITS(); break;
+     case SPU_bisl: { uint32_t tg = PREF(A) & 0x3FFFC;   /* read ra BEFORE the link write: rt may alias ra */
+-        DST = spu_link((pc + 4) & 0x3FFFC); next = tg; break; }
++        spu_jobapi_log(ctx, pc, tg); DST = spu_link((pc + 4) & 0x3FFFC); next = tg; break; }
+     case SPU_bisled: { uint32_t tg = PREF(A) & 0x3FFFC;   /* branch when an enabled event is pending */
+         DST = spu_link((pc + 4) & 0x3FFFC);
+         if ((__atomic_load_n(&ctx->event_status, __ATOMIC_ACQUIRE) & ctx->event_mask) != 0) {
+-- 
+2.48.1.windows.1
+

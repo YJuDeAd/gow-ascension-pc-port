@@ -1,0 +1,50 @@
+From b65c9523ee5a8d23ecc6bafc3ee3da7dfa37705b Mon Sep 17 00:00:00 2001
+From: YJuDeAd <robinrashi@gmail.com>
+Date: Sun, 25 Oct 2026 04:37:16 +0530
+Subject: [PATCH 18/47] Apply ps3recomp-0018-null-read-per-function.patch
+
+---
+ runtime/ppu/ppu_loader.cpp | 26 +++++++++++++++++++++-----
+ 1 file changed, 21 insertions(+), 5 deletions(-)
+
+diff --git a/runtime/ppu/ppu_loader.cpp b/runtime/ppu/ppu_loader.cpp
+index ee96672..efe4947 100644
+--- a/runtime/ppu/ppu_loader.cpp
++++ b/runtime/ppu/ppu_loader.cpp
+@@ -1544,12 +1544,28 @@ static inline void ppu_null_read_report(uint32_t a, int width, void* ra)
+     static int s_on = -1;
+     if (s_on < 0) { const char* e = getenv("PS3_NULL_READ"); s_on = (e && *e == '0') ? 0 : 1; }
+     if (!s_on) return;
+-    static long s_n = 0;
+-    if (!PS3_LOG_FIRST(s_n, 16)) return;
++    /* Capped per reading function, not overall: one reader that hits NULL
++     * in a loop at boot (God of War: Ascension's func_0037DE70) used the
++     * whole budget, and a later, different one -- the spin that stops the
++     * run -- was never named, nor its stack dumped. */
++    enum { NR_FN = 8, NR_PER = 4 };
++    static uint32_t s_fn[NR_FN]; static long s_cnt[NR_FN]; static int s_nfn = 0;
+     const uint32_t fn = ppu_prof_resolve_host(ra);
+-    fprintf(stderr, "[null-read] guest read%d from 0x%08X (NULL+0x%X) by guest-fn=0x%08X%s" "\n",
+-            width * 8, a, a, fn, s_n == 16 ? "  [further NULL reads not reported]" : "");
+-    /* PS3_NULL_READ_STACK=1: guest-fn is the nearest host symbol, which can
++    int fi = 0;
++    while (fi < s_nfn && s_fn[fi] != fn) fi++;
++    if (fi == s_nfn) { if (s_nfn == NR_FN) return; s_fn[fi] = fn; s_nfn++; }
++    long s_n = ++s_cnt[fi];
++    if (s_n > NR_PER) return;
++    /* A few registers too: in a list walk they hold the head and the node
++     * whose link read as 0, without PS3_NULL_READ_STACK's full dump. */
++    const ppu_context* c = g_active_ctx;
++    fprintf(stderr, "[null-read] guest read%d from 0x%08X (NULL+0x%X) by guest-fn=0x%08X"
++                    " r3=%08X r4=%08X r5=%08X r9=%08X r29=%08X r31=%08X lr=%08X%s" "\n",
++            width * 8, a, a, fn,
++            c ? (uint32_t)c->gpr[3] : 0u, c ? (uint32_t)c->gpr[4] : 0u, c ? (uint32_t)c->gpr[5] : 0u,
++            c ? (uint32_t)c->gpr[9] : 0u, c ? (uint32_t)c->gpr[29] : 0u, c ? (uint32_t)c->gpr[31] : 0u,
++            c ? (uint32_t)c->lr : 0u,
++            s_n == NR_PER ? "  [further NULL reads by this function not reported]" : "");    /* PS3_NULL_READ_STACK=1: guest-fn is the nearest host symbol, which can
+      * name a neighbour; the guest call chain names the reader. Once for each
+      * of the first four distinct guest-fn values. */
+     { static int s_stk = -1;
+-- 
+2.48.1.windows.1
+

@@ -1,0 +1,173 @@
+From e01f6672355951349a3718e139679378d7eb991e Mon Sep 17 00:00:00 2001
+From: YJuDeAd <robinrashi@gmail.com>
+Date: Sun, 25 Oct 2026 04:51:46 +0530
+Subject: [PATCH 40/47] Apply
+ ps3recomp-0040-upload-reserve-capture-draws-merge-optin.patch
+
+---
+ libs/video/rsx_live_draw.c | 39 ++++++++++++++++++++++++++++++++++++--
+ tools/lift_jobmods.py      |  2 +-
+ tools/spu_lifter.py        | 22 +++++++++++++++++----
+ 3 files changed, 56 insertions(+), 7 deletions(-)
+
+diff --git a/libs/video/rsx_live_draw.c b/libs/video/rsx_live_draw.c
+index f158891..564fff8 100644
+--- a/libs/video/rsx_live_draw.c
++++ b/libs/video/rsx_live_draw.c
+@@ -474,7 +474,16 @@ static u32   g_ld_cap_nkeys = 0;
+ static void  ld_capture_finish(void);
+ /* This title's menu presents irregularly, so a capture ends after a fixed
+  * number of draws (about three menu frames), not at the next present. */
+-#define LD_CAPTURE_DRAWS 1200u
++/* Draws a capture records before it stops (LD_CAPTURE_DRAWS=<n> overrides):
++ * 1200 covers a menu frame, but God of War: Ascension's level spends that on
++ * its depth prepass and shadow mask before any colour or post pass. */
++static u32 ld_capture_draws(void)
++{
++    static u32 n = 0;
++    if (!n) { const char* e = getenv("LD_CAPTURE_DRAWS"); n = e && atoi(e) > 0 ? (u32)atoi(e) : 1200u; }
++    return n;
++}
++#define LD_CAPTURE_DRAWS ld_capture_draws()
+ static u64 g_ld_flip_consumed = 0;
+ static u32 g_ld_last_requested_buffer = UINT32_MAX;
+ static u32 g_ld_last_consumed_buffer = UINT32_MAX;
+@@ -1070,6 +1079,7 @@ typedef enum {
+     LD_FLUSH_READBACK,
+     LD_FLUSH_PIXEL_CONSTANT_RING,
+     LD_FLUSH_DESCRIPTOR_RING,
++    LD_FLUSH_UPLOAD_RING,
+     LD_FLUSH_SHUTDOWN,
+     LD_FLUSH_REASON_COUNT
+ } ld_flush_reason;
+@@ -2063,9 +2073,32 @@ static void decode_texel(u32 base_fmt, const u8* p, u32 remap, u8 d[4])
+ 
+ typedef struct { u32 w, h; const u8* data; u32 row_bytes, rows; } tex_level_t;
+ 
++/* Make room in the upload ring for `total` bytes of texel rows (each level's
++ * 512-byte alignment included), flushing the recorded work first when they
++ * do not fit; 0 if they never can. The texture paths used to stop copying
++ * mid-texture when the ring ran out and still hand back the resource, its
++ * remaining mips zero and its hash recorded, so it was never decoded again:
++ * God of War: Ascension's level loads its largest textures (Kratos' 2048x4096
++ * albedo and normals) together and drew him without his tattoo and scars. */
++static int ld_upload_reserve(u64 total)
++{
++    if (total > UPLOAD_SIZE) return 0;
++    if ((((u64)g.upload_used + 511u) & ~(u64)511u) + total > UPLOAD_SIZE)
++        ld_flush(LD_FLUSH_UPLOAD_RING);
++    return 1;
++}
++static u64 ld_levels_upload_bytes(const tex_level_t* lv, u32 n)
++{
++    u64 total = 0;
++    for (u32 m = 0; m < n; m++)
++        total += 511u + (u64)((lv[m].row_bytes + 255) & ~255u) * lv[m].rows;
++    return total;
++}
++
+ static ID3D12Resource* create_texture_mipped(DXGI_FORMAT fmt, const tex_level_t* lv, u32 n)
+ {
+     if (n == 0) return NULL;
++    if (!ld_upload_reserve(ld_levels_upload_bytes(lv, n))) return NULL;
+     D3D12_HEAP_PROPERTIES hp = {0}; hp.Type = D3D12_HEAP_TYPE_DEFAULT;
+     D3D12_RESOURCE_DESC rd = {0};
+     rd.Dimension = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
+@@ -2079,7 +2112,7 @@ static ID3D12Resource* create_texture_mipped(DXGI_FORMAT fmt, const tex_level_t*
+     for (u32 m = 0; m < n; m++) {
+         const u32 pitch = (lv[m].row_bytes + 255) & ~255u;
+         const u32 start = (g.upload_used + 511) & ~511u;
+-        if ((u64)start + (u64)pitch * lv[m].rows > UPLOAD_SIZE) break;
++        if ((u64)start + (u64)pitch * lv[m].rows > UPLOAD_SIZE) { tex->lpVtbl->Release(tex); return NULL; }
+         for (u32 y = 0; y < lv[m].rows; y++)
+             memcpy(g.upload_mapped + start + (size_t)y * pitch,
+                    lv[m].data + (size_t)y * lv[m].row_bytes, lv[m].row_bytes);
+@@ -2116,6 +2149,7 @@ static ID3D12Resource* create_texture_cube(
+     DXGI_FORMAT fmt, const tex_level_t* lv, u32 n_mips)
+ {
+     if (!n_mips) return NULL;
++    if (!ld_upload_reserve(ld_levels_upload_bytes(lv, 6 * n_mips))) return NULL;
+     D3D12_HEAP_PROPERTIES hp = {0}; hp.Type = D3D12_HEAP_TYPE_DEFAULT;
+     D3D12_RESOURCE_DESC rd = {0};
+     rd.Dimension = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
+@@ -2412,6 +2446,7 @@ static ID3D12Resource* decode_guest_volume(const rsx_dsp_texture* t, u32 remap)
+     rd.MipLevels = 1; rd.Format = fmt; rd.SampleDesc.Count = 1;
+     ID3D12Resource* tex = NULL;
+     const u32 upitch = (row + 255u) & ~255u;
++    ld_upload_reserve(511u + (u64)upitch * rows);
+     const u32 start = (g.upload_used + 511u) & ~511u;
+     if ((u64)start + (u64)upitch * rows > UPLOAD_SIZE ||
+         FAILED(g.dev->lpVtbl->CreateCommittedResource(g.dev, &hp, D3D12_HEAP_FLAG_NONE, &rd,
+diff --git a/tools/lift_jobmods.py b/tools/lift_jobmods.py
+index cfa041d..0e5fd12 100644
+--- a/tools/lift_jobmods.py
++++ b/tools/lift_jobmods.py
+@@ -182,7 +182,7 @@ def main():
+                "--source-name", "spu_recomp.c", "--header-name", "spu_recomp.h"]
+         if name in CODE_END:
+             cmd += ["--code-end", hex(CODE_END[name])]
+-        if args.merge_chunks:
++        if args.merge_chunks or os.environ.get("LIFT_JOBMODS_MERGE"):
+             cmd += ["--merge-chunks"]
+         # Only offer addresses that fall inside THIS module's image.
+         inside = [a for a in EXTRA_FUNCS + per_module.get(name, [])
+diff --git a/tools/spu_lifter.py b/tools/spu_lifter.py
+index a2fc14d..77a3efe 100644
+--- a/tools/spu_lifter.py
++++ b/tools/spu_lifter.py
+@@ -973,7 +973,7 @@ class SPULifter:
+             # instead (same halt path the lifter emits for a `stop` instruction).
+             if tgt == addr:
+                 return "ctx->status = SPU_STATUS_STOPPED_BY_HALT; return;"
+-            return self._uncond_branch(tgt, func)
++            return self._uncond_branch(tgt, func, addr)
+         if mn in ("brsl", "brasl"):
+             # The disassembler drops the link register from brsl operands, so
+             # recover it from the raw encoding (rt = bits 25-31 = raw & 0x7F).
+@@ -1018,7 +1018,7 @@ class SPULifter:
+                 return (f'/* TODO spu: {mn} {insn.operands} */ '
+                         f'spu_unsupported(0x{insn.addr:X}, "{mn}");')
+             if func.start_addr <= tgt < func.end_addr:
+-                return f"if ({cond}) goto loc_{tgt:08X};"
++                return f"if ({cond}) {{ {self._irq_poll(tgt, addr)}goto loc_{tgt:08X}; }}"
+             self.branch_targets.add(tgt)
+             # Cross-function conditional branch = conditional tail: hand the
+             # target to the trampoline and unwind (enclosing SPU_DRAIN re-enters).
+@@ -1126,11 +1126,24 @@ class SPULifter:
+         }
+         return table.get(mn, f"{word} != 0")
+ 
+-    def _uncond_branch(self, tgt, func: LiftedFunction) -> str:
++    def _irq_poll(self, tgt: int, addr) -> str:
++        """Under --merge-chunks, a loop's back edge to a chunk start leaves by
++        the trampoline when an SPU interrupt is pending. Interrupts are only
++        taken between trampoline steps, and a chunk-per-function lift had a
++        step on every back edge; a merged loop waiting for state its interrupt
++        handler writes would otherwise spin forever."""
++        if (not getattr(self, "merge_chunks", False) or addr is None or tgt > addr
++                or tgt not in getattr(self, "func_starts", set())):
++            return ""
++        return (f"if (ctx->int_enable && (ctx->event_status & ctx->event_mask)) {{ "
++                f"ctx->pc = {self._pa(tgt)}; g_spu_trampoline_fn = {self.prefix}spu_func_{tgt:08X}; return; }} ")
++
++    def _uncond_branch(self, tgt, func: LiftedFunction, addr=None) -> str:
+         if tgt is None:
+             return "/* TODO spu: unresolved branch */;"
+         if func.start_addr <= tgt < func.end_addr:
+-            return f"goto loc_{tgt:08X};"
++            poll = self._irq_poll(tgt, addr)
++            return f"{{ {poll}goto loc_{tgt:08X}; }}" if poll else f"goto loc_{tgt:08X};"
+         self.branch_targets.add(tgt)
+         # Cross-function unconditional tail: hand the target to the trampoline
+         # and unwind so the enclosing SPU_DRAIN re-enters (no host-stack growth).
+@@ -1427,6 +1440,7 @@ def main() -> None:
+               f"{', '.join(f'0x{a:X}' for a in sorted(lifter.link_return))}")
+     lifter.func_starts = {s for s, e in bounds}  # for fall-through tail-call chaining
+     groups = {}
++    lifter.merge_chunks = bool(args.merge_chunks)
+     if args.merge_chunks:
+         seeds = {base}
+         if args.extra_funcs:
+-- 
+2.48.1.windows.1
+

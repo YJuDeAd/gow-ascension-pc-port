@@ -1,0 +1,77 @@
+From 723571f8414072de6c2f83d50b0ea585cc167ed0 Mon Sep 17 00:00:00 2001
+From: YJuDeAd <robinrashi@gmail.com>
+Date: Sun, 25 Oct 2026 04:34:53 +0530
+Subject: [PATCH 10/47] Apply ps3recomp-0010-macos-window-frame-dump.patch
+
+---
+ libs/video/rsx_metal_backend.m  |  7 +++++++
+ runtime/ppu/tests/boot_main.cpp | 28 ++++++++++++++++++++++++++++
+ 2 files changed, 35 insertions(+)
+
+diff --git a/libs/video/rsx_metal_backend.m b/libs/video/rsx_metal_backend.m
+index 5b20d8a..d9a3375 100644
+--- a/libs/video/rsx_metal_backend.m
++++ b/libs/video/rsx_metal_backend.m
+@@ -3700,6 +3700,13 @@ static void eng_dump_frame(id<MTLTexture> src)
+     }
+     [src getBytes:rgba bytesPerRow:w * 4
+       fromRegion:MTLRegionMake2D(0, 0, w, h) mipmapLevel:0];
++    /* A "%u" in the path takes the frame number, so a run keeps a sequence
++     * instead of overwriting one file. */
++    char numbered[1024];
++    if (strstr(path, "%u")) {
++        snprintf(numbered, sizeof numbered, path, frame);
++        path = numbered;
++    }
+     FILE* f = fopen(path, "wb");
+     if (f) {
+         fprintf(f, "P6\n%zu %zu\n255\n", w, h);
+diff --git a/runtime/ppu/tests/boot_main.cpp b/runtime/ppu/tests/boot_main.cpp
+index a55afb0..d977a9a 100644
+--- a/runtime/ppu/tests/boot_main.cpp
++++ b/runtime/ppu/tests/boot_main.cpp
+@@ -70,6 +70,9 @@ void     ps3_load_prx_modules(void) {}
+ #include <string.h>
+ #include <stdlib.h>
+ #include <signal.h>
++#ifdef __APPLE__
++#include <CoreFoundation/CoreFoundation.h>   /* CFRunLoopRunInMode: main() serves AppKit */
++#endif
+ 
+ #ifdef _WIN32
+ #include <windows.h>
+@@ -1241,6 +1244,31 @@ int main(int argc, char** argv)
+     printf("\n[boot] dispatching entry OPD 0x%08X (stack top 0x%08X)\n\n", entry, stack_top);
+ #ifdef _WIN32
+     fprintf(stderr, "[boot] MAIN guest thread tid=%lu\n", (unsigned long)GetCurrentThreadId());
++#endif
++#ifdef __APPLE__
++    /* AppKit only serves a window from the main thread's run loop, and the
++     * Metal backend reaches it with dispatch_sync onto the main queue (window
++     * creation, every event pump). With the guest running on the main thread
++     * nothing ever drained that queue: the vblank ticker blocked in its first
++     * pump and the title stopped at its first flip. Run the guest on a thread
++     * of its own, with a main-thread-sized stack, and keep the main thread in
++     * the run loop. */
++    {
++        static uint32_t s_entry, s_stack_top;
++        static volatile int s_rc = -1;
++        s_entry = entry; s_stack_top = stack_top;
++        struct GuestMain {
++            static DWORD WINAPI run(LPVOID) {
++                int rc = ppu_run(s_entry, s_stack_top);
++                printf("\n[boot] ppu_run returned %d (entry function unwound)\n", rc);
++                s_rc = g_sys_process_exit_called ? (int)g_sys_process_exit_code : 0;
++                fflush(stdout); fflush(stderr);
++                exit(s_rc);
++            }
++        };
++        CreateThread(NULL, 64u * 1024 * 1024, GuestMain::run, NULL, 0, NULL);
++        for (;;) CFRunLoopRunInMode(kCFRunLoopDefaultMode, 0.01, true);
++    }
+ #endif
+     int rc = ppu_run(entry, stack_top);
+     printf("\n[boot] ppu_run returned %d (entry function unwound)\n", rc);
+-- 
+2.48.1.windows.1
+

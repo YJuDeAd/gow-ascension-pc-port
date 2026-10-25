@@ -1,0 +1,42 @@
+diff --git a/runtime/spu/spu_drain.c b/runtime/spu/spu_drain.c
+index 0cadb46..c69bf42 100644
+--- a/runtime/spu/spu_drain.c
++++ b/runtime/spu/spu_drain.c
+@@ -490,12 +490,7 @@ void spu_depth_guard(spu_context* ctx)
+         s_max = e ? (uint32_t)strtoul(e, 0, 0) : 2000u;
+     }
+ 
+-    /* Ring of recent drain sites. When the depth trips, the useful question is
+-     * not "where are we" but "what cycle got us here" -- one pc names a point,
+-     * a ring names the loop. */
+     enum { RING = 24 };
+-    /* Per host thread: shared, every drain on six SPU threads wrote the same
+-     * cache line, and the ring of interleaved threads named no loop anyway. */
+     static SPU_THREAD_LOCAL uint32_t s_ring[RING];
+     static SPU_THREAD_LOCAL uint32_t s_n;
+     s_ring[s_n % RING] = ((uint32_t)ctx->pc & SPU_LS_MASK);
+@@ -503,20 +498,16 @@ void spu_depth_guard(spu_context* ctx)
+ 
+     if (ctx->host_depth < s_max) return;
+     static int s_reported = 0;
+-    if (s_reported < 1) {   /* one report: five SPU threads all trip together */
++    if (s_reported < 5) {
+         s_reported++;
+         fprintf(stderr, "[spu-depth] img=%d pc=0x%05X lr=0x%05X host_depth=%u"
+-                        " -- lifted call recursion, halting the SPU\n",
++                        " -- lifted call recursion unwinding to driver stack\n",
+                 ctx->image_id, (uint32_t)ctx->pc & SPU_LS_MASK,
+                 ctx->gpr[0]._u32[0] & SPU_LS_MASK, ctx->host_depth);
+-        fprintf(stderr, "[spu-depth] recent drain sites (oldest first):");
+-        uint32_t start = (s_n > RING) ? (s_n - RING) : 0;
+-        for (uint32_t k = start; k < s_n; k++)
+-            fprintf(stderr, " %05X", s_ring[k % RING]);
+-        fprintf(stderr, "\n");
+         fflush(stderr);
+     }
+-    { extern void spu_halt(spu_context*); spu_halt(ctx); }
++    extern void spu_restart_dispatch(spu_context*);
++    spu_restart_dispatch(ctx);
+ }
+ 
+ /* See spu_context.h. Env-gated: SPU_TAILRET=1. */

@@ -1,0 +1,427 @@
+From 968bd08f79b3a9751728f24ebd9089c832554dbe Mon Sep 17 00:00:00 2001
+From: YJuDeAd <robinrashi@gmail.com>
+Date: Sun, 25 Oct 2026 04:43:45 +0530
+Subject: [PATCH 29/47] Apply
+ ps3recomp-0029-report-hold-missed-wake-vdec-held-au.patch
+
+---
+ libs/codec/cellVdec.c      | 91 +++++++++++++++++++++++++++++++-------
+ libs/video/cellGcmSys.c    | 65 +++++++++++++++++++++++++--
+ runtime/spu/spu_workload.c | 73 +++++++++++++++++++++++++++---
+ 3 files changed, 202 insertions(+), 27 deletions(-)
+
+diff --git a/libs/codec/cellVdec.c b/libs/codec/cellVdec.c
+index 3eee531..65d6510 100644
+--- a/libs/codec/cellVdec.c
++++ b/libs/codec/cellVdec.c
+@@ -26,6 +26,7 @@
+ #define VDEC_QUEUE   32   /* decoded pictures waiting for GetPicture */
+ #define VDEC_BUSY_AT 16   /* refuse new AUs past this many (EndSeq can add more) */
+ #define VDEC_AU_RING 64   /* AUs remembered for pictures that come out late */
++#define VDEC_PEND     4   /* AUs taken while the picture queue is full (cmdDepth) */
+ 
+ /* A decoded picture waiting for the title (decoder path only). */
+ typedef struct {
+@@ -56,12 +57,19 @@ typedef struct {
+     CellVdecAuInfo aus[VDEC_AU_RING];   /* by auCount % VDEC_AU_RING */
+     u32 newPics;        /* pictures queued by the current decode call */
+     u64 nextPts;        /* timestamp for the next picture whose AU had none */
++    /* AUs accepted while the picture queue was full, decoded (and AUDONE
++     * sent) as the title takes pictures, the way the real decoder holds an
++     * AU it has no output buffer for. */
++    CellVdecAuInfo pend[VDEC_PEND];
++    u32 pendHead, pendCount;
++    int pumping;        /* vdec_pump running (a callback may call back in) */
+ } VdecSlot;
+ 
+ /* CODEC_TS_INVALID: both halves of the AU's pts/dts all ones. */
+ #define VDEC_TS_INVALID 0xFFFFFFFFFFFFFFFFull
+ 
+ static VdecSlot s_vdec[MAX_VDEC];
++static void vdec_decode_now(CellVdecHandle handle, const CellVdecAuInfo* au);
+ 
+ /* Deliver a vdec message to the guest callback (handle, msgType, msgData,
+  * cbArg). It is a guest OPD, so it goes through g_ps3_guest_caller; this used
+@@ -253,6 +261,7 @@ s32 cellVdecStartSeq(CellVdecHandle handle)
+         vdec_ff_reset(s_vdec[handle].ff);
+         s_vdec[handle].nextPts = 0;
+         vdec_queue_clear(&s_vdec[handle]);
++        s_vdec[handle].pendHead = s_vdec[handle].pendCount = 0;
+     }
+     return CELL_OK;
+ }
+@@ -267,8 +276,15 @@ s32 cellVdecEndSeq(CellVdecHandle handle)
+     s_vdec[handle].seqStarted = 0;
+ 
+     /* Pictures the decoder still holds for reordering come out now, each
+-     * with its PICOUT, before SEQDONE. */
++     * with its PICOUT, before SEQDONE; held AUs are decoded first. */
+     if (s_vdec[handle].ff) {
++        VdecSlot* v = &s_vdec[handle];
++        while (v->pendCount) {
++            const CellVdecAuInfo au = v->pend[v->pendHead];
++            v->pendHead = (v->pendHead + 1) % VDEC_PEND;
++            v->pendCount--;
++            vdec_decode_now(handle, &au);
++        }
+         vdec_ff_drain(s_vdec[handle].ff, vdec_on_picture, &s_vdec[handle]);
+         vdec_notify_new_pics(handle);
+     }
+@@ -279,6 +295,36 @@ s32 cellVdecEndSeq(CellVdecHandle handle)
+     return CELL_OK;
+ }
+ 
++/* Decode one AU now: its pictures are queued, then AUDONE and a PICOUT for
++ * each. */
++static void vdec_decode_now(CellVdecHandle handle, const CellVdecAuInfo* au)
++{
++    VdecSlot* v = &s_vdec[handle];
++    v->auCount++;
++    v->aus[v->auCount % VDEC_AU_RING] = *au;
++    v->newPics = 0;
++    if (au->size)   /* an empty packet would mean end of stream to FFmpeg */
++        vdec_ff_decode(v->ff, vm_ptr8(au->startAddr), au->size, v->auCount,
++                       vdec_on_picture, v);
++    vdec_notify(handle, CELL_VDEC_MSG_TYPE_AUDONE, CELL_OK);
++    vdec_notify_new_pics(handle);
++}
++
++/* Decode the held AUs the picture queue now has room for. */
++static void vdec_pump(CellVdecHandle handle)
++{
++    VdecSlot* v = &s_vdec[handle];
++    if (!v->ff || v->pumping) return;
++    v->pumping = 1;
++    while (v->pendCount && v->qCount < VDEC_BUSY_AT) {
++        const CellVdecAuInfo au = v->pend[v->pendHead];
++        v->pendHead = (v->pendHead + 1) % VDEC_PEND;
++        v->pendCount--;
++        vdec_decode_now(handle, &au);
++    }
++    v->pumping = 0;
++}
++
+ s32 cellVdecDecodeAu(CellVdecHandle handle, s32 mode, const CellVdecAuInfo* auInfo)
+ {
+     (void)mode;
+@@ -309,17 +355,23 @@ s32 cellVdecDecodeAu(CellVdecHandle handle, s32 mode, const CellVdecAuInfo* auIn
+         { static int s_tl = -1; if (s_tl < 0) s_tl = getenv("VDEC_TIMELOG") ? 1 : 0;
+           if (s_tl) { extern unsigned long long ps3_qpc_us(void);
+               printf("[vdec-au] t=%lluus size=%u pts=%llu queued=%u%s\n", ps3_qpc_us(), au.size,
+-                     (unsigned long long)au.pts, v->qCount, v->qCount >= VDEC_BUSY_AT ? " BUSY" : ""); } }
+-        if (v->qCount >= VDEC_BUSY_AT)
+-            return (s32)CELL_VDEC_ERROR_BUSY;  /* title must take pictures */
+-        v->auCount++;
+-        v->aus[v->auCount % VDEC_AU_RING] = au;
+-        v->newPics = 0;
+-        if (au.size)   /* an empty packet would mean end of stream to FFmpeg */
+-            vdec_ff_decode(v->ff, vm_ptr8(au.startAddr), au.size, v->auCount,
+-                           vdec_on_picture, v);
+-        vdec_notify(handle, CELL_VDEC_MSG_TYPE_AUDONE, CELL_OK);
+-        vdec_notify_new_pics(handle);
++                     (unsigned long long)au.pts, v->qCount, (v->pendCount || v->qCount >= VDEC_BUSY_AT) ? " HELD" : ""); } }
++        /* A full picture queue does not refuse the AU: the real decoder
++         * takes it and sends AUDONE once it has decoded it, which is after
++         * the title has taken pictures. Refused, God of War: Ascension's
++         * player waited for an AUDONE that never came, gave up after a
++         * second and then raced the movie to catch up. BUSY only past
++         * cmdDepth AUs held, which a title that waits for AUDONE never
++         * reaches. */
++        vdec_pump(handle);
++        if (v->pendCount || v->qCount >= VDEC_BUSY_AT) {
++            if (v->pendCount >= VDEC_PEND)
++                return (s32)CELL_VDEC_ERROR_BUSY;
++            v->pend[(v->pendHead + v->pendCount) % VDEC_PEND] = au;
++            v->pendCount++;
++            return CELL_OK;
++        }
++        vdec_decode_now(handle, &au);
+         return CELL_OK;
+     }
+ 
+@@ -504,9 +556,12 @@ s32 cellVdecGetPicture(CellVdecHandle handle, const void* format, void* outBuff)
+     if (handle >= MAX_VDEC || !s_vdec[handle].in_use || !fmt_ea)
+         return (s32)CELL_VDEC_ERROR_ARG;
+     VdecSlot* v = &s_vdec[handle];
+-    if (v->ff)
+-        return vdec_take_picture(v, dst, vm_read32(fmt_ea + 0),
+-                                 vm_read32(fmt_ea + 4), vm_read8(fmt_ea + 8));
++    if (v->ff) {
++        const s32 r = vdec_take_picture(v, dst, vm_read32(fmt_ea + 0),
++                                        vm_read32(fmt_ea + 4), vm_read8(fmt_ea + 8));
++        if (r == CELL_OK) vdec_pump(handle);
++        return r;
++    }
+     if (!v->hasPic)
+         return (s32)CELL_VDEC_ERROR_EMPTY;
+     v->hasPic = 0;
+@@ -553,8 +608,10 @@ s32 cellVdecGetPictureExt(CellVdecHandle handle, const void* format,
+         return CELL_OK;
+     if (!fmt_ea)
+         return (s32)CELL_VDEC_ERROR_ARG;
+-    return vdec_take_picture(&s_vdec[handle], dst, vm_read32(fmt_ea + 0),
+-                             vm_read32(fmt_ea + 4), vm_read8(fmt_ea + 0xC));
++    const s32 r = vdec_take_picture(&s_vdec[handle], dst, vm_read32(fmt_ea + 0),
++                                    vm_read32(fmt_ea + 4), vm_read8(fmt_ea + 0xC));
++    if (r == CELL_OK) vdec_pump(handle);
++    return r;
+ }
+ 
+ s32 cellVdecSetFrameRate(CellVdecHandle handle, u32 frameRateCode)
+diff --git a/libs/video/cellGcmSys.c b/libs/video/cellGcmSys.c
+index 306cbdb..c2574f8 100644
+--- a/libs/video/cellGcmSys.c
++++ b/libs/video/cellGcmSys.c
+@@ -758,6 +758,17 @@ static atomic_flag s_gcm_pumping = ATOMIC_FLAG_INIT;
+ static u32 s_fifo_getoff;   /* tentative: defined below */
+ /* The park the walker last stopped on (GCM_PARK_SPU_HOLD_MS), ~0 = none. */
+ static u32 s_last_park_off = ~0u;
++/* Every place the walker has parked. The title reuses the same few park
++ * words frame after frame; when its CPU side is quick enough to patch one
++ * before the walker gets there, the walker never parks on it, and the hold
++ * has to recognise it by its address. */
++#define GCM_PARK_SITES 16
++static u32 s_park_sites[GCM_PARK_SITES]; static unsigned s_park_sites_n;
++static int gcm_is_park_site(u32 off)
++{
++    for (unsigned i = 0; i < s_park_sites_n; i++) if (s_park_sites[i] == off) return 1;
++    return 0;
++}
+ 
+ void cellGcm_request_tick(void)
+ {
+@@ -1721,6 +1732,13 @@ void cellGcm_fifo_kick_wait(unsigned ms)
+     else    Sleep(ms);
+ }
+ 
++/* Wake the present thread's walker now (a wait it stopped on may be over:
++ * the SPURS tasks a held report waits for have gone back to WAIT_SIGNAL). */
++void cellGcm_fifo_kick(void)
++{
++    if (s_gcm_kick_ev) SetEvent(s_gcm_kick_ev);
++}
++
+ 
+ /* Serializes fence publication between the present ticker and every guest
+  * thread poll-reading the ref register (REFPOLL default-on made this path
+@@ -2059,6 +2077,9 @@ static void gcm_rsx_process_fifo_unlocked(void)
+                       }
+                   }
+                   s_last_park_off = s_fifo_getoff;
++                  if (!gcm_is_park_site(s_fifo_getoff))
++                      s_park_sites[s_park_sites_n++ % GCM_PARK_SITES] = s_fifo_getoff;
++                  if (s_park_sites_n > GCM_PARK_SITES) s_park_sites_n = GCM_PARK_SITES;
+                   why = "parked";
+                   s_park_pass = 1;
+                   break;
+@@ -2073,7 +2094,7 @@ static void gcm_rsx_process_fifo_unlocked(void)
+                * first frame and relies on that time: RsxSync's signal for
+                * round 2 was eaten by tasks still in round 1's barriers. Off
+                * by default. */
+-              if (s_fifo_getoff == s_last_park_off) {
++              if (s_fifo_getoff == s_last_park_off || gcm_is_park_site(s_fifo_getoff)) {
+                   static long hold = -1; static unsigned long long held_since;
+                   if (hold < 0) { const char* e = getenv("GCM_PARK_SPU_HOLD_MS"); hold = e ? atol(e) : 0; }
+                   extern long spu_taskset_tasks_running(void) __attribute__((weak));
+@@ -2083,6 +2104,11 @@ static void gcm_rsx_process_fifo_unlocked(void)
+                       if (!held_since) held_since = now;
+                       if (now - held_since < (unsigned long long)hold) { why = "spu-hold"; break; }
+                   }
++                  { static int lg = -1; if (lg < 0) lg = getenv("GCM_HOLD_LOG") ? 1 : 0;
++                    if (lg) { extern unsigned long long ps3_qpc_us(void);
++                      fprintf(stderr, "[gcm-hold] t=%lluus park=0x%X parked=%d held=%llums\n",
++                              ps3_qpc_us(), s_fifo_getoff, s_fifo_getoff == s_last_park_off,
++                              held_since ? ps3_ms_now() - held_since : 0ull); } }
+                   held_since = 0;
+                   s_last_park_off = ~0u;
+               }
+@@ -2232,6 +2258,37 @@ static void gcm_rsx_process_fifo_unlocked(void)
+                     last_flip = now;
+                 }
+             }
++            /* GCM_REPORT_SPU_HOLD_MS=<ms>: a GET_REPORT waits, for up to <ms>,
++             * while SPURS tasks are out of WAIT_SIGNAL or still have a signal
++             * they have not picked up. A title that turns reports into task
++             * signals (God of War: Ascension's RsxSync job signals its
++             * post-process taskset once per report) counts on the RSX taking
++             * a frame's time between two of them; this one takes none, and
++             * when the PPU side is quick the next report lands while the
++             * tasks are still in the last round's barriers, which eat the
++             * signal: the round never ends and the GPU waits on its label
++             * forever. Like a blocked ACQUIRE, the pass stops before the
++             * method and the next pass re-reads it. Off by default. */
++            if (subch == 0 && (type == 0 ? (method <= 0x1800u && 0x1800u < method + count * 4u)
++                                         : method == 0x1800u)) {
++                static long rhold = -1; static unsigned long long rheld_since; static unsigned long rheld_n;
++                if (rhold < 0) { const char* e = getenv("GCM_REPORT_SPU_HOLD_MS"); rhold = e ? atol(e) : 0; }
++                extern long spu_taskset_tasks_running(void) __attribute__((weak));
++                if (rhold > 0) {
++                    /* QPC, not ps3_ms_now: GetTickCount64 steps by ~15.6 ms,
++                     * which is a frame. */
++                    const unsigned long long now = ps3_qpc_us();
++                    if (spu_taskset_tasks_running && spu_taskset_tasks_running() > 0) {
++                        if (!rheld_since) rheld_since = now;
++                        if (now - rheld_since < (unsigned long long)rhold * 1000ull) { why = "report-hold"; break; }
++                    }
++                    { static int lg = -1; if (lg < 0) lg = getenv("GCM_HOLD_LOG") ? 1 : 0;
++                      if (lg && rheld_since)
++                        fprintf(stderr, "[report-hold] t=%lluus #%lu get=0x%X held=%lluus\n",
++                                now, ++rheld_n, s_fifo_getoff, now - rheld_since); }
++                    rheld_since = 0;
++                }
++            }
+             for (u32 i = 0; i < count; i++) {
+                 u32 dea = gcm_io2ea(s_fifo_getoff + 4 + i * 4);
+                 if (!dea) break;
+@@ -2515,10 +2572,10 @@ static void gcm_rsx_process_fifo_unlocked(void)
+      * GPU waits there by design until the label is released. Ascension's
+      * frame waits on a label its SPU post-process tasks write when they are
+      * done with the frame; following put dropped the frame mid-wait. Nor is
+-     * a patched park held for SPU work (GCM_PARK_SPU_HOLD_MS), which bounds
+-     * its own wait. */
++     * a patched park or a report held for SPU work (GCM_PARK_SPU_HOLD_MS,
++     * GCM_REPORT_SPU_HOLD_MS), each of which bounds its own wait. */
+     { static u32 last = 0xFFFFFFFFu; static int stuck = 0;
+-      if (why && (strcmp(why, "parked") == 0 || strcmp(why, "sema-acquire") == 0 || strcmp(why, "flip-pace") == 0 || strcmp(why, "spu-hold") == 0)) { stuck = 0; last = s_fifo_getoff; }
++      if (why && (strcmp(why, "parked") == 0 || strcmp(why, "sema-acquire") == 0 || strcmp(why, "flip-pace") == 0 || strcmp(why, "spu-hold") == 0 || strcmp(why, "report-hold") == 0)) { stuck = 0; last = s_fifo_getoff; }
+       else if (s_fifo_getoff == last && s_fifo_getoff != put) {
+           if (++stuck >= 8) { gcm_fifo_dump_around(s_fifo_getoff);
+                              gcm_fifo_resync_why("stuck-get", &s_fifo_getoff, put); stuck = 0; }
+diff --git a/runtime/spu/spu_workload.c b/runtime/spu/spu_workload.c
+index 1e434f4..47be951 100644
+--- a/runtime/spu/spu_workload.c
++++ b/runtime/spu/spu_workload.c
+@@ -1233,19 +1233,56 @@ int spu_workload_current_task(void) { return s_cur_task; }
+  * RSX, which runs a frame in no time, from overtaking that work where a real
+  * RSX would still be drawing (GCM_PARK_SPU_HOLD_MS, cellGcmSys.c). */
+ static volatile long s_tasks_out_of_wait;
++/* The last running task back in its wait: a GET_REPORT held for the tasks
++ * (GCM_REPORT_SPU_HOLD_MS) can go now, so wake the walker instead of letting
++ * it find out at its next poll. */
++extern void cellGcm_fifo_kick(void);
++static void spu_task_back_in_wait(void)
++{
++    if (__atomic_sub_fetch(&s_tasks_out_of_wait, 1, __ATOMIC_ACQ_REL) == 0)
++        cellGcm_fifo_kick();
++}
+ static _Thread_local int s_task_out;
+-long spu_taskset_tasks_running(void) { return __atomic_load_n(&s_tasks_out_of_wait, __ATOMIC_ACQUIRE); }
++/* Also a task still parked whose signal is already set: it has work and is
++ * about to run. Right after RsxSync signals the five post-process tasks there
++ * is an instant when all of them are signalled but none has woken; counting
++ * only woken tasks let the GPU hold go there, frame 2's reports landed before
++ * round 1 had started, and God of War: Ascension stopped at the end of
++ * loading (deterministically once its SPU jobs ran lifted). */
++long spu_taskset_tasks_running(void)
++{
++    const long n = __atomic_load_n(&s_tasks_out_of_wait, __ATOMIC_ACQUIRE);
++    if (n) return n;
++    for (int i = 0; i < SPU_PARKED_MAX; i++) {
++        const uint64_t k = s_parked[i];
++        if (k && spurs_bitset_test((uint32_t)(k >> 32) + CSTS_SIGNALLED, (uint32_t)(k & 0xFFFFFFFFu) - 1u))
++            return 1;
++    }
++    return 0;
++}
+ /* A task that ends while out of a wait is no longer running. */
+ void spu_taskset_task_ended(void)
+ {
+-    if (s_task_out) { s_task_out = 0; __atomic_fetch_sub(&s_tasks_out_of_wait, 1, __ATOMIC_ACQ_REL); }
++    if (s_task_out) { s_task_out = 0; spu_task_back_in_wait(); }
++}
++
++/* A wait that timed out with its bit already set: the commit that set it did
++ * not wake the waiter. Counted, and logged with SPU_WAITSIG_MISSLOG. */
++static volatile long s_waitsig_missed;
++static void spu_waitsig_missed(uint32_t taskId, uint32_t taskset_ea)
++{
++    const long n = __atomic_add_fetch(&s_waitsig_missed, 1, __ATOMIC_RELAXED);
++    static int lg = -1; if (lg < 0) lg = getenv("SPU_WAITSIG_MISSLOG") ? 1 : 0;
++    if (lg) { extern unsigned long long ps3_qpc_us(void);
++        fprintf(stderr, "[missed-wake] t=%lluus #%ld task=%u taskset=0x%08X\n",
++                ps3_qpc_us(), n, taskId, taskset_ea); }
+ }
+ 
+ int spu_taskset_wait_signal(uint32_t taskset_ea, uint32_t taskId)
+ {
+     if (!taskset_ea || taskId >= 128) return 0;
+     s_cur_task = (int)taskId;
+-    if (s_task_out) { s_task_out = 0; __atomic_fetch_sub(&s_tasks_out_of_wait, 1, __ATOMIC_ACQ_REL); }
++    if (s_task_out) { s_task_out = 0; spu_task_back_in_wait(); }
+     /* ran= is the wall time this task spent OUT of the wait (decode/mix work
+      * per round) -- decisive for "is the Bink decode CPU-bound". TLS: each
+      * task runs on its own host thread. */
+@@ -1293,6 +1330,16 @@ int spu_taskset_wait_signal(uint32_t taskset_ea, uint32_t taskId)
+         }
+     }
+     unsigned secs = 0;
++    /* SPU_WAITSIG_POLL_MS (default 2): how often the wait re-checks its bit
++     * without being woken. A commit that sets it is meant to wake the waiter
++     * (spu_taskset_line_committed), but one that lands between the check and
++     * the sleep, or for a task not yet in s_parked, does not; with a 1 s
++     * timeout that cost God of War: Ascension's cutscene a one-second freeze
++     * every few seconds once the GPU stopped pacing its tasks. */
++    static int poll_ms = -1;
++    if (poll_ms < 0) { const char* e = getenv("SPU_WAITSIG_POLL_MS"); poll_ms = e ? atoi(e) : 2;
++                       if (poll_ms <= 0 || poll_ms > 1000) poll_ms = 1000; }
++    unsigned waited_ms = 0;
+     /* LBP_WS_DRAIN=<secs>: EXPERIMENT (general work-drained approximation).
+      * A task ENTERING WAIT_SIGNAL has drained the work dispatched to it. In our
+      * one-shot SPU model the producer task ran to completion already, so the
+@@ -1309,7 +1356,10 @@ int spu_taskset_wait_signal(uint32_t taskset_ea, uint32_t taskId)
+ #ifdef _WIN32
+     AcquireSRWLockExclusive(&s_sig_lock);
+     while (!spurs_bitset_test(taskset_ea + CSTS_SIGNALLED, taskId)) {
+-        if (!SleepConditionVariableSRW(&s_sig_cv, &s_sig_lock, 1000, 0)) {
++        if (!SleepConditionVariableSRW(&s_sig_cv, &s_sig_lock, (DWORD)poll_ms, 0)) {
++            if (spurs_bitset_test(taskset_ea + CSTS_SIGNALLED, taskId)) { spu_waitsig_missed(taskId, taskset_ea); break; }
++            if ((waited_ms += (unsigned)poll_ms) < 1000) continue;
++            waited_ms = 0;
+             static int _n = 0;
+             if (++secs && _n < 16) { _n++;
+                 fprintf(stderr, "[spu_workload] task %u (taskset 0x%08X) sleeping "
+@@ -1317,13 +1367,21 @@ int spu_taskset_wait_signal(uint32_t taskset_ea, uint32_t taskId)
+             if (drain && secs >= drain) { drained = 1; break; }
+         }
+     }
++    /* Counted as running before its signal bit is cleared, so the GPU hold
++     * (spu_taskset_tasks_running) never misses it between the two. */
++    if (!s_task_out) { s_task_out = 1; __atomic_fetch_add(&s_tasks_out_of_wait, 1, __ATOMIC_ACQ_REL); }
+     if (!drained) spu_signalled_update(taskset_ea, taskId, 0);
+     ReleaseSRWLockExclusive(&s_sig_lock);
+ #else
+     pthread_mutex_lock(&s_sig_lock);
+     while (!spurs_bitset_test(taskset_ea + CSTS_SIGNALLED, taskId)) {
+-        struct timespec ts; clock_gettime(CLOCK_REALTIME, &ts); ts.tv_sec += 1;
++        struct timespec ts; clock_gettime(CLOCK_REALTIME, &ts);
++        ts.tv_nsec += (long)poll_ms * 1000000L;
++        while (ts.tv_nsec >= 1000000000L) { ts.tv_nsec -= 1000000000L; ts.tv_sec++; }
+         if (pthread_cond_timedwait(&s_sig_cv, &s_sig_lock, &ts) != 0) {
++            if (spurs_bitset_test(taskset_ea + CSTS_SIGNALLED, taskId)) { spu_waitsig_missed(taskId, taskset_ea); break; }
++            if ((waited_ms += (unsigned)poll_ms) < 1000) continue;
++            waited_ms = 0;
+             static int _n = 0;
+             if (++secs && _n < 16) { _n++;
+                 fprintf(stderr, "[spu_workload] task %u (taskset 0x%08X) sleeping "
+@@ -1331,6 +1389,9 @@ int spu_taskset_wait_signal(uint32_t taskset_ea, uint32_t taskId)
+             if (drain && secs >= drain) { drained = 1; break; }
+         }
+     }
++    /* Counted as running before its signal bit is cleared, so the GPU hold
++     * (spu_taskset_tasks_running) never misses it between the two. */
++    if (!s_task_out) { s_task_out = 1; __atomic_fetch_add(&s_tasks_out_of_wait, 1, __ATOMIC_ACQ_REL); }
+     if (!drained) spu_signalled_update(taskset_ea, taskId, 0);
+     pthread_mutex_unlock(&s_sig_lock);
+ #endif
+@@ -1338,7 +1399,7 @@ int spu_taskset_wait_signal(uint32_t taskset_ea, uint32_t taskId)
+         fprintf(stderr, "[spu_workload] task %u (taskset 0x%08X) WS_DRAIN resume "
+                 "after %us (no signal)\n", taskId, taskset_ea, secs); fflush(stderr); }
+     spu_serial_acquire();       /* resume: re-take the serial lock */
+-    s_task_out = 1; __atomic_fetch_add(&s_tasks_out_of_wait, 1, __ATOMIC_ACQ_REL);
++    if (!s_task_out) { s_task_out = 1; __atomic_fetch_add(&s_tasks_out_of_wait, 1, __ATOMIC_ACQ_REL); }
+     { extern unsigned long long ps3_ms_now(void);
+       s_wait_exit_ms = ps3_ms_now(); }   /* stamp for the next entry's ran= */
+     if (s_ttl) { extern unsigned long long ps3_qpc_us(void);
+-- 
+2.48.1.windows.1
+

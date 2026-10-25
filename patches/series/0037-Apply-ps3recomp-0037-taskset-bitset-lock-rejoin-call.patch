@@ -1,0 +1,281 @@
+From 6cd913dd7da8cd40e6b99f1dd220ba11a10bd3ae Mon Sep 17 00:00:00 2001
+From: YJuDeAd <robinrashi@gmail.com>
+Date: Sun, 25 Oct 2026 04:50:12 +0530
+Subject: [PATCH 37/47] Apply
+ ps3recomp-0037-taskset-bitset-lock-rejoin-call.patch
+
+---
+ runtime/spu/spu_channels.c | 58 ++++++++++++++++++++++++++++++++++++--
+ runtime/spu/spu_drain.c    | 27 +++++++++++++++++-
+ runtime/spu/spu_interp.c   | 13 +++++++++
+ runtime/spu/spu_workload.c | 26 ++++++++++++++---
+ 4 files changed, 117 insertions(+), 7 deletions(-)
+
+diff --git a/runtime/spu/spu_channels.c b/runtime/spu/spu_channels.c
+index 1585d12..d42779a 100644
+--- a/runtime/spu/spu_channels.c
++++ b/runtime/spu/spu_channels.c
+@@ -238,6 +238,9 @@ int spu_run_with_halt(void (*entry)(spu_context*), spu_context* ctx)
+     if (outer_armed) memcpy(outer_env, s_spu_halt_env, sizeof(jmp_buf));
+     s_spu_halt_armed = 1;
+     g_spu_trampoline_fn = 0;                        /* no stale transfer pending */
++    extern SPU_THREAD_LOCAL int g_spu_drain_anyret;
++    const int outer_anyret = g_spu_drain_anyret;     /* an interpreter's drain is no frame of this run */
++    g_spu_drain_anyret = 0;                        /* no stale transfer pending */
+     /* Lockstep gate (env SPU_LOCKSTEP, default off): join the round-robin
+      * ring and BLOCK until this ctx holds the run token, so only one lifted SPU
+      * executes at a time. No-op when unarmed. The thread-local halt env above
+@@ -265,6 +268,7 @@ int spu_run_with_halt(void (*entry)(spu_context*), spu_context* ctx)
+          * Re-enter its target with the same guest state on the driver stack. */
+         ctx->host_depth = 0;
+         g_spu_trampoline_fn = 0;
++        g_spu_drain_anyret = 0;
+         spu_indirect_branch(ctx);
+         SPU_DRAIN(ctx);
+         break;
+@@ -290,6 +294,7 @@ int spu_run_with_halt(void (*entry)(spu_context*), spu_context* ctx)
+     yz_lockstep_unregister(ctx);   /* leave the ring; hand the token onward */
+     s_spu_halt_armed = outer_armed;
+     if (outer_armed) memcpy(s_spu_halt_env, outer_env, sizeof(jmp_buf));
++    g_spu_drain_anyret = outer_anyret;
+     return halted;
+ }
+ 
+@@ -2728,7 +2733,9 @@ static int spu_smc_microstep(spu_context* ctx)
+          * no lifted entry, and a job's return would otherwise run on through
+          * the caller's code (GH3's song-freeze; see drain_ret_pc). */
+         const uint32_t return_pc = ctx->drain_ret_pc;
+-        uint32_t result = spu_interp_run_until(ctx, pc, return_pc);
++        uint32_t result;
++    interp_again:
++        result = spu_interp_run_until(ctx, pc, return_pc);
+         /* SPU_INTERP_HIST=1: instructions interpreted per (overlay, entry),
+          * the top 16 every 5 s -- where interpreter time actually goes (the
+          * microstep line above prints each entry once, not its cost). */
+@@ -2769,9 +2776,29 @@ static int spu_smc_microstep(spu_context* ctx)
+          * otherwise ends the run before executing the lifted target.
+          * An already-owning drain must retain its own host continuation;
+          * stopped states and diagnostic exits keep their existing behavior. */
++        /* SPU_REJOIN_CALL=1: the lifted code the interpreter rejoins runs in a
++         * drain of this interpreter's own (spu_drain_interp), and its first
++         * host return -- a `bi $lr` back to an interpreted caller, or out of
++         * a function entered mid-body -- resumes interpretation at that pc.
++         * As a plain transfer that host return fell to the enclosing lifted
++         * frame's drain, whose return point it is not: the drain restarted
++         * dispatch from the driver and dropped every host frame above the job
++         * (Ascension's level-load job, module 204, froze between the loading
++         * movies). */
+         if (ctx->image_id >= 0 && (ctx->status & SPU_STATUS_RUNNING) &&
+             (!return_pc || (ctx->pc & SPU_LS_MASK) != return_pc) &&
+             spu_lifted_probe(ctx, ctx->pc)) {
++            static int s_rc = -1;
++            if (s_rc < 0) { const char* e = getenv("SPU_REJOIN_CALL"); s_rc = e && e[0] == '1'; }
++            if (s_rc) {
++                extern void spu_drain_interp(spu_context*, uint32_t);
++                g_spu_trampoline_fn = spu_indirect_branch;
++                spu_drain_interp(ctx, return_pc);
++                pc = ctx->pc & SPU_LS_MASK;
++                if ((ctx->status & SPU_STATUS_RUNNING) && (!return_pc || pc != return_pc))
++                    goto interp_again;
++                return 1;
++            }
+             g_spu_trampoline_fn = spu_indirect_branch;
+             return 1;
+         }
+@@ -3772,6 +3799,9 @@ int spu_run_with_halt(void (*entry)(spu_context*), spu_context* ctx)
+     if (outer_armed) memcpy(outer_env, s_spu_halt_env, sizeof(jmp_buf));
+     s_spu_halt_armed = 1;
+     g_spu_trampoline_fn = 0;                        /* no stale transfer pending */
++    extern SPU_THREAD_LOCAL int g_spu_drain_anyret;
++    const int outer_anyret = g_spu_drain_anyret;     /* an interpreter's drain is no frame of this run */
++    g_spu_drain_anyret = 0;                        /* no stale transfer pending */
+     /* Lockstep gate (env SPU_LOCKSTEP, default off): join the round-robin
+      * ring and BLOCK until this ctx holds the run token, so only one lifted SPU
+      * executes at a time. No-op when unarmed. The thread-local halt env above
+@@ -3799,6 +3829,7 @@ int spu_run_with_halt(void (*entry)(spu_context*), spu_context* ctx)
+          * Re-enter its target with the same guest state on the driver stack. */
+         ctx->host_depth = 0;
+         g_spu_trampoline_fn = 0;
++        g_spu_drain_anyret = 0;
+         spu_indirect_branch(ctx);
+         SPU_DRAIN(ctx);
+         break;
+@@ -3824,6 +3855,7 @@ int spu_run_with_halt(void (*entry)(spu_context*), spu_context* ctx)
+     yz_lockstep_unregister(ctx);   /* leave the ring; hand the token onward */
+     s_spu_halt_armed = outer_armed;
+     if (outer_armed) memcpy(s_spu_halt_env, outer_env, sizeof(jmp_buf));
++    g_spu_drain_anyret = outer_anyret;
+     return halted;
+ }
+ 
+@@ -6221,7 +6253,9 @@ static int spu_smc_microstep(spu_context* ctx)
+          * no lifted entry, and a job's return would otherwise run on through
+          * the caller's code (GH3's song-freeze; see drain_ret_pc). */
+         const uint32_t return_pc = ctx->drain_ret_pc;
+-        uint32_t result = spu_interp_run_until(ctx, pc, return_pc);
++        uint32_t result;
++    interp_again:
++        result = spu_interp_run_until(ctx, pc, return_pc);
+         /* SPU_INTERP_HIST=1: instructions interpreted per (overlay, entry),
+          * the top 16 every 5 s -- where interpreter time actually goes (the
+          * microstep line above prints each entry once, not its cost). */
+@@ -6262,9 +6296,29 @@ static int spu_smc_microstep(spu_context* ctx)
+          * otherwise ends the run before executing the lifted target.
+          * An already-owning drain must retain its own host continuation;
+          * stopped states and diagnostic exits keep their existing behavior. */
++        /* SPU_REJOIN_CALL=1: the lifted code the interpreter rejoins runs in a
++         * drain of this interpreter's own (spu_drain_interp), and its first
++         * host return -- a `bi $lr` back to an interpreted caller, or out of
++         * a function entered mid-body -- resumes interpretation at that pc.
++         * As a plain transfer that host return fell to the enclosing lifted
++         * frame's drain, whose return point it is not: the drain restarted
++         * dispatch from the driver and dropped every host frame above the job
++         * (Ascension's level-load job, module 204, froze between the loading
++         * movies). */
+         if (ctx->image_id >= 0 && (ctx->status & SPU_STATUS_RUNNING) &&
+             (!return_pc || (ctx->pc & SPU_LS_MASK) != return_pc) &&
+             spu_lifted_probe(ctx, ctx->pc)) {
++            static int s_rc = -1;
++            if (s_rc < 0) { const char* e = getenv("SPU_REJOIN_CALL"); s_rc = e && e[0] == '1'; }
++            if (s_rc) {
++                extern void spu_drain_interp(spu_context*, uint32_t);
++                g_spu_trampoline_fn = spu_indirect_branch;
++                spu_drain_interp(ctx, return_pc);
++                pc = ctx->pc & SPU_LS_MASK;
++                if ((ctx->status & SPU_STATUS_RUNNING) && (!return_pc || pc != return_pc))
++                    goto interp_again;
++                return 1;
++            }
+             g_spu_trampoline_fn = spu_indirect_branch;
+             return 1;
+         }
+diff --git a/runtime/spu/spu_drain.c b/runtime/spu/spu_drain.c
+index b2573d4..48bde31 100644
+--- a/runtime/spu/spu_drain.c
++++ b/runtime/spu/spu_drain.c
+@@ -524,6 +524,10 @@ int spu_tailret_enabled(void)
+     return s_on;
+ }
+ 
++/* SPU_REJOIN_CALL: a drain that ends at the first host return, whatever the pc
++ * (g_spu_drain_anyret). */
++SPU_THREAD_LOCAL int g_spu_drain_anyret;
++
+ /* A return may use any register, not only r0. Running that branch target
+  * inside this drain executes the caller's continuation twice (once here,
+  * once when its real host frame resumes), including its stack adjustment.
+@@ -543,8 +547,10 @@ int spu_tailret_enabled(void)
+ typedef void (*spu_drain_fn)(spu_context*);
+ extern spu_drain_fn spu_lookup(uint32_t addr, int image_id);
+ 
+-void spu_drain_call(spu_context* ctx, uint32_t return_pc)
++static void spu_drain_loop(spu_context* ctx, uint32_t return_pc, int any_return)
+ {
++    const int outer_anyret = g_spu_drain_anyret;
++    if (any_return) g_spu_drain_anyret = ctx->host_depth;
+     spu_depth_guard(ctx);
+     /* The frame an interrupt taken in THIS loop returns to. It stays armed
+      * after the handler's first host function returns -- the handler keeps
+@@ -615,5 +621,24 @@ void spu_drain_call(spu_context* ctx, uint32_t return_pc)
+             return;
+         }
+     }
++    g_spu_drain_anyret = outer_anyret;
+ #undef SPU_DRAIN_POP_IRQ
+ }
++
++void spu_drain_call(spu_context* ctx, uint32_t return_pc)
++{
++    spu_drain_loop(ctx, return_pc, 0);
++}
++
++void spu_drain_resume(spu_context* ctx, uint32_t return_pc)
++{
++    spu_drain_loop(ctx, return_pc, 0);
++}
++
++/* The drain of lifted code the interpreter rejoined: it ends at the first
++ * host return, whatever the pc (or at return_pc, the enclosing drain's own
++ * return point, when nonzero). */
++void spu_drain_interp(spu_context* ctx, uint32_t return_pc)
++{
++    spu_drain_loop(ctx, return_pc, 1);
++}
+diff --git a/runtime/spu/spu_interp.c b/runtime/spu/spu_interp.c
+index 50188eb..ff44d8e 100644
+--- a/runtime/spu/spu_interp.c
++++ b/runtime/spu/spu_interp.c
+@@ -450,6 +450,19 @@ void spu_pcwatch(spu_context* ctx, uint32_t pc)
+                     ctx->gpr[3]._u32[0], ctx->gpr[4]._u32[0], ctx->gpr[5]._u32[0], ctx->gpr[6]._u32[0],
+                     ctx->gpr[12]._u32[0], ctx->gpr[80]._u32[0], ctx->gpr[81]._u32[0],
+                     ctx->gpr[82]._u32[0], ctx->gpr[83]._u32[0]);
++        /* SPU_PCWATCH_R90=1: also r0/r1/r9/r11/r90/r93 and the 32 bytes at
++         * r90+0x220 (Ascension job modules: the job manager's service table
++         * and state words sit off r90). */
++        { static int s_r90 = -1; if (s_r90 < 0) s_r90 = getenv("SPU_PCWATCH_R90") ? 1 : 0;
++          if (s_r90 && s_pw_lines <= 400) {
++              const uint32_t b = (ctx->gpr[90]._u32[0] + 0x220) & 0x3FFF0;
++              fprintf(stderr, "[pcwatch]   r0=%08X r1=%08X r9=%08X r11=%08X r90=%08X r93=%08X r90+220:",
++                      ctx->gpr[0]._u32[0], ctx->gpr[1]._u32[0], ctx->gpr[9]._u32[0], ctx->gpr[11]._u32[0],
++                      ctx->gpr[90]._u32[0], ctx->gpr[93]._u32[0]);
++              for (int q = 0; q < 32; q += 4)
++                  fprintf(stderr, " %02X%02X%02X%02X", ctx->ls[b+q], ctx->ls[b+q+1], ctx->ls[b+q+2], ctx->ls[b+q+3]);
++              fprintf(stderr, "\n");
++          } }
+         return;
+     }
+ }
+diff --git a/runtime/spu/spu_workload.c b/runtime/spu/spu_workload.c
+index 47be951..0f82f20 100644
+--- a/runtime/spu/spu_workload.c
++++ b/runtime/spu/spu_workload.c
+@@ -384,6 +384,24 @@ static uint8_t* ts_running(uint32_t taskset_ea)
+ static void ts_lock(void)   { while (InterlockedExchange(&s_ts_lock, 1)) Sleep(0); }
+ static void ts_unlock(void) { InterlockedExchange(&s_ts_lock, 0); }
+ 
++/* Clear bits of one taskset bitset byte. The bitsets share the taskset's
++ * first line with what the SPU task library updates by GETLLAR/PUTLLC (a task
++ * created from the SPU sets its enabled and ready bits that way), so the
++ * read-modify-write holds the lock-line lock and breaks the line's
++ * reservations, as spurs_bitset_rmw does: done as a plain byte update, a task
++ * exit landing on a creation in the same byte (tasks 0-7) wrote back the byte
++ * it had read and dropped the new task's bits. God of War: Ascension's
++ * particle job lost one of the five next-phase tasks its last item creates,
++ * the count stopped at 4 of 5 and the level load froze. */
++static void ts_bits_clear(uint32_t ea, uint8_t m)
++{
++    extern uint8_t* vm_base;
++    spu_lockline_lock();
++    vm_base[ea] &= (uint8_t)~m;
++    if (spu_coh_is_reserved(ea)) spu_coh_notify_write(ea);
++    spu_lockline_unlock();
++}
++
+ static void spu_taskset_mark(uint32_t taskset_ea, uint32_t t, int on)
+ {
+     if (!taskset_ea || t >= 128 || s_ts_held) return;   /* held: caller set it */
+@@ -460,7 +478,7 @@ static void ts_start_ready(uint32_t taskset_ea, uint32_t done_task)
+         if (!elf) continue;
+         size_t sz = spu_elf_image_size(vm_base + elf, 2u * 1024 * 1024);
+         if (!sz) continue;
+-        ts[0x20 + t / 8] &= (uint8_t)~m;
++        ts_bits_clear(taskset_ea + 0x20 + t / 8, m);       /* pending -> started */
+         run[t / 8] |= m;
+         if (ps3_log_verbose()) fprintf(stderr, "[taskset] start task %u of taskset 0x%08X elf=0x%08X "
+                         "(after task %u exited)\n", t, taskset_ea, elf, done_task);
+@@ -488,9 +506,9 @@ static void spu_taskset_task_exited(uint32_t taskset_ea, uint32_t done_task)
+     if (done_task < 128) {
+         spu_taskset2_set_exit(taskset_ea, done_task, 1, 0);
+         uint8_t m = (uint8_t)(0x80u >> (done_task & 7));
+-        ts[0x10 + done_task / 8] &= (uint8_t)~m;
+-        ts[0x20 + done_task / 8] &= (uint8_t)~m;
+-        ts[0x30 + done_task / 8] &= (uint8_t)~m;
++        ts_bits_clear(taskset_ea + 0x10 + done_task / 8, m);
++        ts_bits_clear(taskset_ea + 0x20 + done_task / 8, m);
++        ts_bits_clear(taskset_ea + 0x30 + done_task / 8, m);
+         if (run) run[done_task / 8] &= (uint8_t)~m;
+     }
+     ts_start_ready(taskset_ea, done_task);
+-- 
+2.48.1.windows.1
+

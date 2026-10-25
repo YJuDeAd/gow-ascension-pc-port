@@ -1,0 +1,27 @@
+From ba1c035d853cff6aa9e354f63f3b4bfe2dda32fc Mon Sep 17 00:00:00 2001
+From: YJuDeAd <robinrashi@gmail.com>
+Date: Sun, 25 Oct 2026 05:29:40 +0530
+Subject: [PATCH 47/47] lift_jobmods.py: fix newline syntax error before
+ parse_args
+
+---
+ tools/lift_jobmods.py | 3 ++-
+ 1 file changed, 2 insertions(+), 1 deletion(-)
+
+diff --git a/tools/lift_jobmods.py b/tools/lift_jobmods.py
+index 0e5fd12..05d1c93 100644
+--- a/tools/lift_jobmods.py
++++ b/tools/lift_jobmods.py
+@@ -145,7 +145,8 @@ def main():
+                          "LS 0x4000, so an address one module needs is mid-function "
+                          "in another; the global $LBP_JOBMOD_EXTRA_FUNCS cannot say "
+                          "which. The list is what the runtime's '[spu-smc] microstep "
+-                         "... ovl=<image>' lines report for that module's image.")    args = ap.parse_args()
++                         "... ovl=<image>' lines report for that module's image.")
++    args = ap.parse_args()
+     per_module = {}
+     if args.extra_funcs_json:
+         with open(args.extra_funcs_json) as f:
+-- 
+2.48.1.windows.1
+

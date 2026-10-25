@@ -1,0 +1,71 @@
+From b9eb0692ffc9d4e6eb350deb491181b5c3dd881c Mon Sep 17 00:00:00 2001
+From: YJuDeAd <robinrashi@gmail.com>
+Date: Sun, 25 Oct 2026 04:35:22 +0530
+Subject: [PATCH 15/47] Apply ps3recomp-0015-taskset-bitset-lockline.patch
+
+---
+ libs/spurs/spurs_taskset.h                | 28 +++++++++++++++++++----
+ runtime/spu/tests/test_spu_taskset_wake.c |  2 ++
+ 2 files changed, 25 insertions(+), 5 deletions(-)
+
+diff --git a/libs/spurs/spurs_taskset.h b/libs/spurs/spurs_taskset.h
+index 0c64b55..4b5d69e 100644
+--- a/libs/spurs/spurs_taskset.h
++++ b/libs/spurs/spurs_taskset.h
+@@ -76,17 +76,35 @@ static inline uint32_t spurs_taskset_taskinfo_ea(uint32_t taskset_ea, uint32_t t
+ 
+ /* set/clear/test a task bit in a 128-bit bitset (bit 0 = MSB of word 0, per RPCS3
+  * atomic_tasks_bitset::get_bit). bitset_ea = taskset_ea + CSTS_READY etc. */
+-static inline void spurs_bitset_set(uint32_t bitset_ea, uint32_t taskId)
++/* The bitsets share a 128-byte line with the rest of the taskset, which the
++ * SPU task library updates with GETLLAR/PUTLLC (cellSpursSendSignal sets a
++ * bit in CSTS_SIGNALLED that way). The host's read-modify-write must hold the
++ * lock-line lock for its whole span, and break the reservations on the line,
++ * or the two undo each other: a task clearing its consumed signal while
++ * another task's signal was being committed wiped that one too. God of War:
++ * Ascension's RsxSync signals its five post-process tasks back to back; two
++ * of them slept through the round, its dependency never reached zero and the
++ * frames stopped. Raw accesses inside: vm_write32 would take the same
++ * (non-recursive) lock. */
++static inline void spurs_bitset_rmw(uint32_t bitset_ea, uint32_t taskId, int set)
+ {
+     uint32_t word_ea = bitset_ea + (taskId / 32) * 4;
+     uint32_t mask = (1u << 31) >> (taskId % 32);
+-    vm_write32(word_ea, vm_read32(word_ea) | mask);
++    spu_lockline_lock();
++    uint8_t* p = vm_ptr8(word_ea);
++    uint32_t v = ((uint32_t)p[0] << 24) | ((uint32_t)p[1] << 16) | ((uint32_t)p[2] << 8) | p[3];
++    v = set ? (v | mask) : (v & ~mask);
++    p[0] = (uint8_t)(v >> 24); p[1] = (uint8_t)(v >> 16); p[2] = (uint8_t)(v >> 8); p[3] = (uint8_t)v;
++    if (spu_coh_is_reserved(word_ea)) spu_coh_notify_write(word_ea);
++    spu_lockline_unlock();
++}
++static inline void spurs_bitset_set(uint32_t bitset_ea, uint32_t taskId)
++{
++    spurs_bitset_rmw(bitset_ea, taskId, 1);
+ }
+ static inline void spurs_bitset_clear(uint32_t bitset_ea, uint32_t taskId)
+ {
+-    uint32_t word_ea = bitset_ea + (taskId / 32) * 4;
+-    uint32_t mask = (1u << 31) >> (taskId % 32);
+-    vm_write32(word_ea, vm_read32(word_ea) & ~mask);
++    spurs_bitset_rmw(bitset_ea, taskId, 0);
+ }
+ static inline int spurs_bitset_test(uint32_t bitset_ea, uint32_t taskId)
+ {
+diff --git a/runtime/spu/tests/test_spu_taskset_wake.c b/runtime/spu/tests/test_spu_taskset_wake.c
+index 9864251..e9b24bf 100644
+--- a/runtime/spu/tests/test_spu_taskset_wake.c
++++ b/runtime/spu/tests/test_spu_taskset_wake.c
+@@ -288,6 +288,8 @@ uint32_t g_ydkj_real_taskset_ea = 0;
+ uint32_t g_ydkj_real_taskid = 0;
+ void spurs_ef_set_from_spu(uint32_t ea, uint16_t bits) { (void)ea; (void)bits; }
+ void ydkj_wake_all_event_flags(void)                   { }
++int spurs_ready_level(void)                             { return 0; }
++uint32_t spurs_poll_select(uint32_t ea, uint32_t cur, uint32_t spu) { (void)ea; (void)cur; (void)spu; return 0x20; }
+ void spurs_pm_build_context(spu_context* c, uint32_t a, uint32_t b, uint32_t d)
+ {
+     (void)c; (void)a; (void)b; (void)d;
+-- 
+2.48.1.windows.1
+

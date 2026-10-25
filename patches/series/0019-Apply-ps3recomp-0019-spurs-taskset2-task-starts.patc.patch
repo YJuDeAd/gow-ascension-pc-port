@@ -1,0 +1,265 @@
+From 2140b06c56a25f8d2cb21b753430af05f6bb6e34 Mon Sep 17 00:00:00 2001
+From: YJuDeAd <robinrashi@gmail.com>
+Date: Sun, 25 Oct 2026 04:38:18 +0530
+Subject: [PATCH 19/47] Apply ps3recomp-0019-spurs-taskset2-task-starts.patch
+
+---
+ libs/spurs/cellSpurs.c       | 42 ++++++++++++++--
+ runtime/spu/spu_workload.c   | 95 +++++++++++++++++++-----------------
+ runtime/syscalls/sys_event.c | 15 ++++++
+ 3 files changed, 101 insertions(+), 51 deletions(-)
+
+diff --git a/libs/spurs/cellSpurs.c b/libs/spurs/cellSpurs.c
+index 276873e..d82b33e 100644
+--- a/libs/spurs/cellSpurs.c
++++ b/libs/spurs/cellSpurs.c
+@@ -943,6 +943,18 @@ static s32 spurs_create_taskset(CellSpurs* spurs, CellSpursTaskset* taskset,
+      * little-endian = garbage to the SPU). Overwrites 0x00-0x80 with BE fields. */
+     spurs_taskset_init(taskset_ea, spurs_ea, args, /*wid*/0,
+                        taskset_size, /*evf1*/0, /*evf2*/0);
++    /* A CellSpursTaskset2 carries two lv2 event flags, one bit per task, for
++     * task exit (cellSpursJoinTask2). The SPU task library will not create a
++     * task in a taskset whose flags are both 0 (CELL_SPURS_TASK_ERROR_PERM):
++     * make them, ids straight into the taskset. */
++    if (taskset_size == 0x2900u) {
++        extern int64_t sys_event_flag_create_host(uint32_t, uint64_t);
++        sys_event_flag_create_host(taskset_ea + CSTS_EVENT_FLAG_ID1, 0);
++        sys_event_flag_create_host(taskset_ea + CSTS_EVENT_FLAG_ID2, 0);
++    }
++    /* Known to the taskset scheduler from the start: an SPU may create its
++     * first tasks (spu_taskset_track). */
++    { extern void spu_taskset_track(uint32_t); spu_taskset_track(taskset_ea); }
+     g_ydkj_real_taskset_ea = taskset_ea;
+ 
+     g_ydkj_real_spurs_ea = spurs_ea;   /* capture for the taskset-policy handoff (LS[0x1C0]) */
+@@ -983,8 +995,15 @@ s32 cellSpursCreateTaskset2(CellSpurs* spurs, CellSpursTaskset* taskset,
+         const u8* a = GUEST_PTR(attr, const u8*);
+         for (int i = 0; i < 8; i++) args = (args << 8) | a[0x08 + i];
+     }
+-    printf("[cellSpurs] CreateTaskset2 -> CreateTaskset (arg=0x%016llX)\n", (unsigned long long)args);
+-    return cellSpursCreateTaskset(spurs, taskset, args, NULL, 0);
++    printf("[cellSpurs] CreateTaskset2 (arg=0x%016llX, size 0x2900)\n", (unsigned long long)args);
++    /* A CellSpursTaskset2 is 0x2900 bytes, and its size field (+0x1890)
++     * says so: the SPU task library checks it before it creates a task in
++     * the taskset from an SPU (taskset size > 0x28FF, or
++     * CELL_SPURS_TASK_ERROR_PERM, 0x80410909). Made as a first-generation
++     * taskset, it read 0x1900, so God of War: Ascension's particle tasks
++     * could not start their next phase and the loading screen waited on
++     * it for good. */
++    return spurs_create_taskset(spurs, taskset, args, NULL, 0, 0x2900u);
+ }
+ 
+ s32 cellSpursDestroyTaskset(CellSpursTaskset* taskset)
+@@ -1122,6 +1141,11 @@ s32 cellSpursCreateTask(CellSpursTaskset* taskset, CellSpursTaskId* taskId,
+             if (taskId) vm_write32((u32)(uintptr_t)taskId, i);
+             (void)taskId_h;
+ 
++            /* Running before it is enabled: this call dispatches the task
++             * itself below, and a sibling exiting meanwhile must not find it
++             * enabled and idle and start it again (spu_taskset_set_running). */
++            extern void spu_taskset_set_running(uint32_t, uint32_t, int);
++            if (elf) spu_taskset_set_running(taskset_ea, i, 1);
+             /* Register the task in the REAL BE taskset: writes task_info[slot]
+              * (args/elf/context/ls_pattern) + sets enabled+ready bits so the PM's
+              * SELECT_TASK picks it. Slot index i = the SPURS taskId (bitset bit). */
+@@ -1207,11 +1231,19 @@ s32 cellSpursCreateTask(CellSpursTaskset* taskset, CellSpursTaskId* taskId,
+                  * as the guest EA (the SPU job's DMA uses guest EAs / r3). */
+                 const uint8_t* host_elf = GUEST_PTR(elf, const uint8_t*);
+                 size_t sz = spu_elf_image_size(host_elf, 2u * 1024 * 1024);
+-                if (sz)
++                int started = 0;
++                if (sz) {
++                    /* The dispatch reads the task from these globals, and the
++                     * taskset scheduler (another thread) sets them for its own
++                     * starts: set them again right before. */
++                    g_ydkj_real_taskset_ea = taskset_ea;
++                    g_ydkj_real_taskid     = i;
+                     /* Async: SPURS tasks are persistent workers — running them
+                      * inline would block this PPU thread forever (deadlock). */
+-                    spu_workload_dispatch_async(host_elf, (uint32_t)sz,
+-                                                (uint32_t)(uintptr_t)context);
++                    started = spu_workload_dispatch_async(host_elf, (uint32_t)sz,
++                                                          (uint32_t)(uintptr_t)context);
++                }
++                if (!started) spu_taskset_set_running(taskset_ea, i, 0);
+             }
+             return CELL_OK;
+         }
+diff --git a/runtime/spu/spu_workload.c b/runtime/spu/spu_workload.c
+index d14bf15..77ebe94 100644
+--- a/runtime/spu/spu_workload.c
++++ b/runtime/spu/spu_workload.c
+@@ -401,12 +401,14 @@ void spu_taskset_mark_running(uint32_t taskset_ea, uint32_t t)
+     spu_taskset_mark(taskset_ea, t, 1);
+ }
+ 
++void spu_taskset_set_running(uint32_t taskset_ea, uint32_t t, int on)
++{
++    spu_taskset_mark(taskset_ea, t, on);
++}
++
+ /* CellSpursTaskset2 keeps a 16-byte task_exit_code[128] at +0x1980 that the
+-     * SPU-side join reads: byte 14 must be 0 (non-zero reads as ESRCH), byte 15 low nibble =
+-     * state (2 = exited, 4 = joined), exit code at +8. The SPURS kernel writes
+-     * it when a task exits; nothing here did, so a task that joins its workers
+-     * (Havok's master SPU task does) retried forever and the PPU waited on it.
+-     * Only Taskset2s have the array -- a v1 taskset ends at 0x1900. */
++ * SPU-side join reads: byte 14 must be 0 (non-zero reads as ESRCH), byte 15 low nibble =
++ * state (2 = exited, 4 = joined), exit code at +8. */
+ static uint32_t s_ts2[16]; static int s_n_ts2;
+ void spu_taskset2_register(uint32_t ea)
+ {
+@@ -426,43 +428,24 @@ void spu_taskset2_set_exit(uint32_t taskset_ea, uint32_t task, int exited, uint3
+     extern void spu_coh_notify_write(uint32_t);
+     const uint32_t ea = taskset_ea + 0x1980 + 16u * task;
+     uint8_t* e = vm_base + ea;
+-    spu_lockline_lock();   /* a joining SPU may hold a reservation on this line */
++    spu_lockline_lock();
+     memset(e, 0, 16);
+     if (exited) {
+         e[8] = (uint8_t)(code >> 24); e[9] = (uint8_t)(code >> 16); e[10] = (uint8_t)(code >> 8); e[11] = (uint8_t)code;
+-        e[15] = 2;   /* exited, not yet joined; byte 14 must stay 0 or the join reports ESRCH */
++        e[15] = 2;
+     }
+     spu_coh_notify_write(ea);
+     spu_lockline_unlock();
+ }
+ 
+-static void spu_taskset_task_exited(uint32_t taskset_ea, uint32_t done_task)
++/* Start every enabled task of one taskset that is ready or pending and not
++ * running here. Called under ts_lock. */
++static void ts_start_ready(uint32_t taskset_ea, uint32_t done_task)
+ {
+     extern uint8_t* vm_base;
+     extern uint32_t g_ydkj_real_taskset_ea, g_ydkj_real_taskid;
+-    extern void spu_lockline_lock(void); extern void spu_lockline_unlock(void);
+-    extern void spu_coh_notify_write(uint32_t);
+-    ts_lock(); s_ts_held = 1;
+     uint8_t* ts = vm_base + taskset_ea;
+     uint8_t* run = ts_running(taskset_ea);
+-    if (done_task < 128) spu_taskset2_set_exit(taskset_ea, done_task, 1, 0);
+-    /* The ready/pending/enabled bitsets share the taskset's first line with the
+-     * SPU task library (GETLLAR/PUTLLC) and with cellSpursCreateTask, which
+-     * update them under the lock-line lock. Update them under the same lock,
+-     * then drop the reservations on the line, so neither side undoes the
+-     * other's change. Tasks to start are collected here and dispatched after
+-     * the lock is released (the dispatch writes guest memory itself). */
+-    uint32_t start_t[128], start_elf[128], start_ctx[128];
+-    size_t start_sz[128];
+-    int n_start = 0;
+-    spu_lockline_lock();
+-    if (done_task < 128) {
+-        uint8_t m = (uint8_t)(0x80u >> (done_task & 7));
+-        ts[0x10 + done_task / 8] &= (uint8_t)~m;
+-        ts[0x20 + done_task / 8] &= (uint8_t)~m;
+-        ts[0x30 + done_task / 8] &= (uint8_t)~m;
+-        if (run) run[done_task / 8] &= (uint8_t)~m;
+-    }
+     for (uint32_t t = 0; t < 128 && run; t++) {
+         uint8_t m = (uint8_t)(0x80u >> (t & 7));
+         if (!(ts[0x30 + t / 8] & m) || (run[t / 8] & m)) continue;
+@@ -470,38 +453,58 @@ static void spu_taskset_task_exited(uint32_t taskset_ea, uint32_t done_task)
+         const uint8_t* ti = ts + 0x80 + 0x30 * t;
+         uint32_t elf = ((uint32_t)ti[0x14] << 24) | ((uint32_t)ti[0x15] << 16) |
+                        ((uint32_t)ti[0x16] << 8) | ti[0x17];
+-        elf &= ~0xFu;   /* low bits are flags: an SPU-side CreateTask2 stores elf|4 */
++        elf &= ~0xFu;
+         uint32_t ctx = ((uint32_t)ti[0x1C] << 24) | ((uint32_t)ti[0x1D] << 16) |
+                        ((uint32_t)ti[0x1E] << 8) | ti[0x1F];
+-        /* TaskInfo stores ELF metadata in the low three bits. Keep those
+-         * guest bytes intact and use only the address for loading. */
+         elf &= ~7u;
+         if (!elf) continue;
+         size_t sz = spu_elf_image_size(vm_base + elf, 2u * 1024 * 1024);
+         if (!sz) continue;
+-        ts[0x20 + t / 8] &= (uint8_t)~m;                 /* pending -> started */
++        ts[0x20 + t / 8] &= (uint8_t)~m;
+         run[t / 8] |= m;
+-        start_t[n_start] = t; start_elf[n_start] = elf; start_ctx[n_start] = ctx;
+-        start_sz[n_start] = sz; n_start++;
+-    }
+-    spu_coh_notify_write(taskset_ea);
+-    spu_lockline_unlock();
+-    for (int i = 0; i < n_start; i++) {
+         fprintf(stderr, "[taskset] start task %u of taskset 0x%08X elf=0x%08X "
+-                        "(after task %u exited)\n", start_t[i], taskset_ea, start_elf[i], done_task);
+-        g_ydkj_real_taskset_ea = taskset_ea; g_ydkj_real_taskid = start_t[i];
+-        spu_workload_dispatch_async(vm_base + start_elf[i], (uint32_t)start_sz[i], start_ctx[i]);
++                        "(after task %u exited)\n", t, taskset_ea, elf, done_task);
++        g_ydkj_real_taskset_ea = taskset_ea; g_ydkj_real_taskid = t;
++        spu_workload_dispatch_async(vm_base + elf, (uint32_t)sz, ctx);
++    }
++}
++
++/* Track a taskset from its creation, so a task an SPU creates in it is
++ * started even if no task of that taskset has run yet (below). */
++void spu_taskset_track(uint32_t taskset_ea)
++{
++    if (!taskset_ea) return;
++    ts_lock();
++    (void)ts_running(taskset_ea);
++    ts_unlock();
++}
++
++static void spu_taskset_task_exited(uint32_t taskset_ea, uint32_t done_task)
++{
++    extern uint8_t* vm_base;
++    ts_lock();
++    uint8_t* ts = vm_base + taskset_ea;
++    uint8_t* run = ts_running(taskset_ea);
++    if (done_task < 128) {
++        spu_taskset2_set_exit(taskset_ea, done_task, 1, 0);
++        uint8_t m = (uint8_t)(0x80u >> (done_task & 7));
++        ts[0x10 + done_task / 8] &= (uint8_t)~m;
++        ts[0x20 + done_task / 8] &= (uint8_t)~m;
++        ts[0x30 + done_task / 8] &= (uint8_t)~m;
++        if (run) run[done_task / 8] &= (uint8_t)~m;
+     }
+-    s_ts_held = 0; ts_unlock();
++    ts_start_ready(taskset_ea, done_task);
++    for (int i = 0; i < TS_TRACK; i++)
++        if (s_ts_run[i].ea && s_ts_run[i].ea != taskset_ea)
++            ts_start_ready(s_ts_run[i].ea, done_task);
++    ts_unlock();
+ }
+ 
+-/* Start any task that is enabled + ready/pending but not running. The scan
+- * otherwise runs only when a task exits, and a task an SPU creates after the
+- * last exit (Havok's master recreates its workers) was never noticed. */
+ void spu_taskset_start_pending(uint32_t taskset_ea)
+ {
+     if (taskset_ea) spu_taskset_task_exited(taskset_ea, 0xFFFFFFFFu);
+ }
++}
+ 
+ static void spu_async_run(spu_async_job* j)
+ {
+diff --git a/runtime/syscalls/sys_event.c b/runtime/syscalls/sys_event.c
+index e8baa92..0afe54b 100644
+--- a/runtime/syscalls/sys_event.c
++++ b/runtime/syscalls/sys_event.c
+@@ -1111,6 +1111,21 @@ int64_t sys_event_flag_create(ppu_context* ctx)
+     return CELL_OK;
+ }
+ 
++/* An event flag made by the runtime itself (no guest attribute), its id
++ * written big-endian to id_out_ea: libspurs makes two for every
++ * CellSpursTaskset2 (cellSpursCreateTaskset2). */
++int64_t sys_event_flag_create_host(uint32_t id_out_ea, uint64_t init_pattern)
++{
++    ppu_context* c = (ppu_context*)calloc(1, sizeof(ppu_context));
++    if (!c) return (int64_t)(int32_t)CELL_ENOMEM;
++    c->gpr[3] = id_out_ea;
++    c->gpr[4] = 0;
++    c->gpr[5] = init_pattern;
++    int64_t rc = sys_event_flag_create(c);
++    free(c);
++    return rc;
++}
++
+ int64_t sys_event_flag_destroy(ppu_context* ctx)
+ {
+     uint32_t flag_id = LV2_ARG_U32(ctx, 0);
+-- 
+2.48.1.windows.1
+

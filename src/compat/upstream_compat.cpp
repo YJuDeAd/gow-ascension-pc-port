@@ -43,7 +43,8 @@ extern "C" {
     GOW_WEAK int ppu_diag_get_thread_status(uint32_t tid, uint32_t* out_lr, char* out_name, size_t name_sz, int* out_state) {
         if (tid == 0 || tid > PPU_THREAD_MAX) return 0;
         if (tid == 1) {
-            if (out_lr) *out_lr = 0;
+            extern ppu_context* volatile g_ppu_main_ctx;
+            if (out_lr) *out_lr = g_ppu_main_ctx ? (uint32_t)g_ppu_main_ctx->lr : 0;
             if (out_name && name_sz > 0) {
                 strncpy(out_name, "main", name_sz - 1);
                 out_name[name_sz - 1] = 0;
@@ -104,7 +105,84 @@ extern "C" {
 
     GOW_WEAK void ppu_diag_set_wait(uint32_t, int, uint64_t) {}
     GOW_WEAK void ppu_diag_clear_wait(uint32_t) {}
-    GOW_WEAK void ppu_diag_enter_hle(uint32_t, uint32_t, const char*) {}
+    static volatile int g_rem_zero_active = 0;
+    GOW_WEAK void gow_notify_rem_zero(int active) {
+        g_rem_zero_active = active;
+    }
+
+    struct HleStatEntry {
+        uint32_t nid;
+        const char* name;
+        uint64_t count;
+    };
+    static HleStatEntry g_hle_after_rem0_table[512];
+    static uint32_t g_hle_after_rem0_count = 0;
+
+    GOW_WEAK void gow_print_top25_hle_after_rem0(void) {
+        if (g_hle_after_rem0_count == 0) {
+            fprintf(stderr, "[TOP25-HLE-AFTER-REM0] No HLE calls recorded after rem=0 yet.\n");
+            return;
+        }
+        // sort by count
+        for (uint32_t i = 0; i < g_hle_after_rem0_count; i++) {
+            for (uint32_t j = i + 1; j < g_hle_after_rem0_count; j++) {
+                if (g_hle_after_rem0_table[j].count > g_hle_after_rem0_table[i].count) {
+                    HleStatEntry tmp = g_hle_after_rem0_table[i];
+                    g_hle_after_rem0_table[i] = g_hle_after_rem0_table[j];
+                    g_hle_after_rem0_table[j] = tmp;
+                }
+            }
+        }
+        fprintf(stderr, "\n=== [TOP 25 HLE CALLS AFTER REM=0] ===\n");
+        for (uint32_t i = 0; i < g_hle_after_rem0_count && i < 25; i++) {
+            fprintf(stderr, "  #%02u: %-32s (0x%08X) -> %llu calls\n",
+                    i + 1, g_hle_after_rem0_table[i].name ? g_hle_after_rem0_table[i].name : "unknown",
+                    g_hle_after_rem0_table[i].nid, (unsigned long long)g_hle_after_rem0_table[i].count);
+        }
+        fprintf(stderr, "=======================================\n\n");
+    }
+
+    GOW_WEAK void ppu_diag_enter_hle(uint32_t tid, uint32_t nid, const char* name) {
+        if (tid < 64) {
+            g_ppu_thread_diags[tid].last_hle_nid = nid;
+            g_ppu_thread_diags[tid].last_hle_name = name;
+            uint32_t idx = g_ppu_thread_diags[tid].hle_history_idx % 5;
+            g_ppu_thread_diags[tid].hle_history_nid[idx] = nid;
+            g_ppu_thread_diags[tid].hle_history_name[idx] = name;
+            g_ppu_thread_diags[tid].hle_history_idx++;
+        }
+        if (g_rem_zero_active) {
+            uint32_t slot = 0xFFFFFFFFu;
+            for (uint32_t i = 0; i < g_hle_after_rem0_count; i++) {
+                if (g_hle_after_rem0_table[i].nid == nid) { slot = i; break; }
+            }
+            if (slot == 0xFFFFFFFFu && g_hle_after_rem0_count < 512) {
+                slot = g_hle_after_rem0_count++;
+                g_hle_after_rem0_table[slot].nid = nid;
+                g_hle_after_rem0_table[slot].name = name;
+                g_hle_after_rem0_table[slot].count = 0;
+            }
+            if (slot != 0xFFFFFFFFu) {
+                g_hle_after_rem0_table[slot].count++;
+            }
+        }
+        if (name) {
+            if (strncmp(name, "cellSail", 8) == 0 ||
+                strncmp(name, "cellPamf", 8) == 0 ||
+                strncmp(name, "cellVdec", 8) == 0 ||
+                strncmp(name, "cellDmux", 8) == 0 ||
+                strcmp(name, "cellAudioAddData") == 0 ||
+                strcmp(name, "cellGcmSetDisplayBuffer") == 0) {
+                static uint64_t s_spec_count = 0;
+                if (++s_spec_count <= 50 || (s_spec_count % 100 == 0)) {
+                    extern unsigned long long ps3_qpc_us(void);
+                    double wall = (double)ps3_qpc_us() / 1e6;
+                    fprintf(stderr, "[SPECIAL-CALL #%llu @ %.3fs] %s (nid=0x%08X tid=%u)\n",
+                            (unsigned long long)s_spec_count, wall, name, nid, tid);
+                }
+            }
+        }
+    }
     GOW_WEAK uint32_t ppu_diag_get_current_tid(void) { return 0; }
 
     GOW_WEAK void ppu_gcm_pump_caller(uint32_t) {}

@@ -1,0 +1,163 @@
+From 7cb933c206da701aba3b4317c8691264c7ffa169 Mon Sep 17 00:00:00 2001
+From: YJuDeAd <robinrashi@gmail.com>
+Date: Sun, 25 Oct 2026 04:50:55 +0530
+Subject: [PATCH 39/47] Apply ps3recomp-0039-half2-tex-shadow-compare.patch
+
+---
+ libs/video/rsx_live_draw.c | 112 ++++++++++++++++++++++++++++++++++++-
+ 1 file changed, 111 insertions(+), 1 deletion(-)
+
+diff --git a/libs/video/rsx_live_draw.c b/libs/video/rsx_live_draw.c
+index 91ae829..f158891 100644
+--- a/libs/video/rsx_live_draw.c
++++ b/libs/video/rsx_live_draw.c
+@@ -2217,6 +2217,7 @@ static u32 texture_source_span(const rsx_dsp_texture* t)
+     case TEX_FMT_X16: texel_size = 2; break;
+     case RSX_TEX_FMT_W16Z16Y16X16_FLOAT: texel_size = 8; break;
+     case TEX_FMT_A8R8G8B8:
++    case RSX_TEX_FMT_Y16X16_FLOAT:
+     case TEX_FMT_DEPTH24_D8: texel_size = 4; break;
+     default: return 0;
+     }
+@@ -2560,6 +2561,40 @@ static ID3D12Resource* decode_guest_texture(const rsx_dsp_texture* t, u32 remap)
+         return r;
+     }
+ 
++    /* Two big-endian halves per texel (Y16_X16_FLOAT), as R16G16_FLOAT:
++     * the first half to R, the second to G. God of War: Ascension's level
++     * loads seven 128x128 ones (lighting lookup tables); they had no decode
++     * and fell to the white SRV, (1,1,1,1), which drove every specular and
++     * reflection term to the top: blown-out floors and pillars, skin washed
++     * to a smooth grey. LD_HALF2_TEX=0: off. */
++    static int half2_on = -1;
++    if (half2_on < 0) { const char* e = getenv("LD_HALF2_TEX"); half2_on = !(e && e[0] == '0'); }
++    if (half2_on && base_fmt == RSX_TEX_FMT_Y16X16_FLOAT && !t->cubemap) {
++        const u32 pitch = linear && t->pitch ? t->pitch : w * 4u;
++        const u8* src = guest_ptr(t->location, t->offset, pitch * h);
++        if (!src) return NULL;
++        if (!linear && ((w & (w - 1)) || (h & (h - 1)))) return NULL;
++        { static int dn = 0; const char* dd = getenv("LD_HALF2_DUMP");   /* LD_HALF2_DUMP=<dir>: raw bytes, first 16 */
++          if (dd && dn < 16) { char path[600];
++              snprintf(path, sizeof path, "%s/half2_%u_%08X_%ux%u_p%u_%s_r%04X.bin", dd, t->location, t->offset,
++                       w, h, pitch, linear ? "lin" : "swz", remap & 0xFFFFu);
++              FILE* f = fopen(path, "wb"); if (f) { fwrite(src, 1, (size_t)pitch * h, f); fclose(f); dn++; } } }
++        u8* texels = (u8*)malloc((size_t)w * h * 4u);
++        if (!texels) return NULL;
++        const u32 lw = log2_u32(w), lh = log2_u32(h);
++        for (u32 y = 0; y < h; y++)
++            for (u32 x = 0; x < w; x++) {
++                const u8* q = linear ? src + (size_t)y * pitch + (size_t)x * 4u
++                                     : src + (size_t)morton_index(x, y, lw, lh) * 4u;
++                u8* d = texels + ((size_t)y * w + x) * 4u;
++                d[0] = q[1]; d[1] = q[0]; d[2] = q[3]; d[3] = q[2];
++            }
++        tex_level_t level = { w, h, texels, w * 4u, h };
++        ID3D12Resource* r = create_texture_mipped(DXGI_FORMAT_R16G16_FLOAT, &level, 1);
++        free(texels);
++        return r;
++    }
++
+     u32 texel_size;
+     switch (base_fmt) {
+     case TEX_FMT_B8: texel_size = 1; break;
+@@ -5487,6 +5522,57 @@ static ID3D12PipelineState* get_pso(
+       }
+       if (ld_srgb_output) key = fnv1a(&ld_srgb_output, sizeof(ld_srgb_output), key);
+       if (ld_gamma_units) key = fnv1a(ld_gamma_masks, sizeof(ld_gamma_masks), key); }
++    /* Depth-compare (shadow) sampling, as the shared draw engine does: a
++     * DEPTH24_D8/DEPTH16 unit with a compare function in its address word
++     * returns the comparison, not the depth. Live draw sampled the raw depth,
++     * so God of War: Ascension's screen-space shadow mask came out white (no
++     * shadow anywhere) and, once its jitter texture decoded (Y16_X16_FLOAT),
++     * noisy. A normalized unit that reads a zeta's snapshot larger than the
++     * texture (the zeta outgrew it) scales its coordinate to the texture's
++     * corner of the snapshot, as the texel-addressed path above divides by the
++     * snapshot size. The RSX compares the texel against the reference (RPCS3
++     * reverses the operands for the host compare too): the decompiler's table
++     * reads "reference OP depth", so the function is mirrored here. Taken as
++     * written, Ascension's courtyard sat in one flat shadow; mirrored, the sun
++     * lights the floor and the walls cast their shapes on it.
++     * LD_SHADOW=0: off; LD_SHADOW_SWAP=0: the decompiler's operand order. */
++    rsx_fp_shadow_desc ld_shadow[16];
++    memset(ld_shadow, 0, sizeof ld_shadow);
++    u32 ld_shadow_mask = 0;
++    float ld_shadow_scale[16][2];
++    { static int on = -1, swap = -1;
++      if (on < 0) { const char* e = getenv("LD_SHADOW"); on = !(e && e[0] == '0');
++                    const char* w = getenv("LD_SHADOW_SWAP"); swap = !(w && w[0] == '0'); }
++      const u32 units = on ? rsx_fp_texture_units(fp_uc, fp_size) : 0u;
++      for (u32 su = 0; su < 16; su++) {
++          ld_shadow_scale[su][0] = ld_shadow_scale[su][1] = 1.0f;
++          if (!(units & (1u << su))) continue;
++          rsx_dsp_texture st; rsx_dsp_get_texture(&g.rsx, su, &st);
++          if (!st.enabled) continue;
++          rsx_fp_shadow_desc_from_texture(&ld_shadow[su], st.format, st.dimension,
++              st.cubemap, st.mipmaps, st.filter, st.wrap, st.control0);
++          if (!ld_shadow[su].enabled) continue;
++          if (swap) { static const u8 sw[8] = { 0, 4, 2, 6, 1, 5, 3, 7 };
++                      ld_shadow[su].func = sw[ld_shadow[su].func & 7]; }
++          ld_shadow_mask |= 1u << su;
++          unnorm_mask &= ~(1u << su);     /* the helper divides texel coordinates itself */
++          if (!ld_shadow[su].unnormalized && st.width && st.height)
++              for (u32 zi = 0; zi < g.n_zdepths; zi++) {
++                  const zdepth_t* z = &g.zdepths[zi];
++                  if (z->location != st.location || z->offset != st.offset) continue;
++                  if (z->snapshot && (z->had_write || z->snapshot_valid) &&
++                      z->snapshot_w >= st.width && z->snapshot_h >= st.height) {
++                      ld_shadow_scale[su][0] = (float)st.width / (float)z->snapshot_w;
++                      ld_shadow_scale[su][1] = (float)st.height / (float)z->snapshot_h;
++                  }
++                  break;
++              }
++      }
++      if (ld_shadow_mask) {
++          key = fnv1a(&ld_shadow_mask, sizeof(ld_shadow_mask), key);
++          key = fnv1a(ld_shadow, sizeof(ld_shadow), key);
++          key = fnv1a(ld_shadow_scale, sizeof(ld_shadow_scale), key);
++      } }
+     if (ld_fp_constants_buffered())
+         key = ld_hash_structural_render_state(&rs, key);
+     else
+@@ -5557,7 +5643,11 @@ static ID3D12PipelineState* get_pso(
+     u32 decompiled_constant_count = 0;
+     int fi;
+     if (ld_fp_constants_buffered()) {
+-        fi = ld_gamma_units
++        fi = ld_shadow_mask
++            ? rsx_fp_decompile_buffered_shadow_color_ex(
++                fp_uc, fp_size, fp_ctrl, cube_mask, ld_shadow, ld_gamma_masks, ps_hlsl,
++                sizeof(ps_hlsl), &decompiled_constant_count)
++            : ld_gamma_units
+             ? rsx_fp_decompile_buffered_color_ex(
+                 fp_uc, fp_size, fp_ctrl, cube_mask, ld_gamma_masks, ps_hlsl,
+                 sizeof(ps_hlsl), &decompiled_constant_count)
+@@ -5567,6 +5657,26 @@ static ID3D12PipelineState* get_pso(
+         if (fi > 0 &&
+             decompiled_constant_count != g.fp_constants.count)
+             fi = -1;
++        for (u32 su = 0; fi > 0 && su < 16; su++) {   /* see ld_shadow_scale */
++            if (!(ld_shadow_mask & (1u << su)) ||
++                (ld_shadow_scale[su][0] == 1.0f && ld_shadow_scale[su][1] == 1.0f)) continue;
++            char head[64], repl[160];
++            snprintf(head, sizeof head, "float4 _rsx_shadow%u(float3 coordinate) {", su);
++            char* h = strstr(ps_hlsl, head);
++            char* u = h ? strstr(h, "    float2 uv = coordinate.xy;") : NULL;
++            const char* old = "    float2 uv = coordinate.xy;";
++            snprintf(repl, sizeof repl, "    float2 uv = coordinate.xy * float2(%.9g, %.9g);",
++                     ld_shadow_scale[su][0], ld_shadow_scale[su][1]);
++            const size_t ol = strlen(old), rl = strlen(repl), tl = strlen(ps_hlsl);
++            if (!u || tl + rl - ol + 1 > sizeof(ps_hlsl)) { fi = -1; break; }
++            memmove(u + rl, u + ol, tl - (size_t)(u - ps_hlsl) - ol + 1);
++            memcpy(u, repl, rl);
++        }
++        { static int n = 0;
++          if (ld_shadow_mask && n++ < 8)
++              fprintf(stderr, "[shadow] mask=0x%X fi=%d scale0=%.3fx%.3f\n", ld_shadow_mask, fi,
++                      ld_shadow_scale[__builtin_ctz(ld_shadow_mask)][0],
++                      ld_shadow_scale[__builtin_ctz(ld_shadow_mask)][1]); }
+         if (fi > 0 && ld_srgb_output &&
+             rsx_fp_apply_srgb_output(ps_hlsl, sizeof(ps_hlsl)) < 0)
+             fi = -1;
+-- 
+2.48.1.windows.1
+

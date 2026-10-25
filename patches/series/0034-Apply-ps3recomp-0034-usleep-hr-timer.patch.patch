@@ -1,0 +1,73 @@
+From 99edf7de10b4ffdde607ed8d2ca0c5ff6f8fdfac Mon Sep 17 00:00:00 2001
+From: YJuDeAd <robinrashi@gmail.com>
+Date: Sun, 25 Oct 2026 04:46:31 +0530
+Subject: [PATCH 34/47] Apply ps3recomp-0034-usleep-hr-timer.patch
+
+---
+ libs/video/rsx_live_draw.c   | 11 +++++++----
+ runtime/syscalls/sys_timer.c | 26 ++++++++++++++++++++++++++
+ 2 files changed, 33 insertions(+), 4 deletions(-)
+
+diff --git a/libs/video/rsx_live_draw.c b/libs/video/rsx_live_draw.c
+index c3482f7..17b6805 100644
+--- a/libs/video/rsx_live_draw.c
++++ b/libs/video/rsx_live_draw.c
+@@ -7353,11 +7353,14 @@ static void live_draw_csv_emit(u32 prim, u32 n_tri, const char* outcome)
+     /* LD_DRAW_DUMP=<dir> [LD_DRAW_DUMP_EVERY=k, default 10]: in the first
+      * gated frame, read back each k-th draw's target BEFORE it is recorded,
+      * named by frame-relative index -- bisects which draw changes a surface. */
+-    { static const char* dir = (const char*)-1; static u32 every, frame = ~0u, idx, dumped_frame = ~0u;
++    /* LD_DRAW_DUMP_SKIP=<n>: pass over the first n gated frames, so the dumped
++     * one starts at its first draw instead of wherever the gate opened. */
++    { static const char* dir = (const char*)-1; static u32 every, frame = ~0u, idx, dumped_frame = ~0u, skip;
+       if (dir == (const char*)-1) { dir = getenv("LD_DRAW_DUMP");
+-          const char* e = getenv("LD_DRAW_DUMP_EVERY"); every = e ? (u32)atoi(e) : 10; if (!every) every = 10; }
+-      if (frame != g_ld_frames) { frame = g_ld_frames; idx = 0; }
+-      if (dir && target < g.n_surfaces && (dumped_frame == ~0u || dumped_frame == frame) &&
++          const char* e = getenv("LD_DRAW_DUMP_EVERY"); every = e ? (u32)atoi(e) : 10; if (!every) every = 10;
++          const char* k = getenv("LD_DRAW_DUMP_SKIP"); skip = k ? (u32)atoi(k) : 0; }
++      if (frame != g_ld_frames) { if (frame != ~0u && skip) skip--; frame = g_ld_frames; idx = 0; }
++      if (dir && !skip && target < g.n_surfaces && (dumped_frame == ~0u || dumped_frame == frame) &&
+           (idx % every) == 0) {
+           dumped_frame = frame;
+           char path[MAX_PATH * 2];
+diff --git a/runtime/syscalls/sys_timer.c b/runtime/syscalls/sys_timer.c
+index 5683446..d695641 100644
+--- a/runtime/syscalls/sys_timer.c
++++ b/runtime/syscalls/sys_timer.c
+@@ -218,6 +218,32 @@ int64_t sys_timer_usleep(ppu_context* ctx)
+         ppu_log_host_chain("usleep1ms"); } }
+ 
+ #ifdef _WIN32
++    /* From SYS_USLEEP_SPIN_MAX_US (default 200) up, sleep on a per-thread
++     * high-resolution waitable timer (Windows 10 1803+): it wakes within a
++     * fraction of a millisecond without spinning. The spin below was meant for
++     * microsecond waits; God of War: Ascension polls with 800 us sleeps on one
++     * thread, which kept a whole core busy doing nothing. */
++#ifndef CREATE_WAITABLE_TIMER_HIGH_RESOLUTION
++#define CREATE_WAITABLE_TIMER_HIGH_RESOLUTION 0x00000002
++#endif
++    static long s_spin_max = -1;
++    if (s_spin_max < 0) { const char* e = getenv("SYS_USLEEP_SPIN_MAX_US"); s_spin_max = e ? atol(e) : 200; }
++    static __declspec(thread) HANDLE t_hr_timer;
++    static __declspec(thread) int t_hr_failed;
++    if (usec >= (uint64_t)s_spin_max && usec > 0 && !t_hr_failed) {
++        if (!t_hr_timer) {
++            t_hr_timer = CreateWaitableTimerExW(NULL, NULL, CREATE_WAITABLE_TIMER_HIGH_RESOLUTION, TIMER_ALL_ACCESS);
++            if (!t_hr_timer) t_hr_failed = 1;
++        }
++        if (t_hr_timer) {
++            LARGE_INTEGER due;
++            due.QuadPart = -((LONGLONG)usec * 10);   /* 100 ns units, negative = relative */
++            if (SetWaitableTimer(t_hr_timer, &due, 0, NULL, NULL, FALSE)) {
++                WaitForSingleObject(t_hr_timer, INFINITE);
++                return CELL_OK;
++            }
++        }
++    }
+     /* Use high-resolution sleep via waitable timer for better precision */
+     if (usec >= 1000) {
+         HANDLE timer = CreateWaitableTimerW(NULL, TRUE, NULL);
+-- 
+2.48.1.windows.1
+

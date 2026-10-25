@@ -1,0 +1,372 @@
+From 558e1e47dc162ee60b741e978652ac5c14ef1685 Mon Sep 17 00:00:00 2001
+From: YJuDeAd <robinrashi@gmail.com>
+Date: Sun, 25 Oct 2026 04:44:11 +0530
+Subject: [PATCH 30/47] Apply ps3recomp-0030-host-window-language-mods.patch
+
+---
+ libs/input/cellPad.c           |  11 ++-
+ libs/system/cellSysutil.c      |  22 ++++--
+ libs/video/rsx_d3d12_backend.c |  18 ++---
+ libs/video/rsx_host_window.h   | 130 +++++++++++++++++++++++++++++++++
+ libs/video/rsx_null_backend.c  |  19 ++---
+ runtime/syscalls/sys_fs.c      |  42 +++++++++++
+ 6 files changed, 212 insertions(+), 30 deletions(-)
+ create mode 100644 libs/video/rsx_host_window.h
+
+diff --git a/libs/input/cellPad.c b/libs/input/cellPad.c
+index 7fa8cab..57c0260 100644
+--- a/libs/input/cellPad.c
++++ b/libs/input/cellPad.c
+@@ -183,7 +183,16 @@ static int pad_host_window_focused(void)
+     if (!fg) return 0;
+     DWORD pid = 0;
+     GetWindowThreadProcessId(fg, &pid);
+-    return pid == GetCurrentProcessId();
++    if (pid == GetCurrentProcessId()) return 1;
++    /* Rendering inside a launcher's window (PS3_PARENT_HWND): that window in
++     * front counts as ours. */
++    { static HWND host = (HWND)-1;
++      if (host == (HWND)-1) {
++          const char* e = getenv("PS3_PARENT_HWND");
++          HWND p = e && *e ? (HWND)(uintptr_t)strtoull(e, NULL, 0) : NULL;
++          host = p ? GetAncestor(p, GA_ROOT) : NULL;
++      }
++      return host && fg == host; }
+ }
+ 
+ static void pad_poll_keyboard(void)
+diff --git a/libs/system/cellSysutil.c b/libs/system/cellSysutil.c
+index 2176d38..0d87bcd 100644
+--- a/libs/system/cellSysutil.c
++++ b/libs/system/cellSysutil.c
+@@ -416,12 +416,22 @@ s32 cellSysutilGetSystemParamInt(s32 id, u32 value_ea)
+ 
+     s32 v = 0;
+     switch (id) {
+-    case CELL_SYSUTIL_SYSTEMPARAM_ID_LANG:
+-        v = sysutil_language();
+-        break;
+-    case CELL_SYSUTIL_SYSTEMPARAM_ID_ENTER_BUTTON_ASSIGN:
+-        v = CELL_SYSUTIL_ENTER_BUTTON_ASSIGN_CROSS;
+-        break;
++    /* PS3_SYS_LANG=<n>: the console language, as CELL_SYSUTIL_LANG_* numbers
++     * it (0 Japanese, 1 English US, 2 Spanish, 3 French, 4 German, 5 Italian,
++     * 6 Dutch, 7 Portuguese, 8 Russian, ... 16 Polish, 17 Portuguese BR,
++     * 18 English UK, 19 Turkish). Titles pick their text, subtitle and voice
++     * language from it. PS3_ENTER_BUTTON=circle|cross: which face button
++     * confirms (Japanese consoles use circle). Defaults: English US, cross. */
++    case CELL_SYSUTIL_SYSTEMPARAM_ID_LANG: {
++        const char* e = getenv("PS3_SYS_LANG");
++        v = (e && *e >= '0' && *e <= '9') ? atoi(e) : CELL_SYSUTIL_LANG_ENGLISH_US;
++        if (v < 0 || v > 19) v = CELL_SYSUTIL_LANG_ENGLISH_US;
++        break; }
++    case CELL_SYSUTIL_SYSTEMPARAM_ID_ENTER_BUTTON_ASSIGN: {
++        const char* e = getenv("PS3_ENTER_BUTTON");
++        v = (e && (e[0] == 'c' || e[0] == 'C') && (e[1] == 'i' || e[1] == 'I'))
++            ? CELL_SYSUTIL_ENTER_BUTTON_ASSIGN_CIRCLE : CELL_SYSUTIL_ENTER_BUTTON_ASSIGN_CROSS;
++        break; }
+     case CELL_SYSUTIL_SYSTEMPARAM_ID_DATE_FORMAT:    v = 0; break; /* YYYYMMDD */
+     case CELL_SYSUTIL_SYSTEMPARAM_ID_TIME_FORMAT:    v = 0; break; /* 24-hour */
+     case CELL_SYSUTIL_SYSTEMPARAM_ID_TIMEZONE:       v = 0; break; /* UTC */
+diff --git a/libs/video/rsx_d3d12_backend.c b/libs/video/rsx_d3d12_backend.c
+index 0ecca8e..d5f5fa4 100644
+--- a/libs/video/rsx_d3d12_backend.c
++++ b/libs/video/rsx_d3d12_backend.c
+@@ -497,8 +497,11 @@ static u32    s_lock_n  = 0;
+  * Win32 window
+  * -----------------------------------------------------------------------*/
+ 
++#include "rsx_host_window.h"
++
+ static LRESULT CALLBACK d3d12_wndproc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
+ {
++    if (rsx_host_window_message(hwnd, msg, wp, lp)) return 0;
+     switch (msg) {
+     case WM_CLOSE:
+         s_d3d.window_closed = 1;
+@@ -508,7 +511,7 @@ static LRESULT CALLBACK d3d12_wndproc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
+         PostQuitMessage(0);
+         return 0;
+     case WM_KEYDOWN:
+-        if (wp == VK_ESCAPE) {
++        if (wp == VK_ESCAPE && rsx_host_window_esc_quits()) {
+             s_d3d.window_closed = 1;
+             DestroyWindow(hwnd);
+         }
+@@ -528,18 +531,10 @@ static HWND create_window(u32 width, u32 height, const char* title)
+     wc.lpszClassName = "ps3recomp_d3d12";
+     RegisterClassExA(&wc);
+ 
+-    RECT wr = {0, 0, (LONG)width, (LONG)height};
+-    AdjustWindowRect(&wr, WS_OVERLAPPEDWINDOW, FALSE);
+-
+     /* Keep the display awake (see rsx_null_backend.c). */
+     SetThreadExecutionState(ES_CONTINUOUS | ES_DISPLAY_REQUIRED | ES_SYSTEM_REQUIRED);
+-    return CreateWindowExA(
+-        0, "ps3recomp_d3d12",
+-        title ? title : "ps3recomp (D3D12)",
+-        WS_OVERLAPPEDWINDOW | WS_VISIBLE,
+-        CW_USEDEFAULT, CW_USEDEFAULT,
+-        wr.right - wr.left, wr.bottom - wr.top,
+-        NULL, NULL, GetModuleHandle(NULL), NULL);
++    return rsx_host_window_create("ps3recomp_d3d12", width, height,
++                                  title ? title : "ps3recomp (D3D12)");
+ }
+ 
+ /* ---------------------------------------------------------------------------
+@@ -6739,6 +6734,7 @@ void rsx_d3d12_backend_shutdown(void)
+ int rsx_d3d12_backend_pump_messages(void)
+ {
+     MSG msg;
++    if (rsx_host_window_follow(s_d3d.hwnd)) s_d3d.window_closed = 1;
+     while (PeekMessageA(&msg, NULL, 0, 0, PM_REMOVE)) {
+         if (msg.message == WM_QUIT) return -1;
+         TranslateMessage(&msg);
+diff --git a/libs/video/rsx_host_window.h b/libs/video/rsx_host_window.h
+new file mode 100644
+index 0000000..a4b899e
+--- /dev/null
++++ b/libs/video/rsx_host_window.h
+@@ -0,0 +1,130 @@
++/* The game window on Windows, shared by the RSX backends that own one
++ * (rsx_null_backend.c, which live draw presents into, and rsx_d3d12_backend.c).
++ *
++ *   PS3_PARENT_HWND=<hwnd>   render inside another program's window (a
++ *                            launcher), as a child filling its client area
++ *   PS3_WINDOW_SIZE=<w>x<h>  the window's client size (the picture is
++ *                            stretched to it); default the render size
++ *   PS3_FULLSCREEN=1         borderless full screen; F11 or Alt+Enter toggles
++ *   PS3_WINDOW_ICON=<.ico>   the window's icon
++ *   PS3_ESC_QUITS=0          Escape does not close the game
++ *
++ * Embedded, full screen applies to the host's top-level window, the host
++ * window's size is followed, and its closing ends the game. */
++#ifndef RSX_HOST_WINDOW_H
++#define RSX_HOST_WINDOW_H
++#ifdef _WIN32
++#include <windows.h>
++#include <stdint.h>
++#include <stdio.h>
++#include <stdlib.h>
++
++static HWND s_hw_parent;
++static int  s_hw_fullscreen;
++static RECT s_hw_restore;
++static LONG s_hw_restore_style;
++
++static void rsx_host_window_set_fullscreen(HWND hwnd, int on)
++{
++    if (s_hw_parent) hwnd = GetAncestor(s_hw_parent, GA_ROOT);
++    if (!hwnd || on == s_hw_fullscreen) return;
++    if (on) {
++        MONITORINFO mi = { sizeof(mi) };
++        GetWindowRect(hwnd, &s_hw_restore);
++        s_hw_restore_style = GetWindowLongA(hwnd, GWL_STYLE);
++        GetMonitorInfoA(MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST), &mi);
++        SetWindowLongA(hwnd, GWL_STYLE, WS_POPUP | WS_VISIBLE);
++        SetWindowPos(hwnd, HWND_TOP, mi.rcMonitor.left, mi.rcMonitor.top,
++                     mi.rcMonitor.right - mi.rcMonitor.left, mi.rcMonitor.bottom - mi.rcMonitor.top,
++                     SWP_FRAMECHANGED | SWP_SHOWWINDOW);
++    } else {
++        SetWindowLongA(hwnd, GWL_STYLE, s_hw_restore_style ? s_hw_restore_style
++                                                           : (LONG)(WS_OVERLAPPEDWINDOW | WS_VISIBLE));
++        SetWindowPos(hwnd, NULL, s_hw_restore.left, s_hw_restore.top,
++                     s_hw_restore.right - s_hw_restore.left, s_hw_restore.bottom - s_hw_restore.top,
++                     SWP_FRAMECHANGED | SWP_NOZORDER | SWP_SHOWWINDOW);
++    }
++    s_hw_fullscreen = on;
++}
++
++static HWND rsx_host_window_create(const char* cls, unsigned width, unsigned height, const char* title)
++{
++    const char* e = getenv("PS3_PARENT_HWND");
++    HWND parent = e && *e ? (HWND)(uintptr_t)strtoull(e, NULL, 0) : NULL;
++    HWND hwnd = NULL;
++    if (parent && IsWindow(parent)) {
++        RECT pr; GetClientRect(parent, &pr);
++        hwnd = CreateWindowExA(0, cls, title, WS_CHILD | WS_VISIBLE | WS_CLIPSIBLINGS, 0, 0,
++                               pr.right > 0 ? pr.right : (int)width, pr.bottom > 0 ? pr.bottom : (int)height,
++                               parent, NULL, GetModuleHandle(NULL), NULL);
++        if (hwnd) {
++            s_hw_parent = parent;
++            printf("[window] rendering inside window 0x%llX\n", (unsigned long long)(uintptr_t)parent);
++            SetFocus(hwnd);
++            return hwnd;
++        }
++        printf("[window] could not render inside 0x%llX (%lu): own window\n",
++               (unsigned long long)(uintptr_t)parent, GetLastError());
++    }
++    unsigned cw = width, ch = height;
++    e = getenv("PS3_WINDOW_SIZE");
++    { unsigned ew = 0, eh = 0;
++      if (e && sscanf(e, "%ux%u", &ew, &eh) == 2 && ew >= 320 && eh >= 180 && ew <= 16384 && eh <= 16384) {
++          cw = ew; ch = eh; } }
++    RECT wr = {0, 0, (LONG)cw, (LONG)ch};
++    AdjustWindowRect(&wr, WS_OVERLAPPEDWINDOW, FALSE);
++    hwnd = CreateWindowExA(0, cls, title, WS_OVERLAPPEDWINDOW | WS_VISIBLE,
++                           CW_USEDEFAULT, CW_USEDEFAULT, wr.right - wr.left, wr.bottom - wr.top,
++                           NULL, NULL, GetModuleHandle(NULL), NULL);
++    if (!hwnd) return NULL;
++    e = getenv("PS3_WINDOW_ICON");
++    if (e && *e) {
++        HICON ico_b = (HICON)LoadImageA(NULL, e, IMAGE_ICON, 0, 0, LR_LOADFROMFILE | LR_DEFAULTSIZE);
++        HICON ico_s = (HICON)LoadImageA(NULL, e, IMAGE_ICON, 16, 16, LR_LOADFROMFILE);
++        if (ico_b) SendMessageA(hwnd, WM_SETICON, ICON_BIG, (LPARAM)ico_b);
++        if (ico_s) SendMessageA(hwnd, WM_SETICON, ICON_SMALL, (LPARAM)ico_s);
++    }
++    e = getenv("PS3_FULLSCREEN");
++    if (e && e[0] == '1') rsx_host_window_set_fullscreen(hwnd, 1);
++    return hwnd;
++}
++
++/* The window messages handled here: F11 / Alt+Enter, and a click that gives
++ * an embedded window the keyboard. Returns 1 when the message is consumed. */
++static int rsx_host_window_message(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
++{
++    switch (msg) {
++    case WM_SYSKEYDOWN:
++        if (wp == VK_RETURN && (lp & (1 << 29))) { rsx_host_window_set_fullscreen(hwnd, !s_hw_fullscreen); return 1; }
++        break;
++    case WM_KEYDOWN:
++        if (wp == VK_F11) { rsx_host_window_set_fullscreen(hwnd, !s_hw_fullscreen); return 1; }
++        break;
++    case WM_LBUTTONDOWN:
++        if (s_hw_parent) SetFocus(hwnd);
++        break;
++    }
++    return 0;
++}
++
++static int rsx_host_window_esc_quits(void)
++{
++    const char* e = getenv("PS3_ESC_QUITS");
++    return !(e && e[0] == '0');
++}
++
++/* Embedded: follow the host window's size. Returns 1 once the host is gone. */
++static int rsx_host_window_follow(HWND hwnd)
++{
++    if (!s_hw_parent || !hwnd) return 0;
++    if (!IsWindow(s_hw_parent)) return 1;
++    RECT pr, cr;
++    GetClientRect(s_hw_parent, &pr);
++    GetClientRect(hwnd, &cr);
++    if (pr.right > 0 && pr.bottom > 0 && (pr.right != cr.right || pr.bottom != cr.bottom))
++        MoveWindow(hwnd, 0, 0, pr.right, pr.bottom, TRUE);
++    return 0;
++}
++
++#endif /* _WIN32 */
++#endif /* RSX_HOST_WINDOW_H */
+diff --git a/libs/video/rsx_null_backend.c b/libs/video/rsx_null_backend.c
+index 32e8a95..04e5b5a 100644
+--- a/libs/video/rsx_null_backend.c
++++ b/libs/video/rsx_null_backend.c
+@@ -52,8 +52,11 @@ static NullBackendState s_state;
+ 
+ static int s_present_suppressed = 0;
+ 
++#include "rsx_host_window.h"
++
+ static LRESULT CALLBACK null_wndproc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
+ {
++    if (rsx_host_window_message(hwnd, msg, wp, lp)) return 0;
+     switch (msg) {
+     case WM_CLOSE:
+         s_state.window_closed = 1;
+@@ -93,7 +96,7 @@ static LRESULT CALLBACK null_wndproc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
+     }
+ 
+     case WM_KEYDOWN:
+-        if (wp == VK_ESCAPE) {
++        if (wp == VK_ESCAPE && rsx_host_window_esc_quits()) {
+             s_state.window_closed = 1;
+             DestroyWindow(hwnd);
+         }
+@@ -247,17 +250,8 @@ int rsx_null_backend_init(u32 width, u32 height, const char* title)
+     wc.lpszClassName = "ps3recomp_null";
+     RegisterClassExA(&wc);
+ 
+-    /* Compute window size from client area */
+-    RECT wr = {0, 0, (LONG)width, (LONG)height};
+-    AdjustWindowRect(&wr, WS_OVERLAPPEDWINDOW, FALSE);
+-
+-    s_state.hwnd = CreateWindowExA(
+-        0, "ps3recomp_null",
+-        title ? title : "ps3recomp",
+-        WS_OVERLAPPEDWINDOW | WS_VISIBLE,
+-        CW_USEDEFAULT, CW_USEDEFAULT,
+-        wr.right - wr.left, wr.bottom - wr.top,
+-        NULL, NULL, GetModuleHandle(NULL), NULL);
++    /* The window (size, full screen, embedding in a launcher): rsx_host_window.h */
++    s_state.hwnd = rsx_host_window_create("ps3recomp_null", width, height, title ? title : "ps3recomp");
+ 
+     if (!s_state.hwnd) {
+         printf("[RSX null] ERROR: CreateWindow failed (%lu)\n", GetLastError());
+@@ -297,6 +291,7 @@ void rsx_null_backend_shutdown(void)
+ int rsx_null_backend_pump_messages(void)
+ {
+     MSG msg;
++    if (rsx_host_window_follow(s_state.hwnd)) s_state.window_closed = 1;
+     while (PeekMessageA(&msg, NULL, 0, 0, PM_REMOVE)) {
+         if (msg.message == WM_QUIT)
+             return -1;
+diff --git a/runtime/syscalls/sys_fs.c b/runtime/syscalls/sys_fs.c
+index f076ef8..4494b2a 100644
+--- a/runtime/syscalls/sys_fs.c
++++ b/runtime/syscalls/sys_fs.c
+@@ -93,9 +93,51 @@ static void fs_normalize_sep(char* p) {
+  * only weak reference to it: under COFF each one emits its own fallback. */
+ extern __attribute__((weak)) const char* cellGame_get_hdd_title_id(void);
+ 
++/* PS3_MODS=<dir>[;<dir>...]: mod folders laid over the game's USRDIR, the
++ * first listed winning. Each mirrors USRDIR (a mod that replaces
++ * USRDIR/GAME.PSARC holds <mod>/GAME.PSARC); a file a mod has is opened from
++ * the mod, anything else from the game. Only paths under a USRDIR are
++ * overlaid, so saves and system files never are. */
++static void ps3_vfs_mod_overlay(char* path, size_t cap)
++{
++    static char mods[2048]; static int init = 0;
++    if (!init) {
++        const char* e = getenv("PS3_MODS");
++        if (e) { strncpy(mods, e, sizeof mods - 1); mods[sizeof mods - 1] = 0; }
++        init = 1;
++    }
++    if (!mods[0]) return;
++    const char* u = strstr(path, "/USRDIR/");
++    if (!u) u = strstr(path, "\\USRDIR\\");
++    if (!u) return;
++    const char* rel = u + 8;
++    struct stat st;
++    for (const char* m = mods; *m; ) {
++        const char* end = strchr(m, ';');
++        size_t n = end ? (size_t)(end - m) : strlen(m);
++        if (n) {
++            char alt[1024];
++            if (n + 1 + strlen(rel) < sizeof alt) {
++                memcpy(alt, m, n);
++                snprintf(alt + n, sizeof alt - n, "/%s", rel);
++                fs_normalize_sep(alt);
++                if (stat(alt, &st) == 0) {
++                    static int logged = 0;
++                    if (logged++ < 32) printf("[mods] %s -> %s\n", rel, alt);
++                    snprintf(path, cap, "%s", alt);
++                    return;
++                }
++            }
++        }
++        if (!end) break;
++        m = end + 1;
++    }
++}
++
+ void ps3_vfs_ps3game_fallback(char* path, size_t cap)
+ {
+     struct stat st;
++    if (path && *path) ps3_vfs_mod_overlay(path, cap);
+     if (!path || !*path || stat(path, &st) == 0)
+         return;
+     /* An HDD game (a PSN title, CATEGORY "HG") boots from /dev_hdd0/game/<id>/,
+-- 
+2.48.1.windows.1
+

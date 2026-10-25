@@ -1,0 +1,233 @@
+From a51a76866565c0c6de44856e54bff7a1dba8ebf1 Mon Sep 17 00:00:00 2001
+From: YJuDeAd <robinrashi@gmail.com>
+Date: Sun, 25 Oct 2026 04:41:26 +0530
+Subject: [PATCH 25/47] Apply
+ ps3recomp-0025-vblank-qpc-callbacks-movie-diagnostics.patch
+
+---
+ libs/codec/cellVdec.c           | 10 ++++++++++
+ libs/video/cellGcmSys.c         | 23 +++++++++++++++++++++--
+ runtime/ppu/ppu_hle.cpp         | 28 ++++++++++++++++++++++++++++
+ runtime/ppu/tests/boot_main.cpp | 31 ++++++++++++++++++++++++++-----
+ runtime/syscalls/lv2_register.c | 23 +++++++++++++++++++++++
+ 5 files changed, 108 insertions(+), 7 deletions(-)
+
+diff --git a/libs/codec/cellVdec.c b/libs/codec/cellVdec.c
+index 09a7a1a..3eee531 100644
+--- a/libs/codec/cellVdec.c
++++ b/libs/codec/cellVdec.c
+@@ -306,6 +306,10 @@ s32 cellVdecDecodeAu(CellVdecHandle handle, s32 mode, const CellVdecAuInfo* auIn
+            (unsigned long long)au.pts);
+ 
+     if (v->ff) {
++        { static int s_tl = -1; if (s_tl < 0) s_tl = getenv("VDEC_TIMELOG") ? 1 : 0;
++          if (s_tl) { extern unsigned long long ps3_qpc_us(void);
++              printf("[vdec-au] t=%lluus size=%u pts=%llu queued=%u%s\n", ps3_qpc_us(), au.size,
++                     (unsigned long long)au.pts, v->qCount, v->qCount >= VDEC_BUSY_AT ? " BUSY" : ""); } }
+         if (v->qCount >= VDEC_BUSY_AT)
+             return (s32)CELL_VDEC_ERROR_BUSY;  /* title must take pictures */
+         v->auCount++;
+@@ -442,6 +446,12 @@ s32 cellVdecGetPicItem(CellVdecHandle handle, const CellVdecPicItem** picItem)
+                      n, handle, v->qCount, q->item.auNum,
+                      (unsigned long long)q->item.pts, q->pictType);
+           n++; }
++        /* VDEC_TIMELOG=1: every GetPicItem with the time, to set the rate the
++         * title takes pictures at against the stream's frame period. */
++        { static int s_tl = -1; if (s_tl < 0) s_tl = getenv("VDEC_TIMELOG") ? 1 : 0;
++          if (s_tl) { extern unsigned long long ps3_qpc_us(void);
++              printf("[vdec-time] t=%lluus pts=%llu queued=%u\n", ps3_qpc_us(),
++                     (unsigned long long)q->item.pts, v->qCount); } }
+         vdec_write_item(handle, &q->item);
+         vdec_write_pic_type(handle, q);
+         vm_write32(out, VDEC_ITEM_EA(handle));
+diff --git a/libs/video/cellGcmSys.c b/libs/video/cellGcmSys.c
+index 09d4502..eb608a6 100644
+--- a/libs/video/cellGcmSys.c
++++ b/libs/video/cellGcmSys.c
+@@ -814,9 +814,25 @@ void ppu_gcm_pump(void)
+                    fprintf(stderr, "[gcm-pump] calls=%u vblank=%u flip=%u vcount=%u%c",
+                            calls, nv, nf, s_vblank_count, 10); } }
+     if ((p & 1) && s_vblank_handler_opd && g_ps3_guest_caller) {
++        /* One call per vblank, not one per pump: the pending bit folds every
++         * vblank since the last pump into one, and the pump only runs when a
++         * guest thread passes through it. A handler that counts its calls
++         * then loses time -- God of War: Ascension's movie clock ran at ~75%
++         * while its main thread spun on SPU job counters, and the cinematic
++         * fell behind its audio. A backlog past 8 (a long stall) is cut short
++         * rather than replayed as a burst. GCM_VBLANK_COALESCE=1: the old way. */
++        static int s_coalesce = -1;
++        if (s_coalesce < 0) s_coalesce = getenv("GCM_VBLANK_COALESCE") ? 1 : 0;
++        static u32 s_vblank_delivered;
++        const u32 now = s_vblank_count;
++        if (s_coalesce || now - s_vblank_delivered > 8u || s_vblank_delivered == 0)
++            s_vblank_delivered = now - 1u;
+         ydkj_restore_handler_opd(s_vblank_handler_opd, s_vblank_handler_code);
+-        g_ps3_guest_caller(s_vblank_handler_opd, (uint64_t)s_vblank_count,
+-                           0, 0, 0, 0, 0, 0, 0);
++        while ((s32)(now - s_vblank_delivered) > 0) {
++            s_vblank_delivered++;
++            g_ps3_guest_caller(s_vblank_handler_opd, (uint64_t)s_vblank_delivered,
++                               0, 0, 0, 0, 0, 0, 0);
++        }
+     }
+     if (p & 2) {
+         /* Delivery waits for a guest thread to reach an HLE call or a timer
+@@ -3712,6 +3728,9 @@ s32 cellGcmSetDefaultFifoSize(u32 size)
+ /* NID: 0x21397818 */
+ s32 _cellGcmSetFlipCommand(void* ctx, u32 bufferId)
+ {
++    /* VDEC_TIMELOG=1 (with cellVdec's lines): when the title queues each flip. */
++    { static int s_tl = -1; if (s_tl < 0) s_tl = getenv("VDEC_TIMELOG") ? 1 : 0;
++      if (s_tl) printf("[flip-time] t=%lluus buffer=%u\n", ps3_qpc_us(), bufferId); }
+     if (gcm_flip_into_fifo((u32)(uintptr_t)ctx, bufferId))
+         return gcm_flip_request(bufferId, 1);
+     return cellGcmSetFlipCommand(bufferId);
+diff --git a/runtime/ppu/ppu_hle.cpp b/runtime/ppu/ppu_hle.cpp
+index 2c338e0..bcd740b 100644
+--- a/runtime/ppu/ppu_hle.cpp
++++ b/runtime/ppu/ppu_hle.cpp
+@@ -82,6 +82,7 @@ void vm_write64(uint64_t addr, uint64_t val);
+  * host AV inside an HLE handler names the culprit NID/function. */
+ extern "C" uint32_t    g_last_hle_nid  = 0;
+ extern "C" const char* g_last_hle_name = "";
++extern "C" unsigned long long ps3_qpc_us(void);   /* cellGcmSys.c: PS3_HLE_HIST */
+ 
+ /* Which HLE each guest thread is currently INSIDE, indexed by ctx->thread_id.
+  *
+@@ -775,6 +776,33 @@ extern "C" void ps3_hle_call(uint32_t nid, ppu_context* ctx)
+       if (s_ht < 0) { const char* ev = getenv("PS3_HLE_TOP"); s_ht = ev ? atol(ev) : 0;
+                       if (s_ht < 0) s_ht = 0; }
+       if (s_ht > 0) hle_top_note(nid, e->name, ctx, s_ht); }
++
++    /* PS3_HLE_HIST=<seconds>: the most called imports over each window, by
++     * name -- which clock a title's movie player reads, what a frame calls.
++     * Counts are unsynchronised (a lost increment does not change the top). */
++    { static long s_hh = -1;
++      if (s_hh < 0) { const char* hv = getenv("PS3_HLE_HIST"); s_hh = hv ? atol(hv) : 0; }
++      if (s_hh > 0) {
++          enum { HH = 512 };
++          static uint32_t hk[HH]; static const char* hn[HH]; static unsigned long hc[HH];
++          static unsigned long long t0;
++          unsigned slot = (nid * 2654435761u) >> 23;              /* 9 bits */
++          for (unsigned p = 0; p < HH; p++, slot = (slot + 1) & (HH - 1))
++              if (hk[slot] == nid || !hk[slot]) { hk[slot] = nid; hn[slot] = e->name; hc[slot]++; break; }
++          const unsigned long long now = ps3_qpc_us();
++          if (!t0) t0 = now;
++          if (now - t0 >= (unsigned long long)s_hh * 1000000ull) {
++              t0 = now;
++              fprintf(stderr, "--- HLE calls (last %lds) ---\n", s_hh);
++              for (int r = 0; r < 20; r++) {
++                  int best = -1;
++                  for (int k = 0; k < HH; k++) if (hc[k] && (best < 0 || hc[k] > hc[best])) best = k;
++                  if (best < 0) break;
++                  fprintf(stderr, "  %8lu  %s\n", hc[best], hn[best] ? hn[best] : "?");
++                  hc[best] = 0;
++              }
++              for (int k = 0; k < HH; k++) hc[k] = 0;
++          } } }
+     ps3_msf("hle:%s", e->name);
+     { unsigned t = (unsigned)ctx->thread_id;
+       if (t < PS3_HLE_INFLIGHT_MAX) g_hle_inflight[t] = e->name; }
+diff --git a/runtime/ppu/tests/boot_main.cpp b/runtime/ppu/tests/boot_main.cpp
+index ae668e9..1d457ec 100644
+--- a/runtime/ppu/tests/boot_main.cpp
++++ b/runtime/ppu/tests/boot_main.cpp
+@@ -449,6 +449,17 @@ static DWORD WINAPI guest_prof_thread(LPVOID)
+ 
+ extern "C" const char* cellGame_get_title(void);   /* PARAM.SFO TITLE, for the caption */
+ 
++extern "C" unsigned long long ps3_qpc_us(void);   /* cellGcmSys.c */
++
++/* The vblank period in microseconds. PS3_VBLANK_HZ overrides the 59.94 Hz of
++ * NTSC/720p (1001/60 ms). */
++static double vblank_period_us(void)
++{
++    double hz = 60000.0 / 1001.0;
++    if (const char* e = getenv("PS3_VBLANK_HZ")) { double v = atof(e); if (v >= 10.0 && v <= 240.0) hz = v; }
++    return 1e6 / hz;
++}
++
+ static DWORD WINAPI vblank_ticker(LPVOID)
+ {
+     /* Window caption: $PS3_TITLE wins, else the TITLE field PARAM.SFO already
+@@ -488,17 +499,27 @@ static DWORD WINAPI vblank_ticker(LPVOID)
+      * window DXGI Present throttles hard, which previously stalled these ticks and
+      * paced the game's main loop to ~0.5fps. Drive the ticks off REAL elapsed time
+      * and catch up in a bounded burst so present latency never slows the game. */
+-    ULONGLONG next_tick = GetTickCount64();
++    /* On the QPC clock at the real vblank period. It was GetTickCount64, which
++     * moves in ~15.6 ms steps, with a 16 ms period (62.5 Hz): vblanks came in
++     * bursts, two at once or none for a step, and a title pacing its movie at
++     * two vblanks per picture (God of War: Ascension's cinematic) took a new
++     * picture in only ~60% of its frames and played the video slow against
++     * its audio. */
++    const double vblank_us = vblank_period_us();
++    double next_tick_us = (double)ps3_qpc_us();
+     for (;;) {
+         /* Was Sleep(4). The FIFO kick event existed, was signalled on a dry
+          * fence queue, and had no waiter -- so a guest starved for `get` or a
+          * fence still paid the whole tick. Waiting on it keeps the same 4 ms
+          * ceiling when nothing kicks, and drains on demand when something
+          * does. */
+-        cellGcm_fifo_kick_wait(4);
++        { /* at most 4 ms, and no later than the next vblank */
++          const double rem_ms = (next_tick_us - (double)ps3_qpc_us()) / 1000.0;
++          cellGcm_fifo_kick_wait(rem_ms <= 0.0 ? 0u : rem_ms >= 4.0 ? 4u : (unsigned)rem_ms); }
+         ULONGLONG now = GetTickCount64();
++        const double now_us = (double)ps3_qpc_us();
+         int fired = 0;
+-        while ((long long)(now - next_tick) >= 0 && fired < 240) {
++        while (now_us >= next_tick_us && fired < 240) {
+             cellGcmTickVBlank();
+             cellGcmTickFlip();
+             /* Present a pending flip BEFORE draining further: the flip fires
+@@ -517,10 +538,10 @@ static DWORD WINAPI vblank_ticker(LPVOID)
+              * Doing it here (not after present) keeps those fences advancing at 60Hz
+              * even when present() throttles on a hidden/occluded window. */
+             if (rsx_ok) cellGcm_rsx_process_fifo();
+-            next_tick += 16;                 /* ~60 Hz */
++            next_tick_us += vblank_us;
+             fired++;
+         }
+-        if (fired >= 240) next_tick = now;   /* fell too far behind -> resync */
++        if (fired >= 240) next_tick_us = now_us;   /* fell too far behind -> resync */
+         /* Drain at the outer ~4ms cadence too (not just the 16ms tick):
+          * titles fence EVERY render pass on an RSX label the drain writes;
+          * at 16ms per fence wave's six passes paced the guest to ~7 fps.
+diff --git a/runtime/syscalls/lv2_register.c b/runtime/syscalls/lv2_register.c
+index 8815650..d844776 100644
+--- a/runtime/syscalls/lv2_register.c
++++ b/runtime/syscalls/lv2_register.c
+@@ -2639,6 +2639,29 @@ int lv2_try_syscall(ppu_context* ctx)
+     /* YDKJ diag: full event-syscall trace (#128..141) during SPURS init to find
+      * why libsre asserts ESRCH in event_helper.c. Snapshot args BEFORE handler. */
+     uint32_t _a3 = (uint32_t)ctx->gpr[3], _a4 = (uint32_t)ctx->gpr[4], _a5 = (uint32_t)ctx->gpr[5];
++    /* LV2_SYSCALL_HIST=<seconds>: the most called syscalls over each window
++     * (sys_time_get_system_time is 145, sys_timer_usleep 141). Unsynchronised
++     * counts, like PS3_HLE_HIST. */
++    { static long s_sh = -1;
++      if (s_sh < 0) { const char* e = getenv("LV2_SYSCALL_HIST"); s_sh = e ? atol(e) : 0; }
++      if (s_sh > 0) {
++          static unsigned long cnt[LV2_SYSCALL_MAX]; static unsigned long long t0;
++          extern unsigned long long ps3_qpc_us(void);
++          cnt[num]++;
++          const unsigned long long now = ps3_qpc_us();
++          if (!t0) t0 = now;
++          if (now - t0 >= (unsigned long long)s_sh * 1000000ull) {
++              t0 = now;
++              fprintf(stderr, "--- lv2 syscalls (last %lds) ---\n", s_sh);
++              for (int r = 0; r < 12; r++) {
++                  int best = -1;
++                  for (int k = 0; k < LV2_SYSCALL_MAX; k++) if (cnt[k] && (best < 0 || cnt[k] > cnt[best])) best = k;
++                  if (best < 0) break;
++                  fprintf(stderr, "  %8lu  syscall %d\n", cnt[best], best);
++                  cnt[best] = 0;
++              }
++              for (int k = 0; k < LV2_SYSCALL_MAX; k++) cnt[k] = 0;
++          } } }
+     ctx->gpr[3] = (uint64_t)h(ctx);
+     /* LV2_ERRDBG=1: every syscall that returns non-OK, deduped by (number,
+      * result). A guest that asserts on a result once per frame is easier to
+-- 
+2.48.1.windows.1
+

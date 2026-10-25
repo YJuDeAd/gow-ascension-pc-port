@@ -1,0 +1,46 @@
+From f44de29852e0fbbc18441efe1cf034472259a5ae Mon Sep 17 00:00:00 2001
+From: YJuDeAd <robinrashi@gmail.com>
+Date: Sun, 25 Oct 2026 05:06:25 +0530
+Subject: [PATCH 46/47] Restore rsx_fp_texture_expand_units for rsx_draw_engine
+
+---
+ libs/video/rsx_fp_decompiler.c | 23 +++++++++++++++++++++++
+ 1 file changed, 23 insertions(+)
+
+diff --git a/libs/video/rsx_fp_decompiler.c b/libs/video/rsx_fp_decompiler.c
+index 730e3b8..7bf353e 100644
+--- a/libs/video/rsx_fp_decompiler.c
++++ b/libs/video/rsx_fp_decompiler.c
+@@ -574,6 +574,29 @@ static void fp_shadow_helper(Out* p, u32 unit, u32 cube_mask,
+     out_puts(p, "    return (float4)lerp(lerp(c0, c1, fraction.x), lerp(c2, c3, fraction.x), fraction.y);\n}\n");
+ }
+ 
++/* Texture sign expansion: units a TEX/TXP/TXB/TXL fetches from whose
++ * expand mask is set. */
++u32 rsx_fp_texture_expand_units(const u8* ucode, u32 max_bytes,
++                                const u8 expand_masks[16])
++{
++    if (!ucode || !expand_masks) return 0;
++    u32 units = 0;
++    for (u32 off = 0; off + 16 <= max_bytes;) {
++        const u32 w0 = rsx_fp_read_word(ucode + off);
++        const u32 w1 = rsx_fp_read_word(ucode + off + 4);
++        const u32 w2 = rsx_fp_read_word(ucode + off + 8);
++        const u32 w3 = rsx_fp_read_word(ucode + off + 12);
++        const u32 op = (w0 >> 24) & 63u, unit = (w0 >> FP_TEX_UNIT_SHIFT) & 15u;
++        if (!(w2 & FP_BRANCH) && expand_masks[unit] &&
++            (op == OP_TEX || op == OP_TXP || op == OP_TXB || op == OP_TXL))
++            units |= 1u << unit;
++        off += 16;
++        if (!(w2 & FP_BRANCH) && ((w1 & 3u) == 2 || (w2 & 3u) == 2 || (w3 & 3u) == 2)) off += 16;
++        if (w0 & FP_END) return units;
++    }
++    return 0;
++}
++
+ /* EXP_TEX overrides gamma on compatible normalized color formats. Metadata
+  * has already excluded formats without gamma support. */
+ u32 rsx_fp_texture_gamma_units(const u8* ucode, u32 max_bytes,
+-- 
+2.48.1.windows.1
+

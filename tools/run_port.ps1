@@ -19,6 +19,7 @@ param(
     [string]$ErrLog = "",
 
     [switch]$AllowWwsHack,
+    [string]$Hooks = "",
 
     [switch]$Quiet,
 
@@ -32,6 +33,12 @@ param(
 
 
 
+if ($Hooks) {
+    $env:GOW_HOOKS = $Hooks
+    Write-Host "[run_port] GOW_HOOKS set to: $Hooks"
+} else {
+    Remove-Item env:GOW_HOOKS -ErrorAction SilentlyContinue
+}
 if (-not $AllowWwsHack) {
 
     $env:GOW_NO_WWS_HACK = "1"
@@ -212,9 +219,11 @@ if ($cfgLiveDraw) {
 
     }
 
-    $env:GCM_SEMA_ACQUIRE = "1"
+    $env:SPU_INTERP_STATS = "10"
+    $env:PS3_HLE_TOP = "10"
+    $env:SPURS_WLDUMP = "10"
+    $env:GCM_SEMA_ACQUIRE = "0"
 
-    $env:SPU_HOST_DEPTH_MAX = "100000"
 
     $env:SPU_INTERP_UNLIFTED = "1"
 

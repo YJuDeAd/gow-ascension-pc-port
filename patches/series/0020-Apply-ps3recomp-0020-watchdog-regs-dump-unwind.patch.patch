@@ -1,0 +1,110 @@
+From 03c5a96e2380e5b104fe516c1c414a3149324ca9 Mon Sep 17 00:00:00 2001
+From: YJuDeAd <robinrashi@gmail.com>
+Date: Sun, 25 Oct 2026 04:38:26 +0530
+Subject: [PATCH 20/47] Apply ps3recomp-0020-watchdog-regs-dump-unwind.patch
+
+---
+ runtime/ppu/ppu_loader.cpp      | 20 ++++++++++++++++++++
+ runtime/ppu/tests/boot_main.cpp | 26 ++++++++++++++++++++++++++
+ runtime/spu/spu_channels.c      |  9 +++++++--
+ 3 files changed, 53 insertions(+), 2 deletions(-)
+
+diff --git a/runtime/ppu/ppu_loader.cpp b/runtime/ppu/ppu_loader.cpp
+index efe4947..f16a3c8 100644
+--- a/runtime/ppu/ppu_loader.cpp
++++ b/runtime/ppu/ppu_loader.cpp
+@@ -850,6 +850,17 @@ extern "C" void ppu_resv_register(ppu_context* c)
+  * last DIRECT call site and nothing more. */
+ extern "C" void ppu_report_guest_lrs(void)
+ {
++    /* WATCHDOG_DUMP=<ea>,<len>: hex-dump guest memory at each sample, for the
++     * data a stuck thread is walking (its registers may be cached in host
++     * registers inside a tight loop, so the context alone can be stale). */
++    { const char* e = getenv("WATCHDOG_DUMP"); unsigned ea = 0, len = 0;
++      if (e && sscanf(e, "%x,%x", &ea, &len) == 2 && len && len <= 0x10000)
++          for (unsigned o = 0; o < len; o += 16) {
++              fprintf(stderr, "[WATCHDOG] mem %08X:", ea + o);
++              for (unsigned k = 0; k < 16; k += 4)
++                  fprintf(stderr, " %08X", __builtin_bswap32(*(uint32_t*)(vm_base + ea + o + k)));
++              fprintf(stderr, "\n");
++          } }
+     long n = g_resv_ctx_n; if (n > PPU_RESV_MAX) n = PPU_RESV_MAX;
+     for (long i = 0; i < n; i++) {
+         ppu_context* c = g_resv_ctxs[i];
+@@ -857,6 +868,15 @@ extern "C" void ppu_report_guest_lrs(void)
+         fprintf(stderr, "[WATCHDOG]   guest-tid %-3u lr=0x%08X  r3=0x%08X sp=0x%08X\n",
+                 (unsigned)c->thread_id, (uint32_t)c->lr,
+                 (uint32_t)c->gpr[3], (uint32_t)c->gpr[1]);
++        /* WATCHDOG_REGS=1: every GPR too. A thread busy in an interpreter
++         * (a script VM) keeps the same lr while its state -- the bytecode
++         * pointer, the operand stack -- lives in registers. */
++        if (getenv("WATCHDOG_REGS"))
++            for (int r = 0; r < 32; r += 8)
++                fprintf(stderr, "[WATCHDOG]     r%-2d: %08X %08X %08X %08X %08X %08X %08X %08X\n", r,
++                        (uint32_t)c->gpr[r], (uint32_t)c->gpr[r + 1], (uint32_t)c->gpr[r + 2],
++                        (uint32_t)c->gpr[r + 3], (uint32_t)c->gpr[r + 4], (uint32_t)c->gpr[r + 5],
++                        (uint32_t)c->gpr[r + 6], (uint32_t)c->gpr[r + 7]);
+         /* With BCTRL_RING armed, follow it with that thread's recent INDIRECT
+          * targets. lr cannot see those (bctrl does not write it), so for a
+          * thread looping on a vtable call the ring is the only record of where
+diff --git a/runtime/ppu/tests/boot_main.cpp b/runtime/ppu/tests/boot_main.cpp
+index d977a9a..ae668e9 100644
+--- a/runtime/ppu/tests/boot_main.cpp
++++ b/runtime/ppu/tests/boot_main.cpp
+@@ -657,6 +657,32 @@ static void dump_threads(const char* label, HMODULE self)
+                     dbg_printf( "[WATCHDOG]   tid %5lu in %s\n",
+                             (unsigned long)te.th32ThreadID, base ? base + 1 : path);
+                 }
++                /* WATCHDOG_UNWIND=1: the exact frames, from the x64 unwind
++                 * data (.pdata) every PE carries even without a PDB, starting
++                 * from the full suspended context. The stack scan below guesses
++                 * at return addresses; this names the real chain, ntdll and
++                 * runtime frames included (module + RVA; resolve the exe's with
++                 * a /MAP link). */
++                if (getenv("WATCHDOG_UNWIND")) {
++                    CONTEXT uc; uc.ContextFlags = CONTEXT_FULL;
++                    if (GetThreadContext(th, &uc)) {
++                        for (int f = 0; f < 32 && uc.Rip; f++) {
++                            HMODULE um = NULL; char up[MAX_PATH] = "?";
++                            GetModuleHandleExA(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS |
++                                               GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
++                                               (LPCSTR)uc.Rip, &um);
++                            if (um) GetModuleFileNameA(um, up, sizeof up);
++                            const char* ub = strrchr(up, '\\');
++                            dbg_printf("[WATCHDOG]     unwind #%02d %s+0x%llX\n", f, ub ? ub + 1 : up,
++                                       (unsigned long long)(um ? uc.Rip - (DWORD64)um : uc.Rip));
++                            DWORD64 ib = 0;
++                            PRUNTIME_FUNCTION rf = RtlLookupFunctionEntry(uc.Rip, &ib, NULL);
++                            if (!rf) { uc.Rip = *(DWORD64*)uc.Rsp; uc.Rsp += 8; continue; }
++                            PVOID hd = NULL; DWORD64 ef = 0;
++                            RtlVirtualUnwind(UNW_FLAG_NHANDLER, ib, uc.Rip, rf, &uc, &hd, &ef, NULL);
++                        }
++                    }
++                }
+                 /* Scan the suspended thread's stack for boot-module return
+                  * addresses to reconstruct the lifted call chain — done for ALL
+                  * threads (even when RIP is parked in ntdll inside a CriticalSection
+diff --git a/runtime/spu/spu_channels.c b/runtime/spu/spu_channels.c
+index 7dd4d38..6bd5bbf 100644
+--- a/runtime/spu/spu_channels.c
++++ b/runtime/spu/spu_channels.c
+@@ -952,9 +952,14 @@ void spu_wrch(spu_context* ctx, uint32_t channel, u128 value)
+             for (int k = 0; k < s_nea; k++)
+                 if ((ctx->mfc_eal & ~127u) == s_mea[k] || ((ctx->mfc_eal + ctx->mfc_size - 1u) & ~127u) == s_mea[k]) hit_ea = 1;
+             if (((s_mi >= 0 && ctx->image_id == s_mi) || hit_ea) && s_mn++ < s_mmax) {
+-                const uint32_t lsa = ctx->mfc_lsa & SPU_LS_MASK, n = ctx->mfc_size < 64u ? ctx->mfc_size : 64u;
++                /* SPU_MFCLOG_BYTES=<n>: bytes of data per line (default 64,
++                 * at most 256) -- a job object's fields past +0x40 were cut. */
++                static int s_mb = -1;
++                if (s_mb < 0) { const char* e = getenv("SPU_MFCLOG_BYTES"); s_mb = e ? atoi(e) : 64;
++                                if (s_mb < 0) s_mb = 0; if (s_mb > 256) s_mb = 256; }
++                const uint32_t lsa = ctx->mfc_lsa & SPU_LS_MASK, n = ctx->mfc_size < (uint32_t)s_mb ? ctx->mfc_size : (uint32_t)s_mb;
+                 extern int spu_workload_current_task(void);
+-                char line[320]; int o = snprintf(line, sizeof line, "[mfclog] img=%d task=%d spu=%u cmd=%02X lsa=%05X ea=%08X size=%X tag=%u:",
++                char line[960]; int o = snprintf(line, sizeof line, "[mfclog] img=%d task=%d spu=%u cmd=%02X lsa=%05X ea=%08X size=%X tag=%u:",
+                                                   ctx->image_id, spu_workload_current_task(), ctx->spu_id, v & 0xFFu, lsa, ctx->mfc_eal, ctx->mfc_size, ctx->mfc_tag);
+                 for (uint32_t k = 0; k < n && lsa + k < SPU_LS_SIZE; k++)
+                     o += snprintf(line + o, sizeof line - (size_t)o, (k & 3) ? "%02X" : " %02X", ctx->ls[lsa + k]);
+-- 
+2.48.1.windows.1
+

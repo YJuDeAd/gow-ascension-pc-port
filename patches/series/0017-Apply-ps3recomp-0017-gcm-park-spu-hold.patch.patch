@@ -1,0 +1,150 @@
+From 5dd09cd67ac6218547b7fe13a48d9d7c8c983055 Mon Sep 17 00:00:00 2001
+From: YJuDeAd <robinrashi@gmail.com>
+Date: Sun, 25 Oct 2026 04:36:56 +0530
+Subject: [PATCH 17/47] Apply ps3recomp-0017-gcm-park-spu-hold.patch
+
+---
+ libs/video/cellGcmSys.c    | 40 +++++++++++++++++++++++++++++---------
+ runtime/spu/spu_channels.c |  7 +++++--
+ runtime/spu/spu_workload.c | 16 +++++++++++++++
+ 3 files changed, 52 insertions(+), 11 deletions(-)
+
+diff --git a/libs/video/cellGcmSys.c b/libs/video/cellGcmSys.c
+index d671227..d3fea523 100644
+--- a/libs/video/cellGcmSys.c
++++ b/libs/video/cellGcmSys.c
+@@ -756,6 +756,8 @@ static atomic_flag s_gcm_pumping = ATOMIC_FLAG_INIT;
+ /* Called by the vblank ticker thread. NO guest code -- advance the vblank count
+  * and mark a vblank+flip tick pending for the main thread to deliver. */
+ static u32 s_fifo_getoff;   /* tentative: defined below */
++/* The park the walker last stopped on (GCM_PARK_SPU_HOLD_MS), ~0 = none. */
++static u32 s_last_park_off = ~0u;
+ 
+ void cellGcm_request_tick(void)
+ {
+@@ -2040,19 +2042,37 @@ static void gcm_rsx_process_fifo_unlocked(void)
+                           gcm_fifo_resync_why("jump-park", &s_fifo_getoff, put);
+                       }
+                   }
++                  s_last_park_off = s_fifo_getoff;
+                   why = "parked";
+                   s_park_pass = 1;
+                   break;
+               }
++              /* GCM_PARK_SPU_HOLD_MS: a park the title has now patched
++               * into a JUMP starts its next segment, the next frame. A real
++               * RSX spends a frame's time drawing it; this one spends none,
++               * so the frame's reports land while the SPU work they feed is
++               * still on the last one. Hold the patched park while SPURS
++               * tasks are running (out of WAIT_SIGNAL), for up to ms.
++               * God of War: Ascension skips its post-process ACQUIRE on the
++               * first frame and relies on that time: RsxSync's signal for
++               * round 2 was eaten by tasks still in round 1's barriers. Off
++               * by default. */
++              if (s_fifo_getoff == s_last_park_off) {
++                  static long hold = -1; static unsigned long long held_since;
++                  if (hold < 0) { const char* e = getenv("GCM_PARK_SPU_HOLD_MS"); hold = e ? atol(e) : 0; }
++                  extern long spu_taskset_tasks_running(void) __attribute__((weak));
++                  if (hold > 0 && spu_taskset_tasks_running && spu_taskset_tasks_running() > 0) {
++                      extern unsigned long long ps3_ms_now(void);
++                      const unsigned long long now = ps3_ms_now();
++                      if (!held_since) held_since = now;
++                      if (now - held_since < (unsigned long long)hold) { why = "spu-hold"; break; }
++                  }
++                  held_since = 0;
++                  s_last_park_off = ~0u;
++              }
+               if (tgt < s_fifo_getoff) s_fifo_back_jumps++;
+               s_fifo_getoff = tgt;
+-              /* get is the RSX's fetch pointer: a title polling it sees the
+-               * GPU leave a segment as soon as the JUMP out of it is taken.
+-               * The end of the pass, where get is otherwise published, can
+-               * come tens of milliseconds later. GCM_GET_EQ_PUT keeps its
+-               * own value. */
+-              if (!gcm_get_eq_put()) vm_write32(GCM_CONTROL_GUEST_ADDR + 4, tgt); }
+-            continue;
++              if (!gcm_get_eq_put()) vm_write32(GCM_CONTROL_GUEST_ADDR + 4, tgt); }            continue;
+         }
+         if ((w & 3) == 2) {                    /* CALL: offset | 2 */
+             { u32 tgt = w & 0x1FFFFFFCu;
+@@ -2475,9 +2495,11 @@ static void gcm_rsx_process_fifo_unlocked(void)
+     /* A blocked semaphore ACQUIRE (GCM_SEMA_ACQUIRE=1) is not stuck either: the
+      * GPU waits there by design until the label is released. Ascension's
+      * frame waits on a label its SPU post-process tasks write when they are
+-     * done with the frame; following put dropped the frame mid-wait. */
++     * done with the frame; following put dropped the frame mid-wait. Nor is
++     * a patched park held for SPU work (GCM_PARK_SPU_HOLD_MS), which bounds
++     * its own wait. */
+     { static u32 last = 0xFFFFFFFFu; static int stuck = 0;
+-      if (why && (strcmp(why, "parked") == 0 || strcmp(why, "sema-acquire") == 0 || strcmp(why, "flip-pace") == 0)) { stuck = 0; last = s_fifo_getoff; }
++      if (why && (strcmp(why, "parked") == 0 || strcmp(why, "sema-acquire") == 0 || strcmp(why, "flip-pace") == 0 || strcmp(why, "spu-hold") == 0)) { stuck = 0; last = s_fifo_getoff; }
+       else if (s_fifo_getoff == last && s_fifo_getoff != put) {
+           if (++stuck >= 8) { gcm_fifo_dump_around(s_fifo_getoff);
+                              gcm_fifo_resync_why("stuck-get", &s_fifo_getoff, put); stuck = 0; }
+diff --git a/runtime/spu/spu_channels.c b/runtime/spu/spu_channels.c
+index d0d70df..7dd4d38 100644
+--- a/runtime/spu/spu_channels.c
++++ b/runtime/spu/spu_channels.c
+@@ -2293,9 +2293,12 @@ void spu_indirect_branch(spu_context* ctx)
+             /* cellSpursModulePoll: report "no contention — keep running".
+              * (The host scheduler admits bounded workers; this service does not preempt.) */
+             unsigned n = ++g_spurs_pm_polls;
+-            if (n <= 4 || (n % 4096) == 0)
++            /* The count restarts with every run, so "poll #1" printed once
++             * per policy run: gated like exit-to-kernel above. */
++            { static SPU_THREAD_LOCAL int s_t = -1; if (s_t < 0) s_t = getenv("SPURS_PM_TRACE") ? 1 : 0;
++              if (s_t && (n <= 4 || (n % 4096) == 0))
+                 fprintf(stderr, "[spurs-pm] poll #%u (r3=0x%08X) -> continue\n",
+-                        n, ctx->gpr[3]._u32[0]);
++                        n, ctx->gpr[3]._u32[0]); }
+             /* The kernel's selection refreshes tempArea, here as on entry. */
+             { extern void spurs_kernel_temp_area_refresh(spu_context*);
+               spurs_kernel_temp_area_refresh(ctx); }
+diff --git a/runtime/spu/spu_workload.c b/runtime/spu/spu_workload.c
+index 05a1ea5..d14bf15 100644
+--- a/runtime/spu/spu_workload.c
++++ b/runtime/spu/spu_workload.c
+@@ -859,6 +859,7 @@ static void spu_async_run(spu_async_job* j)
+ #endif
+     }
+     free(j);
++    { extern void spu_taskset_task_ended(void); spu_taskset_task_ended(); }
+ }
+ 
+ #ifdef _WIN32
+@@ -1224,10 +1225,24 @@ void spu_taskset_line_committed(uint32_t line)
+ static _Thread_local int s_cur_task = -1;
+ int spu_workload_current_task(void) { return s_cur_task; }
+ 
++/* Tasks that have waited for a signal once and are now running out of the
++ * wait: the SPU work in flight. The GCM walker reads it to keep a recompiled
++ * RSX, which runs a frame in no time, from overtaking that work where a real
++ * RSX would still be drawing (GCM_PARK_SPU_HOLD_MS, cellGcmSys.c). */
++static volatile long s_tasks_out_of_wait;
++static _Thread_local int s_task_out;
++long spu_taskset_tasks_running(void) { return __atomic_load_n(&s_tasks_out_of_wait, __ATOMIC_ACQUIRE); }
++/* A task that ends while out of a wait is no longer running. */
++void spu_taskset_task_ended(void)
++{
++    if (s_task_out) { s_task_out = 0; __atomic_fetch_sub(&s_tasks_out_of_wait, 1, __ATOMIC_ACQ_REL); }
++}
++
+ int spu_taskset_wait_signal(uint32_t taskset_ea, uint32_t taskId)
+ {
+     if (!taskset_ea || taskId >= 128) return 0;
+     s_cur_task = (int)taskId;
++    if (s_task_out) { s_task_out = 0; __atomic_fetch_sub(&s_tasks_out_of_wait, 1, __ATOMIC_ACQ_REL); }
+     /* ran= is the wall time this task spent OUT of the wait (decode/mix work
+      * per round) -- decisive for "is the Bink decode CPU-bound". TLS: each
+      * task runs on its own host thread. */
+@@ -1313,6 +1328,7 @@ int spu_taskset_wait_signal(uint32_t taskset_ea, uint32_t taskId)
+         fprintf(stderr, "[spu_workload] task %u (taskset 0x%08X) WS_DRAIN resume "
+                 "after %us (no signal)\n", taskId, taskset_ea, secs); fflush(stderr); }
+     spu_serial_acquire();       /* resume: re-take the serial lock */
++    s_task_out = 1; __atomic_fetch_add(&s_tasks_out_of_wait, 1, __ATOMIC_ACQ_REL);
+     { extern unsigned long long ps3_ms_now(void);
+       s_wait_exit_ms = ps3_ms_now(); }   /* stamp for the next entry's ran= */
+     { static int _x = -1; if (_x < 0) _x = getenv("SPU_WAITSIG_EXITLOG") ? 1 : 0;
+-- 
+2.48.1.windows.1
+

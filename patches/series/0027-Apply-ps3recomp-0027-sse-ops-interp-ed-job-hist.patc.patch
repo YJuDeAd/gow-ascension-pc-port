@@ -1,0 +1,437 @@
+From 9b43c0c6b5d326f46d5192088e10b3482228eff7 Mon Sep 17 00:00:00 2001
+From: YJuDeAd <robinrashi@gmail.com>
+Date: Sun, 25 Oct 2026 04:41:57 +0530
+Subject: [PATCH 27/47] Apply ps3recomp-0027-sse-ops-interp-ed-job-hist.patch
+
+---
+ runtime/spu/spu_channels.c           | 15 +++++
+ runtime/spu/spu_drain.c              | 82 ++++++++++++++++++-------
+ runtime/spu/spu_helpers.h            | 89 +++++++++++++++++++++-------
+ runtime/spu/spu_interp.c             | 15 +++--
+ runtime/spu/tests/test_spu_sse_ops.c | 75 +++++++++++++++++++++++
+ 5 files changed, 226 insertions(+), 50 deletions(-)
+ create mode 100644 runtime/spu/tests/test_spu_sse_ops.c
+
+diff --git a/runtime/spu/spu_channels.c b/runtime/spu/spu_channels.c
+index c7a0025..86c83e6 100644
+--- a/runtime/spu/spu_channels.c
++++ b/runtime/spu/spu_channels.c
+@@ -317,15 +317,28 @@ static DWORD WINAPI spu_pcsample_thread(LPVOID p)
+     }
+ }
+ 
++
++/* Bumped whenever a slot is freed: invalidates every thread's cache below. */
++static volatile long s_mfc_gen = 1;
+ static mfc_engine* mfc_for(spu_context* ctx)
+ {
+     { static volatile LONG started = 0; const char* e;
+       if (!started && (e = getenv("SPU_PCSAMPLE")) && !InterlockedExchange(&started, 1))
+           CreateThread(NULL, 0, spu_pcsample_thread, (LPVOID)(uintptr_t)(atoi(e) * 1000), 0, NULL); }
++    /* Each channel write of a DMA command looked its engine up under the claim
++     * lock, walking the list -- ~3% of a busy SPU job thread. A context runs
++     * on one host thread at a time, so a per-thread last hit is almost always
++     * right; the generation drops it when any slot is freed. */
++    static SPU_TLS spu_context* t_ctx;
++    static SPU_TLS mfc_engine* t_mfc;
++    static SPU_TLS long t_gen;
++    const long gen = __atomic_load_n(&s_mfc_gen, __ATOMIC_ACQUIRE);
++    if (t_ctx == ctx && t_gen == gen) return t_mfc;
+     AcquireSRWLockShared(&s_mfc_claim_lock);
+     for (spu_mfc_slot* slot = s_mfc_slots; slot; slot = slot->next) {
+         if (slot->ctx == ctx) {
+             ReleaseSRWLockShared(&s_mfc_claim_lock);
++            t_ctx = ctx; t_mfc = &slot->mfc; t_gen = gen;
+             return &slot->mfc;
+         }
+     }
+@@ -362,6 +375,7 @@ void spu_mfc_release(spu_context* ctx)
+         if ((*link)->ctx != ctx) continue;
+         spu_mfc_slot* slot = *link;
+         *link = slot->next;
++        __atomic_add_fetch(&s_mfc_gen, 1, __ATOMIC_RELEASE);
+         free(slot);
+         break;
+     }
+@@ -381,6 +395,7 @@ void spu_mfc_forget_range(uintptr_t lo, uintptr_t hi)
+         uintptr_t owner = (uintptr_t)slot->ctx;
+         if (owner >= lo && owner < hi) {
+             *link = slot->next;
++            __atomic_add_fetch(&s_mfc_gen, 1, __ATOMIC_RELEASE);
+             free(slot);
+         } else {
+             link = &slot->next;
+diff --git a/runtime/spu/spu_drain.c b/runtime/spu/spu_drain.c
+index 3349adb..f9839e9 100644
+--- a/runtime/spu/spu_drain.c
++++ b/runtime/spu/spu_drain.c
+@@ -47,20 +47,56 @@ void* volatile    g_pm_flow_ctx = 0;
+  * set the done bit on the pending records -- the faithful sync equivalent of
+  * the completion interrupt. Env SPU_JOBDRAIN (default off while validating). */
+ extern void spu_halt(spu_context*);
+-/* Last 32 drain steps on this host thread (pc), for post-mortems of a run that
+- * ended where it should not have (spurs_policy.c, [pm-end]). */
+-static _Thread_local uint32_t t_recent[32];
+-static _Thread_local uint32_t t_recent_n;
+-unsigned spu_recent_pcs(uint32_t* out, unsigned max)
+-{
+-    unsigned n = t_recent_n < 32 ? t_recent_n : 32, k = n < max ? n : max;
+-    for (unsigned i = 0; i < k; i++) out[i] = t_recent[(t_recent_n - k + i) & 31];
+-    return k;
+-}
+-
++/* Last 32 drain steps on this host thread (pc), for post-mortems of a run that
++ * ended where it should not have (spurs_policy.c, [pm-end]). */
++static _Thread_local uint32_t t_recent[32];
++static _Thread_local uint32_t t_recent_n;
++unsigned spu_recent_pcs(uint32_t* out, unsigned max)
++{
++    unsigned n = t_recent_n < 32 ? t_recent_n : 32, k = n < max ? n : max;
++    for (unsigned i = 0; i < k; i++) out[i] = t_recent[(t_recent_n - k + i) & 31];
++    return k;
++}
++
++/* SPU_JOB_HIST=1: SPU time per resident job module (or per image outside
++ * one), from the gaps between trampoline steps on each host thread; gaps over
++ * 2 ms are the thread parked and are dropped. Every 5 s, ms per second each. */
++static void spu_job_hist_step(const spu_context* ctx)
++{
++    static int s_on = -1;
++    if (s_on < 0) s_on = getenv("SPU_JOB_HIST") ? 1 : 0;
++    if (!s_on) return;
++    extern unsigned long long ps3_qpc_us(void);
++    enum { JH = 1024 };
++    static volatile long long s_us[JH];
++    static volatile unsigned long long s_t0;
++    static _Thread_local unsigned long long t_last;
++    static _Thread_local int t_key = -1;
++    const unsigned long long now = ps3_qpc_us();
++    if (t_key >= 0 && now - t_last < 2000)
++        __atomic_add_fetch(&s_us[t_key], (long long)(now - t_last), __ATOMIC_RELAXED);
++    t_last = now;
++    t_key = ctx->resident_ovl > 0 && ctx->resident_ovl < 600 ? ctx->resident_ovl
++                                                              : 600 + (ctx->image_id & 0xFF);
++    unsigned long long t0 = __atomic_load_n(&s_t0, __ATOMIC_RELAXED);
++    if (!t0) { __atomic_store_n(&s_t0, now, __ATOMIC_RELAXED); return; }
++    if (now - t0 < 5000000ull || !__atomic_compare_exchange_n(&s_t0, &t0, now, 0,
++                                                              __ATOMIC_RELAXED, __ATOMIC_RELAXED))
++        return;
++    char line[1024]; int o = snprintf(line, sizeof line, "[job-hist] ms/s:");
++    for (int k = 0; k < JH && o < (int)sizeof line - 32; k++) {
++        const long long us = __atomic_exchange_n(&s_us[k], 0, __ATOMIC_RELAXED);
++        if (us >= 5000)   /* >= 1 ms/s */
++            o += snprintf(line + o, sizeof line - (size_t)o, k < 600 ? " ovl%d=%.1f" : " img%d=%.1f",
++                          k < 600 ? k : k - 600, us / 5000.0);
++    }
++    fprintf(stderr, "%s\n", line);
++}
++
+ void spu_task_launch_check(spu_context* ctx, void* fn)
+ {
+-    t_recent[t_recent_n++ & 31] = (uint32_t)ctx->pc & SPU_LS_MASK;
++    spu_job_hist_step(ctx);
++    t_recent[t_recent_n++ & 31] = (uint32_t)ctx->pc & SPU_LS_MASK;
+     extern void spu_check_stack_reset(spu_context*, void (*)(spu_context*));
+     spu_check_stack_reset(ctx, (void (*)(spu_context*))fn);
+     /* A SPURS job returning to LS 0 is finished -- its crt tail-jumps to the
+@@ -224,9 +260,9 @@ unsigned spu_sn_defer_ticks(void)
+  * until iret). */
+ static void spu_irq_regs_save(spu_context* ctx)
+ {
+-    ctx->irq_saved = 1;
+-    ctx->irq_resume_pc = ctx->srr0;
+-    memcpy(ctx->irq_gpr, ctx->gpr, sizeof ctx->irq_gpr);
++    ctx->irq_saved = 1;
++    ctx->irq_resume_pc = ctx->srr0;
++    memcpy(ctx->irq_gpr, ctx->gpr, sizeof ctx->irq_gpr);
+ }
+ 
+ /* Called from spu_indirect_branch on every dispatch. Restores + clears when
+@@ -237,17 +273,17 @@ static void spu_irq_regs_save(spu_context* ctx)
+  * context's registers wholesale. A fresh run must never do that. */
+ void spu_irq_regs_forget(spu_context* ctx)
+ {
+-    ctx->irq_saved = 0;
++    ctx->irq_saved = 0;
+ }
+ 
+ int spu_irq_regs_maybe_restore(spu_context* ctx)
+ {
+-    {
+-        if (ctx->irq_saved) {
+-            if ((ctx->pc & SPU_LS_MASK) == (ctx->irq_resume_pc & SPU_LS_MASK) &&
++    {
++        if (ctx->irq_saved) {
++            if ((ctx->pc & SPU_LS_MASK) == (ctx->irq_resume_pc & SPU_LS_MASK) &&
+                 ctx->int_enable) {
+-                memcpy(ctx->gpr, ctx->irq_gpr, sizeof ctx->irq_gpr);
+-                ctx->irq_saved = 0;
++                memcpy(ctx->gpr, ctx->irq_gpr, sizeof ctx->irq_gpr);
++                ctx->irq_saved = 0;
+                 /* The iret completed below the frame that took the interrupt:
+                  * abandon the handler's host frames and resume there. */
+                 spu_irq_frame* f = (spu_irq_frame*)ctx->irq_frame;
+@@ -407,7 +443,7 @@ void spu_drain_call(spu_context* ctx, uint32_t return_pc)
+      * loop exits, whichever first. */
+     spu_irq_frame f;
+     f.prev = 0; f.depth = 0; f.image_id = 0;
+-#define SPU_DRAIN_POP_IRQ() do { if (ctx->irq_frame == &f) ctx->irq_frame = f.prev; ctx->drain_ret_pc = 0; } while (0)
++#define SPU_DRAIN_POP_IRQ() do { if (ctx->irq_frame == &f) ctx->irq_frame = f.prev; ctx->drain_ret_pc = 0; } while (0)
+     for (;;) {
+         while (g_spu_trampoline_fn) {
+             if (g_spu_trampoline_fn == spu_indirect_branch &&
+@@ -418,7 +454,7 @@ void spu_drain_call(spu_context* ctx, uint32_t return_pc)
+             }
+             void (*fn)(spu_context*) = g_spu_trampoline_fn;
+             g_spu_trampoline_fn = 0;
+-            ctx->drain_ret_pc = return_pc & SPU_LS_MASK;   /* re-set: a nested drain changed it */
++            ctx->drain_ret_pc = return_pc & SPU_LS_MASK;   /* re-set: a nested drain changed it */
+             yz_lockstep_tick(ctx);
+             spu_task_launch_check(ctx, (void*)fn);
+             if (ctx->int_enable && (ctx->event_status & ctx->event_mask)) {
+diff --git a/runtime/spu/spu_helpers.h b/runtime/spu/spu_helpers.h
+index 1034796..809128f 100644
+--- a/runtime/spu/spu_helpers.h
++++ b/runtime/spu/spu_helpers.h
+@@ -73,6 +73,17 @@ static inline uint8x16_t spu__iota(void) {
+     static const uint8_t k[16] = {0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15};
+     return vld1q_u8(k);
+ }
++#elif defined(__SSE4_1__) && !defined(SPU_SCALAR_HELPERS) && !defined(SPU_SCALAR_INT)
++#include <smmintrin.h>
++/* SSE4.1 forms of some hot integer ops (selb, rotqbyi, shlqbyi); the scalar
++ * definitions stay as spu_X_ref (tests/test_spu_sse_ops.c compares them). */
++static inline __m128i spu__xi_ld(u128 a) { __m128i v; memcpy(&v, &a, 16); return v; }
++static inline u128 spu__xi_st(__m128i v) { u128 r; memcpy(&r, &v, 16); return r; }
++/* Host-order pshufb control for an SPU-order byte rotate/shift: result SPU
++ * byte i takes SPU byte i + sh, SPU byte P sits at host byte P ^ 3. */
++static inline __m128i spu__xi_spu_index(void) {     /* host byte h -> SPU byte h ^ 3 */
++    return _mm_setr_epi8(3,2,1,0, 7,6,5,4, 11,10,9,8, 15,14,13,12);
++}
+ #endif
+ 
+ /* Integer ops with a NEON form further down (end of file); the scalar definitions are
+@@ -355,6 +366,11 @@ static inline u128 spu_selb_ref(u128 a, u128 b, u128 c) {
+ static inline u128 spu_selb(u128 a, u128 b, u128 c) {
+     return spu__st(vbslq_u32(spu__ld(c), spu__ld(b), spu__ld(a)));
+ }
++#elif defined(__SSE4_1__) && !defined(SPU_SCALAR_HELPERS) && !defined(SPU_SCALAR_INT)
++static inline u128 spu_selb(u128 a, u128 b, u128 c) {
++    const __m128i C = spu__xi_ld(c);
++    return spu__xi_st(_mm_or_si128(_mm_andnot_si128(C, spu__xi_ld(a)), _mm_and_si128(spu__xi_ld(b), C)));
++}
+ #else
+ static inline u128 spu_selb(u128 a, u128 b, u128 c) { return spu_selb_ref(a, b, c); }
+ #endif
+@@ -466,6 +482,14 @@ static inline u128 spu_shlqbyi_ref(u128 a, int sh) { u128 r=spu_zero(); sh&=0x1F
+ static inline u128 spu_shlqbyi(u128 a, int sh) {
+     return spu__perm(a, vaddq_u8(spu__iota(), vdupq_n_u8((uint8_t)(sh & 0x1F))));
+ }
++#elif defined(__SSE4_1__) && !defined(SPU_SCALAR_HELPERS) && !defined(SPU_SCALAR_INT)
++static inline u128 spu_shlqbyi(u128 a, int sh) {
++    /* source SPU byte i + sh, zero past 15 (pshufb zeroes on bit 7) */
++    const __m128i s = _mm_add_epi8(spu__xi_spu_index(), _mm_set1_epi8((char)(sh & 0x1F)));
++    const __m128i past = _mm_cmpgt_epi8(s, _mm_set1_epi8(15));
++    const __m128i ctl = _mm_or_si128(_mm_xor_si128(s, _mm_set1_epi8(3)), past);
++    return spu__xi_st(_mm_shuffle_epi8(spu__xi_ld(a), ctl));
++}
+ #else
+ static inline u128 spu_shlqbyi(u128 a, int sh) { return spu_shlqbyi_ref(a, sh); }
+ #endif
+@@ -474,6 +498,11 @@ static inline u128 spu_rotqbyi_ref(u128 a, int sh) { u128 r; sh&=0x0F; for(int i
+ static inline u128 spu_rotqbyi(u128 a, int sh) {
+     return spu__perm(a, vandq_u8(vaddq_u8(spu__iota(), vdupq_n_u8((uint8_t)sh)), vdupq_n_u8(15)));
+ }
++#elif defined(__SSE4_1__) && !defined(SPU_SCALAR_HELPERS) && !defined(SPU_SCALAR_INT)
++static inline u128 spu_rotqbyi(u128 a, int sh) {
++    const __m128i s = _mm_and_si128(_mm_add_epi8(spu__xi_spu_index(), _mm_set1_epi8((char)sh)), _mm_set1_epi8(15));
++    return spu__xi_st(_mm_shuffle_epi8(spu__xi_ld(a), _mm_xor_si128(s, _mm_set1_epi8(3))));
++}
+ #else
+ static inline u128 spu_rotqbyi(u128 a, int sh) { return spu_rotqbyi_ref(a, sh); }
+ #endif
+@@ -1074,28 +1103,21 @@ SPU__SF_V2(spu_fceq_ref,  spu__sf_key(x) == spu__sf_key(y) ? 0xFFFFFFFFu : 0u)
+ SPU__SF_V2(spu_fcgt_ref,  spu__sf_key(x) >  spu__sf_key(y) ? 0xFFFFFFFFu : 0u)
+ SPU__SF_V2(spu_fcmeq_ref, spu__sf_mag(x) == spu__sf_mag(y) ? 0xFFFFFFFFu : 0u)
+ SPU__SF_V2(spu_fcmgt_ref, spu__sf_mag(x) >  spu__sf_mag(y) ? 0xFFFFFFFFu : 0u)
+-#if (defined(__SSE2__) || defined(_M_X64)) && !defined(SPU_SCALAR_HELPERS)
+-#include <emmintrin.h>
+-/* SSE2 forms (tests/test_spu_helpers.c checks them against the _ref loops,
+- * which compilers leave scalar and branchy). A magnitude is at most
+- * 0x7FFFFFFF and its negation fits too, so the keys compare as int32. */
+-static inline __m128i spu__sse_mag(__m128i x) {
+-    const __m128i m = _mm_and_si128(x, _mm_set1_epi32(0x7FFFFFFF));
+-    const __m128i denorm = _mm_cmpeq_epi32(_mm_and_si128(x, _mm_set1_epi32(0x7F800000)), _mm_setzero_si128());
+-    return _mm_andnot_si128(denorm, m);
+-}
+-static inline __m128i spu__sse_key(__m128i x) {
+-    const __m128i neg = _mm_srai_epi32(x, 31);
+-    return _mm_sub_epi32(_mm_xor_si128(spu__sse_mag(x), neg), neg);
+-}
+-#define SPU__SSE_CMP(name, cmp, key) static inline u128 name(u128 a, u128 b) { \
+-    __m128i A, B; memcpy(&A, &a, 16); memcpy(&B, &b, 16); \
+-    const __m128i r = cmp(key(A), key(B)); u128 out; memcpy(&out, &r, 16); return out; }
+-SPU__SSE_CMP(spu_fceq,  _mm_cmpeq_epi32, spu__sse_key)
+-SPU__SSE_CMP(spu_fcgt,  _mm_cmpgt_epi32, spu__sse_key)
+-SPU__SSE_CMP(spu_fcmeq, _mm_cmpeq_epi32, spu__sse_mag)
+-SPU__SSE_CMP(spu_fcmgt, _mm_cmpgt_epi32, spu__sse_mag)
+-#undef SPU__SSE_CMP
++#if defined(__SSE4_1__) && !defined(__ARM_NEON) && !defined(SPU_SCALAR_HELPERS)
++/* The compare keys fit 32 bits: a magnitude is at most 0x7FFFFFFF, so the
++ * signed key (zero for any exponent-0 word) compares with pcmpgtd/pcmpeqd. */
++static inline __m128i spu__xs_mag(__m128i x) {
++    const __m128i zero = _mm_cmpeq_epi32(_mm_and_si128(x, _mm_set1_epi32(0x7F800000)), _mm_setzero_si128());
++    return _mm_andnot_si128(zero, _mm_and_si128(x, _mm_set1_epi32(0x7FFFFFFF)));
++}
++static inline __m128i spu__xs_key(__m128i x) {
++    const __m128i neg = _mm_srai_epi32(x, 31), m = spu__xs_mag(x);
++    return _mm_sub_epi32(_mm_xor_si128(m, neg), neg);   /* -m where the sign is set */
++}
++static inline u128 spu_fceq(u128 a, u128 b)  { return spu__xs_st(_mm_cmpeq_epi32(spu__xs_key(spu__xs_ld(a)), spu__xs_key(spu__xs_ld(b)))); }
++static inline u128 spu_fcgt(u128 a, u128 b)  { return spu__xs_st(_mm_cmpgt_epi32(spu__xs_key(spu__xs_ld(a)), spu__xs_key(spu__xs_ld(b)))); }
++static inline u128 spu_fcmeq(u128 a, u128 b) { return spu__xs_st(_mm_cmpeq_epi32(spu__xs_mag(spu__xs_ld(a)), spu__xs_mag(spu__xs_ld(b)))); }
++static inline u128 spu_fcmgt(u128 a, u128 b) { return spu__xs_st(_mm_cmpgt_epi32(spu__xs_mag(spu__xs_ld(a)), spu__xs_mag(spu__xs_ld(b)))); }
+ #else
+ static inline u128 spu_fceq(u128 a, u128 b)  { return spu_fceq_ref(a, b); }
+ static inline u128 spu_fcgt(u128 a, u128 b)  { return spu_fcgt_ref(a, b); }
+@@ -1123,8 +1145,29 @@ static inline uint32_t spu__cfl_lane(uint32_t x, int scale, int is_unsigned) {
+ }
+ static inline u128 spu_cflts(u128 a, int i8) { u128 r; for (int i = 0; i < 4; i++) r._u32[i] = spu__cfl_lane(a._u32[i], 173 - (i8 & 0xFF), 0); return r; }
+ static inline u128 spu_cfltu(u128 a, int i8) { u128 r; for (int i = 0; i < 4; i++) r._u32[i] = spu__cfl_lane(a._u32[i], 173 - (i8 & 0xFF), 1); return r; }
+-static inline u128 spu_csflt(u128 a, int i8) { u128 r; for (int i = 0; i < 4; i++) { const int32_t v = a._s32[i];
++static inline u128 spu_csflt_ref(u128 a, int i8) { u128 r; for (int i = 0; i < 4; i++) { const int32_t v = a._s32[i];
+     r._u32[i] = v ? spu__sf_pack(v < 0 ? 0x80000000u : 0, v < 0 ? 0u - (uint32_t)v : (uint32_t)v, -(155 - (i8 & 0xFF))) : 0; } return r; }
++#if defined(__SSE4_1__) && !defined(__ARM_NEON) && !defined(SPU_SCALAR_HELPERS)
++/* int32 * 2^(i8 - 155) is exact in double; truncated to a single the way the
++ * float ops are (spu__xs_trunc0). Lanes outside the normal single range are
++ * redone by the scalar form. */
++static inline u128 spu_csflt(u128 a, int i8) {
++    const __m128i x = spu__xs_ld(a);
++    const __m128d sc = _mm_set1_pd(ldexp(1.0, (i8 & 0xFF) - 155));
++    __m128i oklo, okhi, zlo, zhi;
++    const __m128 lo = spu__xs_trunc0(_mm_mul_pd(_mm_cvtepi32_pd(x), sc), NULL, &oklo, &zlo);
++    const __m128 hi = spu__xs_trunc0(_mm_mul_pd(_mm_cvtepi32_pd(_mm_unpackhi_epi64(x, x)), sc), NULL, &okhi, &zhi);
++    u128 r = spu__xs_st(spu__xs_pos0(spu__xs_vec(lo, hi), zlo, zhi));
++    if (!spu__xs_all4(spu__xs_pack(oklo, okhi))) {
++        const u128 ref = spu_csflt_ref(a, i8);
++        uint32_t m[4]; _mm_storeu_si128((__m128i*)(void*)m, spu__xs_pack(oklo, okhi));
++        for (int i = 0; i < 4; i++) if (!m[i]) r._u32[i] = ref._u32[i];
++    }
++    return r;
++}
++#else
++static inline u128 spu_csflt(u128 a, int i8) { return spu_csflt_ref(a, i8); }
++#endif
+ static inline u128 spu_cuflt(u128 a, int i8) { u128 r; for (int i = 0; i < 4; i++) { const uint32_t v = a._u32[i];
+     r._u32[i] = v ? spu__sf_pack(0, v, -(155 - (i8 & 0xFF))) : 0; } return r; }
+ 
+diff --git a/runtime/spu/spu_interp.c b/runtime/spu/spu_interp.c
+index fedbee0..7910189 100644
+--- a/runtime/spu/spu_interp.c
++++ b/runtime/spu/spu_interp.c
+@@ -356,10 +356,17 @@ static int spu_step(spu_context* ctx) {
+             ctx->irq_saved = 0;
+         }
+         break;
+-    case SPU_biz:  if (PREF(DST) == 0) next = PREF(A) & 0x3FFFC; break;
+-    case SPU_binz: if (PREF(DST) != 0) next = PREF(A) & 0x3FFFC; break;
+-    case SPU_bihz: if ((PREF(DST) & 0xFFFF) == 0) next = PREF(A) & 0x3FFFC; break;
+-    case SPU_bihnz:if ((PREF(DST) & 0xFFFF) != 0) next = PREF(A) & 0x3FFFC; break;
++    /* The conditional forms carry E/D too, effective when taken, as the lifter
++     * decodes them. Ignoring them here made interpreted and lifted code
++     * disagree inside a job's critical section (God of War: Ascension's job
++     * module 214 enables interrupts with a bihz at 0x4414 and disables them
++     * with one at 0x447C): a lifted disable followed by an interpreted
++     * re-enable left interrupts off for good, the DMA-list stall handler
++     * never ran, and the game stopped at the end of loading. */
++    case SPU_biz:  if (PREF(DST) == 0) { next = PREF(A) & 0x3FFFC; SPU_IED_BITS(); } break;
++    case SPU_binz: if (PREF(DST) != 0) { next = PREF(A) & 0x3FFFC; SPU_IED_BITS(); } break;
++    case SPU_bihz: if ((PREF(DST) & 0xFFFF) == 0) { next = PREF(A) & 0x3FFFC; SPU_IED_BITS(); } break;
++    case SPU_bihnz:if ((PREF(DST) & 0xFFFF) != 0) { next = PREF(A) & 0x3FFFC; SPU_IED_BITS(); } break;
+     case SPU_stop: case SPU_stopd:
+         ctx->pc = next; ctx->stop_code = (d.op == SPU_stopd) ? 0x3FFFu : (uint32_t)I;   /* stopd carries no code field: RPCS3 reports 0x3FFF */
+         ctx->status = SPU_STATUS_STOPPED_BY_STOP; return 1;
+diff --git a/runtime/spu/tests/test_spu_sse_ops.c b/runtime/spu/tests/test_spu_sse_ops.c
+new file mode 100644
+index 0000000..b9ca481
+--- /dev/null
++++ b/runtime/spu/tests/test_spu_sse_ops.c
+@@ -0,0 +1,75 @@
++/* The SSE4.1 selb, rotqbyi, shlqbyi, fceq/fcgt/fcmeq/fcmgt and csflt must be
++ * bit-identical to the scalar references (spu_*_ref) for every input: random
++ * words, ordinary floats, zeros and denormals, the extended range, every
++ * shift and scale. Build on x86-64:
++ *   clang -O2 -msse4.1 -I.. -I../.. -I../../.. test_spu_sse_ops.c -o t && ./t */
++#include "../spu_helpers.h"
++#include <stdio.h>
++
++static uint64_t s_rng = 0x9E3779B97F4A7C15ull;
++static uint32_t rnd32(void)
++{
++    s_rng ^= s_rng << 13; s_rng ^= s_rng >> 7; s_rng ^= s_rng << 17;
++    return (uint32_t)(s_rng >> 16);
++}
++static uint32_t rnd_word(void)
++{
++    const uint32_t sign = (rnd32() & 1u) << 31, man = rnd32() & 0x7FFFFFu;
++    switch (rnd32() % 8) {
++    case 0: return sign | man;                           /* exponent 0: zero / denormal */
++    case 1: return sign;                                 /* +-0 */
++    case 2: return sign | (255u << 23) | man;            /* extended range top */
++    case 3: return rnd32();
++    case 4: return rnd32() & 0xFFu;                      /* small ints (csflt) */
++    default: return sign | ((100u + rnd32() % 56) << 23) | man;
++    }
++}
++
++int main(void)
++{
++#if !defined(__SSE4_1__)
++    puts("test_spu_sse_ops: no SSE4.1, nothing to compare");
++    return 0;
++#else
++    long bad = 0;
++    const long N = 2000000;
++    for (long it = 0; it < N; it++) {
++        u128 a, b, c, got, ref;
++        for (int i = 0; i < 4; i++) { a._u32[i] = rnd_word(); b._u32[i] = rnd_word(); c._u32[i] = rnd32(); }
++        if (it % 5 == 0) b = a;                         /* equal operands for the compares */
++        const int op = (int)(it % 9), k = (int)(rnd32() & 0xFF);
++        switch (op) {
++        case 0: got = spu_selb(a, b, c);      ref = spu_selb_ref(a, b, c); break;
++        case 1: got = spu_rotqbyi(a, k);      ref = spu_rotqbyi_ref(a, k); break;
++        case 2: got = spu_shlqbyi(a, k);      ref = spu_shlqbyi_ref(a, k); break;
++        case 3: got = spu_fceq(a, b);         ref = spu_fceq_ref(a, b); break;
++        case 4: got = spu_fcgt(a, b);         ref = spu_fcgt_ref(a, b); break;
++        case 5: got = spu_fcmeq(a, b);        ref = spu_fcmeq_ref(a, b); break;
++        case 6: got = spu_fcmgt(a, b);        ref = spu_fcmgt_ref(a, b); break;
++        default: got = spu_csflt(a, k);       ref = spu_csflt_ref(a, k); break;
++        }
++        if (memcmp(&got, &ref, 16)) {
++            if (bad++ < 10)
++                printf("MISMATCH op=%d k=%d a=%08X %08X %08X %08X b=%08X %08X %08X %08X\n"
++                       "  got=%08X %08X %08X %08X ref=%08X %08X %08X %08X\n", op, k,
++                       a._u32[0], a._u32[1], a._u32[2], a._u32[3], b._u32[0], b._u32[1], b._u32[2], b._u32[3],
++                       got._u32[0], got._u32[1], got._u32[2], got._u32[3],
++                       ref._u32[0], ref._u32[1], ref._u32[2], ref._u32[3]);
++        }
++    }
++    /* every shift amount and every csflt scale, on one fixed vector */
++    { u128 a; for (int i = 0; i < 4; i++) a._u32[i] = 0x01234567u * (uint32_t)(i + 1);
++      for (int k = -64; k < 64; k++) {
++          u128 g1 = spu_rotqbyi(a, k), r1 = spu_rotqbyi_ref(a, k);
++          u128 g2 = spu_shlqbyi(a, k), r2 = spu_shlqbyi_ref(a, k);
++          if (memcmp(&g1, &r1, 16) || memcmp(&g2, &r2, 16)) { if (bad++ < 20) printf("MISMATCH shift k=%d\n", k); }
++      }
++      for (int k = 0; k < 256; k++) {
++          u128 g = spu_csflt(a, k), r = spu_csflt_ref(a, k);
++          if (memcmp(&g, &r, 16)) { if (bad++ < 20) printf("MISMATCH csflt k=%d\n", k); }
++      } }
++    if (bad) { printf("test_spu_sse_ops: %ld mismatches\n", bad); return 1; }
++    printf("test_spu_sse_ops: ok (%ld random cases, all shifts and scales)\n", N);
++    return 0;
++#endif
++}
+-- 
+2.48.1.windows.1
+

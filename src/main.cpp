@@ -23,6 +23,7 @@
 #include "ps3_diagnostics.h"
 
 extern "C" {
+void     ascension_apply_defaults(void); /* src/compat/ascension_defaults.cpp */
 uint32_t ppu_load_elf(const char* path);
 void     ppu_recomp_register(void);
 void     ppu_hle_init(void);
@@ -203,6 +204,13 @@ extern "C" void ppu_hle_dump_summary_table(void);
 extern "C" void gow_dump_sync_stats(void);
 extern "C" void gow_fios_diag_tick(void);
 extern "C" void gow_get_last_fs_op(int* out_fd, char* out_path, size_t path_sz, int64_t* out_off, uint64_t* out_sz, int64_t* out_res, char* out_op, size_t op_sz);
+extern "C" void ppu_dump_guest_stack(ppu_context*, const char*);
+extern "C" void gow_dump_mutex_cond_specific(uint32_t mutex_ea, uint32_t cond_ea);
+extern "C" void gow_notify_rem_zero(int active);
+extern "C" void gow_print_top25_hle_after_rem0(void);
+extern "C" int edge_inflate(uint8_t* out, uint32_t out_cap, const uint8_t* src, uint32_t src_len);
+extern "C" int gow_inflate(uint8_t* out, uint32_t out_cap, const uint8_t* src, uint32_t src_len);
+extern ppu_context* volatile g_ppu_main_ctx;
 
 static HANDLE s_hwnd_ready_event = NULL;
 static void*  s_shared_hwnd = NULL;
@@ -266,6 +274,17 @@ static volatile uint64_t g_fifo_drain_us_total = 0;
 static volatile uint64_t g_present_us_total = 0;
 static volatile uint32_t g_last_seen_flip_req = 0;
 
+extern "C" {
+    extern volatile uint64_t g_spu_rejoin_count;
+    extern volatile uint64_t g_spu_rejoin_call_count;
+    extern uint32_t g_spu_lane_max_depth[8];
+    extern uint32_t g_spu_lane_cur_depth[8];
+    extern uint32_t g_spu_lane_peak_pc[8];
+    extern uint32_t g_spu_lane_peak_lr[8];
+    extern int32_t  g_spu_lane_peak_img[8];
+    extern uint32_t g_spu_lane_ring[8][8];
+}
+
 static DWORD WINAPI gow_telemetry_5s_thread(LPVOID)
 {
     auto start_time = std::chrono::steady_clock::now();
@@ -279,11 +298,72 @@ static DWORD WINAPI gow_telemetry_5s_thread(LPVOID)
     uint64_t last_drain_us = 0;
     uint64_t last_present_us = 0;
 
+    static uint32_t s_sec_counter = 0;
+    static uint32_t s_stall_sec_logged = 0;
+
     while (!s_window_closed) {
-        Sleep(5000);
+        Sleep(1000);
+        s_sec_counter++;
         auto now = std::chrono::steady_clock::now();
-        double dt = std::chrono::duration<double>(now - last_time).count();
         double wall_sec = std::chrono::duration<double>(now - start_time).count();
+
+        // 1-second stall diagnostics for Task 1 (b) & (c)
+        if (vm_base) {
+            uint32_t rem_b = vm_read32(0x009976E0u);
+            uint32_t state_b = vm_read32(0x00997578u);
+            if (state_b == 3 && rem_b > 0 && s_stall_sec_logged < 20) {
+                s_stall_sec_logged++;
+                // Task 1 (b) tid 6/7 loop condition & predicate dump
+                uint32_t arg6 = 0x74E7F328u;
+                uint32_t arg7 = 0x74E7F368u;
+                uint32_t r26_6 = vm_read32(arg6 + 0x30);
+                uint32_t r26_7 = vm_read32(arg7 + 0x30);
+                uint32_t pred6_ea = r26_6 ? (r26_6 + 0x10Cu) : 0;
+                uint32_t pred7_ea = r26_7 ? (r26_7 + 0x10Cu) : 0;
+                uint32_t val6 = pred6_ea ? vm_read32(pred6_ea) : 0;
+                uint32_t val7 = pred7_ea ? vm_read32(pred7_ea) : 0;
+                fprintf(stderr, "[TID6-7-PRED sec=%u] pred6=0x%08X val=%u | pred7=0x%08X val=%u (cmp_val=0, writer=func_004733F8)\n",
+                        s_stall_sec_logged, pred6_ea, val6, pred7_ea, val7);
+                if (pred6_ea >= 0x10000u) {
+                    char wbuf[256] = {0}; int woff = 0;
+                    uint32_t base = (pred6_ea >= 32) ? (pred6_ea - 32) : 0;
+                    for (int k = 0; k < 16; k++) {
+                        woff += snprintf(wbuf + woff, sizeof(wbuf) - woff, "%08X ", vm_read32(base + k * 4));
+                    }
+                    fprintf(stderr, "  [PRED6-16W base=0x%08X] %s\n", base, wbuf);
+                }
+
+                // Task 1 (c) dump stalled request 0x7003A250 (64 words)
+                fprintf(stderr, "[FIOS-REQ-64W sec=%u req=0x7003A250]:\n", s_stall_sec_logged);
+                for (int row = 0; row < 4; row++) {
+                    char rbuf[256] = {0}; int roff = 0;
+                    for (int col = 0; col < 16; col++) {
+                        uint32_t ea = 0x7003A250u + (row * 16 + col) * 4;
+                        roff += snprintf(rbuf + roff, sizeof(rbuf) - roff, "%08X ", vm_read32(ea));
+                    }
+                    fprintf(stderr, "    +0x%02X: %s\n", row * 64, rbuf);
+                }
+
+                // Task 1 (c) scheduler queue head/tail words (0x74E13A00 and 0x74E13AD8)
+                char qbuf[256] = {0}; int qoff = 0;
+                for (int k = 0; k < 8; k++) {
+                    qoff += snprintf(qbuf + qoff, sizeof(qbuf) - qoff, "%08X ", vm_read32(0x74E13A00u + k * 4));
+                }
+                char mbuf[256] = {0}; int moff = 0;
+                for (int k = 0; k < 8; k++) {
+                    moff += snprintf(mbuf + moff, sizeof(mbuf) - moff, "%08X ", vm_read32(0x74E13AD8u + k * 4));
+                }
+                fprintf(stderr, "  [SCHED-QUEUE-WORDS] q[0x74E13A00]: %s | m[0x74E13AD8]: %s\n", qbuf, mbuf);
+                fflush(stderr);
+            }
+        }
+
+        // Only run 5-second telemetry every 5 ticks
+        if ((s_sec_counter % 5) != 0) {
+            continue;
+        }
+
+        double dt = std::chrono::duration<double>(now - last_time).count();
         last_time = now;
 
         uint64_t cur_vblank_ticks = g_vblank_ticks_count;
@@ -347,6 +427,28 @@ static DWORD WINAPI gow_telemetry_5s_thread(LPVOID)
         }
         offset += snprintf(pump_buf + offset, sizeof(pump_buf) - offset, "]");
 
+                fprintf(stderr, "[SPU-DEPTH] wall=%.1fs | max=[L0=%u, L1=%u, L2=%u, L3=%u, L4=%u, L5=%u] | cur=[%u,%u,%u,%u,%u,%u] | rejoin=%llu rejoin_call=%llu | peak_pc=[0x%05X,0x%05X,0x%05X,0x%05X,0x%05X,0x%05X]\n",
+                wall_sec,
+                g_spu_lane_max_depth[0], g_spu_lane_max_depth[1], g_spu_lane_max_depth[2],
+                g_spu_lane_max_depth[3], g_spu_lane_max_depth[4], g_spu_lane_max_depth[5],
+                g_spu_lane_cur_depth[0], g_spu_lane_cur_depth[1], g_spu_lane_cur_depth[2],
+                g_spu_lane_cur_depth[3], g_spu_lane_cur_depth[4], g_spu_lane_cur_depth[5],
+                (unsigned long long)g_spu_rejoin_count, (unsigned long long)g_spu_rejoin_call_count,
+                g_spu_lane_peak_pc[0], g_spu_lane_peak_pc[1], g_spu_lane_peak_pc[2],
+                g_spu_lane_peak_pc[3], g_spu_lane_peak_pc[4], g_spu_lane_peak_pc[5]);
+        if (s_sec_counter >= 90) {
+            fprintf(stderr, "\n=== [SPU-DEPTH-SUMMARY T=%.1fs] ===\n", wall_sec);
+            for (uint32_t l = 0; l < 6; l++) {
+                fprintf(stderr, "SPU Lane %u: max_depth=%u cur_depth=%u peak_pc=0x%05X peak_lr=0x%05X peak_img=%d | stack_ring=[0x%05X, 0x%05X, 0x%05X, 0x%05X, 0x%05X, 0x%05X, 0x%05X, 0x%05X]\n",
+                        l, g_spu_lane_max_depth[l], g_spu_lane_cur_depth[l],
+                        g_spu_lane_peak_pc[l], g_spu_lane_peak_lr[l], g_spu_lane_peak_img[l],
+                        g_spu_lane_ring[l][0], g_spu_lane_ring[l][1], g_spu_lane_ring[l][2], g_spu_lane_ring[l][3],
+                        g_spu_lane_ring[l][4], g_spu_lane_ring[l][5], g_spu_lane_ring[l][6], g_spu_lane_ring[l][7]);
+            }
+            fprintf(stderr, "SPU Rejoin Triggers: SPU_REJOIN=%llu, SPU_REJOIN_CALL=%llu\n",
+                    (unsigned long long)g_spu_rejoin_count, (unsigned long long)g_spu_rejoin_call_count);
+            fprintf(stderr, "=== [END SPU-DEPTH-SUMMARY] ===\n\n");
+        }
         fprintf(stderr, "[TELEMETRY 5s] wall=%.1fs | dl_head=%u dl_tail=%u ref=%u | ticks=%.1f/s | vblank_handler=%.1f/s | flip_words=%.1f/s | presents=%.1f/s [%s] | rejected_flips=%llu (%.1f/s) | fifo_drain=%.0fus/s (%.1fms/s) | present_time=%.0fus/s (%.1fms/s) | ppu_gcm_pump/s: %s\n",
                 wall_sec, dl_head, dl_tail, cur_ref, vblank_tick_rate, vblank_inv_rate, flip_words_rate, presents_rate,
                 buf_presents_str, (unsigned long long)cur_rejected, rejected_rate, drain_us_per_s, drain_us_per_s / 1000.0, present_us_per_s, present_us_per_s / 1000.0, pump_buf);
@@ -441,7 +543,7 @@ static DWORD WINAPI gow_telemetry_5s_thread(LPVOID)
                 (dt > 0.0) ? (double)f_words / dt : 0.0,
                 f_max_ms);
 
-        // TASK 1 (b) Stalled request logging & FIOS worker states
+        // TASK 1 (a) & (b) Stalled request logging, tid=1 diagnostics & FIOS worker states
         if (vm_base) {
             uint32_t rem_b = vm_read32(0x009976E0u);
             uint32_t state_b = vm_read32(0x00997578u);
@@ -451,6 +553,77 @@ static DWORD WINAPI gow_telemetry_5s_thread(LPVOID)
 
             fprintf(stderr, "[FIOS-STALL 5s] rem=%u state=%u req=0x%08X issuer=tid_1 | last_fs=[%s fd=%d path='%s' off=%lld sz=%llu res=%lld]\n",
                     rem_b, state_b, req_b, fs_op[0] ? fs_op : "none", fs_fd, fs_path, (long long)fs_off, (unsigned long long)fs_sz, (long long)fs_res);
+
+            // TASK 2 (b) Mutex 0x74E13AD8 and Cond 0x74E13B00 specific audit
+            if (state_b == 3 && rem_b > 0) {
+                gow_dump_mutex_cond_specific(0x74E13AD8u, 0x74E13B00u);
+            }
+
+            // TASK 4 Post-rem0 tracking
+            static bool s_rem0_announced = false;
+            static double s_rem0_wall = 0.0;
+            if (rem_b == 0 && state_b > 1 && !s_rem0_announced) {
+                s_rem0_announced = true;
+                s_rem0_wall = wall_sec;
+                gow_notify_rem_zero(1);
+                fprintf(stderr, "\n=======================================================\n");
+                fprintf(stderr, "[REM0-REACHED] rem=0 reached at wall=%.2fs! Post-load monitoring active.\n", wall_sec);
+                fprintf(stderr, "=======================================================\n\n");
+            }
+            if (s_rem0_announced) {
+                static double s_last_post_rem0_dump = 0.0;
+                if (wall_sec - s_last_post_rem0_dump >= 10.0) {
+                    s_last_post_rem0_dump = wall_sec;
+                    fprintf(stderr, "\n=== [POST-REM0 TID TABLE @ %.1fs (t+%.1fs)] ===\n", wall_sec, wall_sec - s_rem0_wall);
+                    for (uint32_t tid = 1; tid <= 32; tid++) {
+                        char tname[64] = {0}; int tstate = 0; uint32_t tlr = 0;
+                        ppu_diag_get_thread_status(tid, &tlr, tname, sizeof(tname), &tstate);
+                        if (tstate == 0 && tname[0] == '\0') continue;
+                        int blk = g_ppu_thread_diags[tid].blocked_type;
+                        uint64_t obj = g_ppu_thread_diags[tid].blocked_obj;
+                        const char* inflight = (tid < PS3_HLE_INFLIGHT_MAX) ? g_hle_inflight[tid] : nullptr;
+                        fprintf(stderr, "tid=%-2u [%-20s] state=%d lr=0x%08X blk_type=%d blk_obj=0x%08llX inflight=%s\n",
+                                tid, tname[0] ? tname : "unnamed", tstate, tlr, blk, (unsigned long long)obj,
+                                inflight ? inflight : "none");
+                        fprintf(stderr, "  Last 5 HLE:");
+                        uint32_t hidx = g_ppu_thread_diags[tid].hle_history_idx;
+                        uint32_t hcnt = hidx < 5 ? hidx : 5;
+                        for (uint32_t hi = 0; hi < hcnt; hi++) {
+                            uint32_t slot = (hidx - hcnt + hi) % 5;
+                            uint32_t nid = g_ppu_thread_diags[tid].hle_history_nid[slot];
+                            const char* hnm = g_ppu_thread_diags[tid].hle_history_name[slot];
+                            fprintf(stderr, " [%s (0x%08X)]", hnm ? hnm : "?", nid);
+                        }
+                        fprintf(stderr, "\n");
+                    }
+                    fprintf(stderr, "====================================================\n\n");
+                    gow_print_top25_hle_after_rem0();
+                }
+            }
+
+            // TASK 1 (a) tid=1 while stalled
+            if (state_b == 3 && rem_b > 0) {
+                uint32_t t1_lr = 0;
+                char t1_name[64] = {0}; int t1_state = 0;
+                ppu_diag_get_thread_status(1, &t1_lr, t1_name, sizeof(t1_name), &t1_state);
+                int t1_blk = g_ppu_thread_diags[1].blocked_type;
+                uint64_t t1_obj = g_ppu_thread_diags[1].blocked_obj;
+                fprintf(stderr, "  tid=1 [main] lr=0x%08X blocked_type=%d blocked_obj=0x%08llX state=%d\n",
+                        t1_lr, t1_blk, (unsigned long long)t1_obj, t1_state);
+                fprintf(stderr, "    Last 5 HLE calls by tid=1:\n");
+                uint32_t hidx = g_ppu_thread_diags[1].hle_history_idx;
+                uint32_t hcnt = hidx < 5 ? hidx : 5;
+                for (uint32_t hi = 0; hi < hcnt; hi++) {
+                    uint32_t slot = (hidx - hcnt + hi) % 5;
+                    uint32_t nid = g_ppu_thread_diags[1].hle_history_nid[slot];
+                    const char* hnm = g_ppu_thread_diags[1].hle_history_name[slot];
+                    fprintf(stderr, "      [%u] 0x%08X (%s)\n", hi, nid, hnm ? hnm : "unknown");
+                }
+                if (g_ppu_main_ctx) {
+                    ppu_dump_guest_stack(g_ppu_main_ctx, "tid1-stall");
+                }
+            }
+
             fprintf(stderr, "  FIOS workers:\n");
             for (uint32_t tid = 2; tid <= 8; tid++) {
                 char tname[64] = {0}; int tstate = 0; uint32_t tlr = 0;
@@ -704,6 +877,31 @@ static DWORD WINAPI gow_vblank_tick_thread(LPVOID)
     return 0;
 }
 
+static void gow_dump_task3_words(void)
+{
+    static int s_count = 0;
+    if (!vm_base) return;
+    if (s_count >= 20) return;
+    s_count++;
+
+    uint32_t w_gate[8], w_dl[8], w_flip[8], w_mut[8];
+    for (int i = 0; i < 8; i++) {
+        w_gate[i] = vm_read32(0x0081C9B0u + i * 4);
+        w_dl[i]   = vm_read32(0x009711D0u + i * 4);
+        w_flip[i] = vm_read32(0x00970F20u + i * 4);
+        w_mut[i]  = vm_read32(0x009976E0u + i * 4);
+    }
+    fprintf(stderr, "[TASK3-WORDS #%02d/20]\n", s_count);
+    fprintf(stderr, "  gate_C9B0 (+0x0081C9B0): %08X %08X %08X %08X  %08X %08X %08X %08X\n",
+            w_gate[0], w_gate[1], w_gate[2], w_gate[3], w_gate[4], w_gate[5], w_gate[6], w_gate[7]);
+    fprintf(stderr, "  dl_head   (+0x009711D0): %08X %08X %08X %08X  %08X %08X %08X %08X\n",
+            w_dl[0], w_dl[1], w_dl[2], w_dl[3], w_dl[4], w_dl[5], w_dl[6], w_dl[7]);
+    fprintf(stderr, "  flipInt   (+0x00970F20): %08X %08X %08X %08X  %08X %08X %08X %08X\n",
+            w_flip[0], w_flip[1], w_flip[2], w_flip[3], w_flip[4], w_flip[5], w_flip[6], w_flip[7]);
+    fprintf(stderr, "  mutex_997 (+0x009976E0): %08X %08X %08X %08X  %08X %08X %08X %08X\n",
+            w_mut[0], w_mut[1], w_mut[2], w_mut[3], w_mut[4], w_mut[5], w_mut[6], w_mut[7]);
+}
+
 static DWORD WINAPI gow_target_dump_thread(LPVOID)
 {
     Sleep(2000);
@@ -880,6 +1078,7 @@ static DWORD WINAPI rsx_vblank_thread(LPVOID)
                     fprintf(stderr, "[GCM-HOLE 0x132040 (EA 0x%08X)]: %08X %08X %08X %08X  %08X %08X %08X %08X\n",
                             hole_ea, hw[0], hw[1], hw[2], hw[3], hw[4], hw[5], hw[6], hw[7]);
                 }
+                gow_dump_task3_words();
                 gow_fios_diag_tick();
             }
             fflush(stderr);
@@ -910,6 +1109,8 @@ static LONG WINAPI vm_commit_veh(EXCEPTION_POINTERS* ep)
 
 int main(int argc, char** argv)
 {
+    ascension_apply_defaults();
+
     printf("=================================================================\n");
     printf(" God of War: Ascension (PS3) — Native x86-64 Static Recompilation\n");
     printf("=================================================================\n\n");
@@ -946,6 +1147,27 @@ int main(int argc, char** argv)
 
     derive_vfs_root(elf_path);
     printf("[boot] VFS root configured to: %s\n", ppu_vfs_root);
+
+    printf("\n=== [ASCENSION-DEFAULTS-AUDIT] Effective Environment Values ===\n");
+    const char* default_keys[] = {
+        "PS3_EDGE_ZLIB_HLE", "RSX_LIVE_DRAW", "LD_SWIN", "GCM_PARK_WAIT_MS",
+        "GCM_SEMA_ACQUIRE", "GCM_PARK_SPU_HOLD_MS", "GCM_REPORT_SPU_HOLD_MS",
+        "GCM_ROUND_GATE", "GCM_ROUND_RING", "SPURS_READY_LEVEL", "SPURS_MAXCONT",
+        "SPURS_IDLE_BACKOFF_MAX", "SPURS_PIN", "PS3_PIN_PPU", "SPU_REJOIN",
+        "SPU_REJOIN_CALL", "LD_PERF_OVERLAY", "PS3_OVERLAY_COLORS", "PS3_VERBOSE",
+        "PS3_MODS", "GOW_HOOKS", "SPU_INTERP_UNLIFTED", "SPU_DMA_LAX"
+    };
+    for (const char* k : default_keys) {
+        const char* val = getenv(k);
+        printf("  %-24s = %s\n", k, val ? val : "(unset)");
+    }
+    uint8_t test_src[] = {0x78, 0x9C, 0x4B, 0xCB, 0xCF, 0x47, 0x00, 0x00, 0x02, 0x82, 0x01, 0x45};
+    uint8_t test_dst[16] = {0};
+    int gow_res = gow_inflate(test_dst, sizeof(test_dst), test_src, sizeof(test_src));
+    int edge_res = edge_inflate(test_dst, sizeof(test_dst), test_src, sizeof(test_src));
+    printf("  [INFLATE-CHECK] gow_inflate rc=%d (\"%s\") edge_inflate rc=%d (\"%s\")\n",
+           gow_res, (char*)test_dst, edge_res, (char*)test_dst);
+    printf("===============================================================\n\n");
 
     printf("[boot] Registering lifted PPU function table...\n");
     ppu_recomp_register();

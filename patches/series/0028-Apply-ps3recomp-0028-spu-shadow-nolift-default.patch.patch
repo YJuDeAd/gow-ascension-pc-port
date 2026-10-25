@@ -1,0 +1,255 @@
+From 2494b5f31d2f47d9f233ecb1c5dbe1fdb8bb364c Mon Sep 17 00:00:00 2001
+From: YJuDeAd <robinrashi@gmail.com>
+Date: Sun, 25 Oct 2026 04:43:13 +0530
+Subject: [PATCH 28/47] Apply ps3recomp-0028-spu-shadow-nolift-default.patch
+
+---
+ runtime/spu/spu_channels.c | 75 ++++++++++++++++++++++++++++++-
+ runtime/spu/spu_drain.c    | 10 +++++
+ runtime/spu/spu_interp.c   | 90 ++++++++++++++++++++++++++++++++++++++
+ 3 files changed, 174 insertions(+), 1 deletion(-)
+
+diff --git a/runtime/spu/spu_channels.c b/runtime/spu/spu_channels.c
+index 86c83e6..88c2679 100644
+--- a/runtime/spu/spu_channels.c
++++ b/runtime/spu/spu_channels.c
+@@ -1565,6 +1565,41 @@ static inline uint32_t spu_fn_hash(uint32_t addr)
+ static int s_reg_image = 0;
+ void spu_begin_image(int image_id) { s_reg_image = image_id; }
+ 
++/* One bit per LS word for each image id: is a lifted function registered at
++ * this address? The interpreter asks spu_lifted_probe at every instruction,
++ * and almost every answer is "no" -- which a bit test gives without the three
++ * hash lookups. 8 KB per image that registers anything. */
++#define SPU_FN_BITS_IMAGES 1024
++static uint8_t* s_fn_bits[SPU_FN_BITS_IMAGES];
++static void spu_fn_bits_set(int img, uint32_t addr)
++{
++    if (img < 0 || img >= SPU_FN_BITS_IMAGES) return;
++    if (!s_fn_bits[img]) s_fn_bits[img] = (uint8_t*)calloc(SPU_LS_SIZE / 32, 1);
++    if (!s_fn_bits[img]) return;
++    const uint32_t w = (addr & SPU_LS_MASK) >> 2;
++    s_fn_bits[img][w >> 3] |= (uint8_t)(1u << (w & 7));
++}
++static inline int spu_fn_bits_test(int img, uint32_t addr)
++{
++    if (img < 0 || img >= SPU_FN_BITS_IMAGES || !s_fn_bits[img]) return 0;
++    const uint32_t w = (addr & SPU_LS_MASK) >> 2;
++    return (s_fn_bits[img][w >> 3] >> (w & 7)) & 1;
++}
++
++/* The next lifted entry of image img above addr (SPU_LS_SIZE if none): where
++ * the lifted function starting at addr ends (spu_shadow_check). */
++uint32_t spu_fn_next_entry(int img, uint32_t addr)
++{
++    if (img < 0 || img >= SPU_FN_BITS_IMAGES || !s_fn_bits[img]) return SPU_LS_SIZE;
++    for (uint32_t a = (addr & SPU_LS_MASK & ~3u) + 4; a < SPU_LS_SIZE; a += 4)
++        if (spu_fn_bits_test(img, a)) return a;
++    return SPU_LS_SIZE;
++}
++
++/* The title's default SPU_NOLIFT list; a title defines its own to override
++ * this weak empty one (God of War: Ascension: host/ascension_defaults.cpp). */
++__attribute__((weak)) const char* const spu_title_nolift = 0;
++
+ void spu_register_function(uint32_t addr, spu_fn fn)
+ {
+     if (s_registry_count >= SPU_FN_REGISTRY_MAX) {
+@@ -1591,7 +1626,10 @@ void spu_register_function(uint32_t addr, spu_fn fn)
+     { static int s_n = -1; static struct { int img; uint32_t addr; } s_skip[64];
+       if (s_n < 0) {
+           s_n = 0;
++          /* A title may name its own default (spu_title_nolift, a weak symbol
++           * it defines); SPU_NOLIFT, even empty, replaces it. */
+           const char* e = getenv("SPU_NOLIFT");
++          if (!e) e = spu_title_nolift;
+           while (e && *e && s_n < 64) {
+               char* end;
+               s_skip[s_n].img = (int)strtol(e, &end, 10);
+@@ -1605,6 +1643,7 @@ void spu_register_function(uint32_t addr, spu_fn fn)
+       for (int k = 0; k < s_n; k++)
+           if (s_skip[k].addr == addr && (s_skip[k].img < 0 || s_skip[k].img == s_reg_image))
+               return; }
++    spu_fn_bits_set(s_reg_image, addr);
+     uint32_t i = s_registry_count;
+     s_registry[i].addr = addr;
+     s_registry[i].fn = fn;
+@@ -1825,6 +1864,16 @@ int spu_lifted_probe(spu_context* ctx, uint32_t lsa)
+      * entries go into the lift instead (jobmods_extra_funcs.json). Default 1. */
+     static int s_mask = -1;
+     if (s_mask < 0) { const char* e = getenv("SPU_PROBE"); s_mask = e && *e ? atoi(e) : 1; }
++    /* Fast "no": no image this context could dispatch to has a function at
++     * lsa, and lsa is in no streamed code span (whose lifts sit elsewhere). */
++    {   int spans = 0;
++        for (unsigned slot = 0; slot < SPU_RESIDENT_CODE_SLOTS; ++slot)
++            if (ctx->resident_code[slot].image_id &&
++                lsa - ctx->resident_code[slot].lsa < ctx->resident_code[slot].size) { spans = 1; break; }
++        if (!spans && ctx->image_id > 0 &&   /* image 0 matches every image's functions */
++            !spu_fn_bits_test(ctx->image_id, lsa) && !spu_fn_bits_test(0, lsa) &&
++            !spu_fn_bits_test(ctx->resident_ovl, lsa) && !spu_fn_bits_test(ctx->resident_task, lsa))
++            return 0; }
+     int owner = 0;
+     if (s_mask & 1) {
+         const uint32_t pic = ctx->pic_delta;
+@@ -1833,7 +1882,31 @@ int spu_lifted_probe(spu_context* ctx, uint32_t lsa)
+         if (owner) return fn != NULL;
+     }
+     if ((s_mask & 2) && ctx->resident_task && spu_lookup(lsa, ctx->resident_task)) return 1;
+-    if ((s_mask & 4) && ctx->resident_ovl && spu_lookup(lsa, ctx->resident_ovl)) return 1;
++    if (((s_mask & 4) || ((s_mask & 8) && !ctx->int_enable)) &&
++        ctx->resident_ovl && spu_lookup(lsa, ctx->resident_ovl)) return 1;
++    /* SPU_REJOIN=<ovl>:<lo>-<hi>[,...] (hex LS addresses): rejoin the resident
++     * overlay's lifted functions in these ranges only, whatever the mask --
++     * to find, by halving, which lifted function behaves unlike the
++     * interpreter on a path only the interpreter ever ran. */
++    { static int s_rn = -1; static struct { int ovl; uint32_t lo, hi; } s_rj[16];
++      if (s_rn < 0) {
++          s_rn = 0;
++          const char* e = getenv("SPU_REJOIN");
++          while (e && *e && s_rn < 16) {
++              char* end;
++              s_rj[s_rn].ovl = (int)strtol(e, &end, 10);
++              if (*end != ':') break;
++              s_rj[s_rn].lo = (uint32_t)strtoul(end + 1, &end, 16);
++              s_rj[s_rn].hi = s_rj[s_rn].lo;
++              if (*end == '-') s_rj[s_rn].hi = (uint32_t)strtoul(end + 1, &end, 16);
++              s_rn++;
++              e = (*end == ',') ? end + 1 : NULL;
++          }
++      }
++      for (int k = 0; k < s_rn; k++)
++          if (ctx->resident_ovl == s_rj[k].ovl && lsa >= s_rj[k].lo && lsa <= s_rj[k].hi &&
++              spu_lookup(lsa, ctx->resident_ovl))
++              return 1; }
+     return spu_lifted_lookup(ctx, lsa) != NULL;
+ }
+ 
+diff --git a/runtime/spu/spu_drain.c b/runtime/spu/spu_drain.c
+index f9839e9..5f46813 100644
+--- a/runtime/spu/spu_drain.c
++++ b/runtime/spu/spu_drain.c
+@@ -96,6 +96,8 @@ static void spu_job_hist_step(const spu_context* ctx)
+ void spu_task_launch_check(spu_context* ctx, void* fn)
+ {
+     spu_job_hist_step(ctx);
++    { extern void spu_shadow_check(spu_context*, void (*)(spu_context*));
++      spu_shadow_check(ctx, (void (*)(spu_context*))fn); }
+     t_recent[t_recent_n++ & 31] = (uint32_t)ctx->pc & SPU_LS_MASK;
+     extern void spu_check_stack_reset(spu_context*, void (*)(spu_context*));
+     spu_check_stack_reset(ctx, (void (*)(spu_context*))fn);
+@@ -320,6 +322,14 @@ int spu_irq_regs_maybe_restore(spu_context* ctx)
+ void (*spu_take_interrupt(spu_context* ctx,
+                           void (*tf)(spu_context*)))(spu_context*)
+ {
++    /* SPU_IRQ_DELIVER=0: never take an SPU interrupt. God of War: Ascension's
++     * Wws job manager polls its DMA-list stalls when it is not interrupted --
++     * a run whose job code is interpreted takes none at all and plays -- and
++     * taking them inside lifted job code (module 214's 0x4414-0x447C window)
++     * stops the game at the end of loading. */
++    { static int s_deliver = -1;
++      if (s_deliver < 0) { const char* e = getenv("SPU_IRQ_DELIVER"); s_deliver = !(e && *e == '0'); }
++      if (!s_deliver) return tf; }
+     /* Stall-and-notify still settling: let the SPU run on (see above). */
+     if (g_sn_defer && g_sn_defer_ctx == (void*)ctx) {
+         if (--g_sn_defer == 0) g_sn_defer_ctx = 0;
+diff --git a/runtime/spu/spu_interp.c b/runtime/spu/spu_interp.c
+index 7910189..50188eb 100644
+--- a/runtime/spu/spu_interp.c
++++ b/runtime/spu/spu_interp.c
+@@ -650,3 +650,93 @@ void spu_dispatch(spu_context* ctx, uint32_t target) {
+         target = next;
+     }
+ }
++
++/* SPU_SHADOW=<ovl>:<lo>-<hi> (hex LS): before the drain runs a lifted function
++ * of that resident overlay starting in [lo, hi], run it twice on copies of the
++ * context -- the lifted C and the interpreter, up to the next lifted entry --
++ * and report where the two disagree (exit pc, registers, local store). For
++ * code the interpreter has always run and the lift never had: which lifted
++ * function of a job body computes something else. Functions whose path makes
++ * a channel access, a call or a stop are skipped (their effects would happen
++ * twice); each function is checked at most SPU_SHADOW_MAX times (default 4). */
++extern void (*spu_lookup(uint32_t addr, int image_id))(spu_context*);
++void spu_shadow_check(spu_context* ctx, void (*fn)(spu_context*))
++{
++    static int s_on = -1, s_ovl; static uint32_t s_lo, s_hi; static long s_max;
++    if (s_on < 0) {
++        const char* e = getenv("SPU_SHADOW"); char* end;
++        s_on = 0;
++        if (e) { s_ovl = (int)strtol(e, &end, 10);
++                 if (*end == ':') { s_lo = (uint32_t)strtoul(end + 1, &end, 16);
++                                    s_hi = (*end == '-') ? (uint32_t)strtoul(end + 1, 0, 16) : s_lo;
++                                    s_on = 1; } }
++        const char* m = getenv("SPU_SHADOW_MAX"); s_max = m ? atol(m) : 4;
++    }
++    if (!s_on || ctx->resident_ovl != s_ovl || ctx->ls != ctx->ls_store) return;
++    const uint32_t pc0 = ctx->pc & SPU_LS_MASK;
++    if (pc0 < s_lo || pc0 > s_hi || !fn || fn != spu_lookup(pc0, s_ovl)) return;
++    static unsigned char s_seen[0x10000];          /* per LS word / 4, saturating */
++    if (s_seen[pc0 >> 2] >= s_max) return;
++    s_seen[pc0 >> 2]++;
++    static _Thread_local spu_context* SH_L; static _Thread_local spu_context* SH_I;
++    if (!SH_L) { SH_L = (spu_context*)malloc(sizeof *SH_L); SH_I = (spu_context*)malloc(sizeof *SH_I); }
++    if (!SH_L || !SH_I) return;
++    memcpy(SH_I, ctx, sizeof *SH_I); SH_I->ls = SH_I->ls_store;
++    /* interpreter first: it decides whether the path is safe to run twice */
++    /* A lifted function spans [pc0, next entry) and leaves only when control
++     * does; branches inside it, back to its start included, stay in it. */
++    extern uint32_t spu_fn_next_entry(int img, uint32_t addr);
++    const uint32_t fn_end = spu_fn_next_entry(s_ovl, pc0);
++    /* Calls are followed: the lifted function runs its callees as C calls, so
++     * the interpreter follows them too and only stops when, back at depth 0,
++     * control leaves the function. A return is control reaching the address a
++     * call left in its link register. */
++    static long s_skip_chan, s_skip_stop, s_skip_long;
++    uint32_t rstack[32]; int depth = 0;
++    int steps = 0, ok = 1;
++    for (; steps < 200000; steps++) {
++        const uint32_t pc = SH_I->pc & SPU_LS_MASK;
++        while (depth && pc == rstack[depth - 1]) depth--;
++        if (steps && !depth && (pc < pc0 || pc >= fn_end)) break;   /* left the function */
++        const uint8_t* q = SH_I->ls + pc;
++        const uint32_t w = ((uint32_t)q[0] << 24) | ((uint32_t)q[1] << 16) | ((uint32_t)q[2] << 8) | q[3];
++        const uint32_t op11 = w >> 21, op9 = w >> 23;
++        if (op11 == 0x00D || op11 == 0x00F || op11 == 0x10D) { ok = 0; s_skip_chan++; break; }
++        if (op11 == 0x000 || op11 == 0x140 || op11 == 0x1AA || op11 == 0x1AB) { ok = 0; s_skip_stop++; break; }
++        const int call = (op11 == 0x1A9 || op9 == 0x066 || op9 == 0x062);
++        if (call && depth < 32) rstack[depth++] = (pc + 4) & SPU_LS_MASK;
++        if (spu_step(SH_I)) { ok = 0; s_skip_stop++; break; }
++        /* brsl to the next instruction is a pc getter, not a call */
++        if (call && (SH_I->pc & SPU_LS_MASK) == ((pc + 4) & SPU_LS_MASK)) depth--;
++    }
++    if (steps >= 200000) { s_skip_long++; return; }
++    if (!ok) {
++        static long s_n; if ((++s_n % 500) == 1)
++            fprintf(stderr, "[shadow] skipped: channel %ld, stop/iret %ld, too long %ld\n",
++                    s_skip_chan, s_skip_stop, s_skip_long);
++        return;
++    }
++    memcpy(SH_L, ctx, sizeof *SH_L); SH_L->ls = SH_L->ls_store;
++    void (*saved_tf)(spu_context*) = g_spu_trampoline_fn;
++    g_spu_trampoline_fn = 0;
++    fn(SH_L);
++    g_spu_trampoline_fn = saved_tf;
++    static long s_reports; static long s_checked;
++    s_checked++;
++    char line[1200]; int o = 0;
++    if ((SH_L->pc & SPU_LS_MASK) != (SH_I->pc & SPU_LS_MASK))
++        o += snprintf(line + o, sizeof line - o, " pc lifted=%05X interp=%05X",
++                      SH_L->pc & SPU_LS_MASK, SH_I->pc & SPU_LS_MASK);
++    for (int r = 0; r < 128 && o < (int)sizeof line - 120; r++)
++        if (memcmp(&SH_L->gpr[r], &SH_I->gpr[r], 16))
++            o += snprintf(line + o, sizeof line - o, " r%d lifted=%08X%08X%08X%08X interp=%08X%08X%08X%08X", r,
++                          SH_L->gpr[r]._u32[0], SH_L->gpr[r]._u32[1], SH_L->gpr[r]._u32[2], SH_L->gpr[r]._u32[3],
++                          SH_I->gpr[r]._u32[0], SH_I->gpr[r]._u32[1], SH_I->gpr[r]._u32[2], SH_I->gpr[r]._u32[3]);
++    for (uint32_t a = 0; a < SPU_LS_SIZE && o < (int)sizeof line - 40; a += 16)
++        if (memcmp(SH_L->ls_store + a, SH_I->ls_store + a, 16)) {
++            o += snprintf(line + o, sizeof line - o, " LS@%05X", a); break; }
++    if (o && s_reports++ < 40)
++        fprintf(stderr, "[shadow] fn 0x%05X (%d steps) differs:%s\n", pc0, steps, line);
++    else if (!o && (s_checked % 200) == 1)
++        fprintf(stderr, "[shadow] %ld functions checked, %ld differ\n", s_checked, s_reports);
++}
+-- 
+2.48.1.windows.1
+

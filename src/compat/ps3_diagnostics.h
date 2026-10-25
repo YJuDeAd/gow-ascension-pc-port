@@ -28,6 +28,9 @@ typedef struct {
     const char* volatile last_hle_name;
     volatile int blocked_type;
     volatile uint64_t blocked_obj;
+    volatile uint32_t hle_history_nid[5];
+    const char* volatile hle_history_name[5];
+    volatile uint32_t hle_history_idx;
 } ppu_thread_diag_t;
 
 extern ppu_thread_diag_t g_ppu_thread_diags[64];

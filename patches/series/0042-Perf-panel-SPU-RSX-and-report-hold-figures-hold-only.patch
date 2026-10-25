@@ -1,0 +1,168 @@
+From dcb300a670fe1edd1e2ba50bdf7ddaad85cc326a Mon Sep 17 00:00:00 2001
+From: YJuDeAd <robinrashi@gmail.com>
+Date: Sun, 25 Oct 2026 04:54:03 +0530
+Subject: [PATCH 42/47] Perf panel: SPU, RSX and report-hold figures; hold only
+ reports a task signal can hang on (patch 0042)
+
+---
+ libs/spurs/cellSpurs.c     |  9 ++++++++-
+ libs/video/cellGcmSys.c    | 21 ++++++++++++++++++++-
+ libs/video/rsx_live_draw.c | 25 ++++++++++++++++++++++++-
+ 3 files changed, 52 insertions(+), 3 deletions(-)
+
+diff --git a/libs/spurs/cellSpurs.c b/libs/spurs/cellSpurs.c
+index 83ed858..aa7e39a 100644
+--- a/libs/spurs/cellSpurs.c
++++ b/libs/spurs/cellSpurs.c
+@@ -578,6 +578,11 @@ static void spurs_api_unlock(struct SpursInst* si)
+ 
+ static DWORD WINAPI spurs_kernel_thread(LPVOID p);
+ 
++/* For the performance panel (rsx_live_draw.c, LD_PERF_OVERLAY): the time
++ * workload slots spent running policy modules, and how many slots exist. */
++volatile long long g_perf_spu_busy_us;
++volatile long g_perf_spu_slots;
++
+ static s32 spurs_initialize_common(u32 spurs_ea, u32 nspus, const char* prefix)
+ {
+     if (!nspus || nspus > 6) return CELL_SPURS_CORE_ERROR_INVAL;
+@@ -596,6 +601,7 @@ static s32 spurs_initialize_common(u32 spurs_ea, u32 nspus, const char* prefix)
+         return CELL_SPURS_CORE_ERROR_BUSY;
+     }
+     si->starting = 1;
++    __atomic_add_fetch(&g_perf_spu_slots, (long)nspus, __ATOMIC_RELAXED);
+     si->kernel_live = 1; /* reserve this lifecycle before publishing guest memory */
+     __atomic_store_n(&si->ea, spurs_ea, __ATOMIC_RELEASE);
+     ReleaseSRWLockExclusive(&si->lock);
+@@ -1958,11 +1964,12 @@ static DWORD WINAPI spurs_pm_worker(LPVOID p)
+         extern unsigned long long ps3_qpc_us(void);
+         static long s_wtl = -1;
+         if (s_wtl < 0) { const char* e = getenv("SPURS_WID_TIMELOG"); s_wtl = e ? atol(e) : 0; }
+-        const unsigned long long wt0 = s_wtl ? ps3_qpc_us() : 0;
++        const unsigned long long wt0 = ps3_qpc_us();
+         FILETIME wc, we, wk0, wu0, wk1, wu1;
+         if (s_wtl) GetThreadTimes(GetCurrentThread(), &wc, &we, &wk0, &wu0);
+         spu_run_policy_module(slot->fn, slot->image_id, slot->pm, slot->pm_size,
+                               slot->data, slot->wid, slot->ea, slot->spu_num);
++        __atomic_add_fetch(&g_perf_spu_busy_us, (long long)(ps3_qpc_us() - wt0), __ATOMIC_RELAXED);
+         extern SPU_THREAD_LOCAL volatile unsigned g_spurs_pm_polls;
+         unsigned polls = g_spurs_pm_polls;
+         if (s_wtl) {
+diff --git a/libs/video/cellGcmSys.c b/libs/video/cellGcmSys.c
+index 071a245..624fa3f 100644
+--- a/libs/video/cellGcmSys.c
++++ b/libs/video/cellGcmSys.c
+@@ -1766,11 +1766,18 @@ void cellGcm_ref_on_poll(void)
+ 
+ static uint64_t s_ft_sema_t0;          /* PS3_FTRACE: when the walker began waiting on the current acquire */
+ 
++/* For the performance panel (LD_PERF_OVERLAY): time spent walking the FIFO
++ * (the emulated RSX's command processing, live draw included), and time the
++ * walker held a GET_REPORT for SPU tasks (GCM_REPORT_SPU_HOLD_MS). */
++volatile long long g_perf_rsx_us, g_perf_hold_us;
++
+ void cellGcm_rsx_process_fifo(void)
+ {
+     const uint64_t ft_t0 = PS3_FT_ON() ? ps3_ft_now() : 0;
+     AcquireSRWLockExclusive(&s_gcm_fifo_lock);
++    const unsigned long long t0 = ps3_qpc_us();
+     gcm_rsx_process_fifo_unlocked();
++    __atomic_add_fetch(&g_perf_rsx_us, (long long)(ps3_qpc_us() - t0), __ATOMIC_RELAXED);
+     ReleaseSRWLockExclusive(&s_gcm_fifo_lock);
+     if (ft_t0) {
+         const uint64_t t1 = ps3_ft_now();
+@@ -2268,7 +2275,18 @@ static void gcm_rsx_process_fifo_unlocked(void)
+                 static long rhold = -1; static unsigned long long rheld_since; static unsigned long rheld_n;
+                 if (rhold < 0) { const char* e = getenv("GCM_REPORT_SPU_HOLD_MS"); rhold = e ? atol(e) : 0; }
+                 extern long spu_taskset_tasks_running(void) __attribute__((weak));
+-                if (rhold > 0) {
++                /* Only the reports a task signal can hang on: a ZPASS pixel
++                 * count (type 1) feeds no signal, and Ascension's level issues
++                 * ~800 of them a frame, each held while any task ran -- the
++                 * RSX sat idle for the post-process window every frame.
++                 * GCM_REPORT_HOLD_ALL=1: hold every type, as before. */
++                static int rhold_all = -1;
++                if (rhold_all < 0) rhold_all = getenv("GCM_REPORT_HOLD_ALL") ? 1 : 0;
++                u32 rtype = 0;
++                { const u32 ri = type == 0 ? (0x1800u - method) / 4u : 0u;
++                  const u32 rdea = gcm_io2ea(s_fifo_getoff + 4 + ri * 4);
++                  if (rdea) rtype = vm_read32(rdea) >> 24; }
++                if (rhold > 0 && (rhold_all || rtype != 1)) {
+                     /* QPC, not ps3_ms_now: GetTickCount64 steps by ~15.6 ms,
+                      * which is a frame. */
+                     const unsigned long long now = ps3_qpc_us();
+@@ -2280,6 +2298,7 @@ static void gcm_rsx_process_fifo_unlocked(void)
+                       if (lg && rheld_since)
+                         fprintf(stderr, "[report-hold] t=%lluus #%lu get=0x%X held=%lluus\n",
+                                 now, ++rheld_n, s_fifo_getoff, now - rheld_since); }
++                    if (rheld_since) __atomic_add_fetch(&g_perf_hold_us, (long long)(now - rheld_since), __ATOMIC_RELAXED);
+                     rheld_since = 0;
+                 }
+             }
+diff --git a/libs/video/rsx_live_draw.c b/libs/video/rsx_live_draw.c
+index 564fff8..6933a55 100644
+--- a/libs/video/rsx_live_draw.c
++++ b/libs/video/rsx_live_draw.c
+@@ -10738,7 +10738,7 @@ static void ld_vertex_diag_emit(const char* reason, int dump_surface)
+ #pragma comment(lib, "pdh.lib")
+ 
+ #define LD_OVL_W     136
+-#define LD_OVL_H     100
++#define LD_OVL_H     154
+ #define LD_OVL_PITCH ((LD_OVL_W * 4 + 255) & ~255)
+ 
+ static const struct { char c; u8 rows[7]; } k_ld_glyphs[] = {
+@@ -10753,6 +10753,8 @@ static const struct { char c; u8 rows[7]; } k_ld_glyphs[] = {
+     {'D', {0x1C,0x12,0x11,0x11,0x11,0x12,0x1C}}, {'M', {0x11,0x1B,0x15,0x15,0x11,0x11,0x11}},
+     {'%', {0x18,0x19,0x02,0x04,0x08,0x13,0x03}}, {'.', {0x00,0x00,0x00,0x00,0x00,0x0C,0x0C}},
+     {'-', {0x00,0x00,0x00,0x1F,0x00,0x00,0x00}},
++    {'R', {0x1E,0x11,0x11,0x1E,0x14,0x12,0x11}}, {'X', {0x11,0x11,0x0A,0x04,0x0A,0x11,0x11}},
++    {'H', {0x11,0x11,0x11,0x1F,0x11,0x11,0x11}}, {'L', {0x10,0x10,0x10,0x10,0x10,0x10,0x1F}},
+ };
+ 
+ static void ld_ovl_text(u8* img, u32 x, u32 y, const char* s, u8 r, u8 gg, u8 b)
+@@ -10810,6 +10812,12 @@ static void ld_perf_overlay(ID3D12Resource* bb)
+     static u32 frames, cores;
+     static ULONGLONG last_cpu;
+     static double fps, ms, cpu = -1.0, gpu = -1.0, native = 30.0;
++    /* SPU: workload slots running (cellSpurs.c); RSX: the FIFO walker busy
++     * (cellGcmSys.c); HLD: ms per second a GET_REPORT was held for SPU tasks. */
++    extern volatile long long g_perf_spu_busy_us, g_perf_rsx_us, g_perf_hold_us;
++    extern volatile long g_perf_spu_slots;
++    static long long last_spu, last_rsx, last_hold;
++    static double spu_pct, rsx_pct, hold_ms;
+     static PDH_HQUERY q; static PDH_HCOUNTER gpu_counter; static int pdh_state;
+     frames++;
+     LARGE_INTEGER now; QueryPerformanceCounter(&now);
+@@ -10844,6 +10852,18 @@ static void ld_perf_overlay(ID3D12Resource* bb)
+                             (((ULONGLONG)u.dwHighDateTime << 32) | u.dwLowDateTime);
+         cpu = (double)(c - last_cpu) / (dt * 1e7 * cores) * 100.0;   /* 100 ns units */
+         last_cpu = c;
++        const long long sb = g_perf_spu_busy_us, rb = g_perf_rsx_us, hb = g_perf_hold_us;
++        const long slots = g_perf_spu_slots > 0 ? g_perf_spu_slots : 1;
++        spu_pct = (double)(sb - last_spu) / (dt * 1e6 * (double)slots) * 100.0;
++        rsx_pct = (double)(rb - last_rsx) / (dt * 1e6) * 100.0;
++        hold_ms = (double)(hb - last_hold) / (dt * 1e3);
++        if (spu_pct > 100.0) spu_pct = 100.0;
++        if (rsx_pct > 100.0) rsx_pct = 100.0;
++        last_spu = sb; last_rsx = rb; last_hold = hb;
++        { static unsigned k = 0;    /* the same figures in the log, every 5 s */
++          if (++k % 10 == 0)
++              fprintf(stderr, "[perf] fps=%.1f ms=%.1f cpu=%.0f gpu=%.0f spu=%.0f rsx=%.0f hold=%.1f" "%c",
++                      fps, ms, cpu, gpu, spu_pct, rsx_pct, hold_ms, 10); }
+         if (pdh_state && PdhCollectQueryData(q) == ERROR_SUCCESS) {
+             DWORD size = 0, count = 0;
+             PdhGetFormattedCounterArrayW(gpu_counter, PDH_FMT_DOUBLE, &size, &count, NULL);
+@@ -10880,6 +10900,9 @@ static void ld_perf_overlay(ID3D12Resource* bb)
+     ld_ovl_text(mapped, 8, 60, line, 120, 200, 255);
+     if (gpu >= 0) snprintf(line, sizeof line, "GPU %4.0f%%", gpu); else snprintf(line, sizeof line, "GPU   --");
+     ld_ovl_text(mapped, 8, 78, line, 255, 160, 90);
++    snprintf(line, sizeof line, "SPU %4.0f%%", spu_pct);          ld_ovl_text(mapped, 8, 96, line, 160, 255, 160);
++    snprintf(line, sizeof line, "RSX %4.0f%%", rsx_pct);          ld_ovl_text(mapped, 8, 114, line, 255, 120, 200);
++    snprintf(line, sizeof line, "HLD %5.1f", hold_ms);            ld_ovl_text(mapped, 8, 132, line, 200, 200, 120);
+ 
+     D3D12_TEXTURE_COPY_LOCATION src = {0}, dst = {0};
+     src.pResource = up; src.Type = D3D12_TEXTURE_COPY_TYPE_PLACED_FOOTPRINT;
+-- 
+2.48.1.windows.1
+

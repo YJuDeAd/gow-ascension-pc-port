@@ -875,12 +875,16 @@ static void gow_sys_lwcond_wait(ppu_context* ctx)
         fprintf(stderr, "============================================================\n\n");
     }
 
+    bool is_audio_cond = (lwcond == 0x009FDD20u || lwcond == 0x009FDD50u);
+
     DWORD timeout_ms = INFINITE;
+    bool periodic_check = false;
     if (timeout_us > 0) {
         uint64_t m = (timeout_us + 999) / 1000;
         timeout_ms = (m > 0xFFFFFFFEull) ? 0xFFFFFFFEu : (DWORD)m;
-    } else if (lwcond == 0x15E67BE0u) {
-        timeout_ms = 50; /* Do not deadlock on un-signaled Edge cond */
+    } else if (!is_audio_cond) {
+        timeout_ms = 10; /* 10ms timeout unblock for all non-audio condvars */
+        periodic_check = true;
     }
 
     EnterCriticalSection(&g_gow_sync_lock);
@@ -954,10 +958,15 @@ static void gow_sys_lwcond_wait(ppu_context* ctx)
         if (c) c->wakeup_count++;
     } else {
         if (c) c->waiters.remove(&cond_waiter);
-        timed_out = true;
-        if (lwcond == 0x15E67BE0u) {
-            fprintf(stderr, ">>> [EDGE-COND] lwcond 0x15E67BE0 timed out (50ms) - returning CELL_OK to unblock tid=%u <<<\n", tid);
-            timed_out = false;
+        if (!is_audio_cond) {
+            timed_out = false; /* Return CELL_OK to unblock processing */
+            static uint32_t s_unblock_cnt = 0;
+            if (++s_unblock_cnt <= 10 || (s_unblock_cnt % 1000 == 0)) {
+                fprintf(stderr, ">>> [LWCOND-TIMEOUT-OK] lwcond 0x%08X unblocked tid=%u (total=%u) <<<\n",
+                        lwcond, tid, s_unblock_cnt);
+            }
+        } else {
+            timed_out = true;
         }
     }
 
@@ -1037,6 +1046,45 @@ extern "C" void gow_dump_sync_stats(void)
     }
     fprintf(stderr, "==========================================================\n\n");
     fflush(stderr);
+    LeaveCriticalSection(&g_gow_sync_lock);
+}
+
+extern "C" void gow_dump_mutex_cond_specific(uint32_t mutex_ea, uint32_t cond_ea)
+{
+    ensure_sync_lock_inited();
+    EnterCriticalSection(&g_gow_sync_lock);
+    GowLwMutex* m = find_or_create_mutex(mutex_ea);
+    GowLwCond* c = find_or_create_cond(cond_ea);
+    uint32_t m_owner = mutex_ea ? vm_read32(mutex_ea + LWM_OWNER) : 0;
+    uint32_t m_recur = mutex_ea ? vm_read32(mutex_ea + LWM_RECUR) : 0;
+    fprintf(stderr, "\n=== [SPECIFIC-SYNC-AUDIT] Mutex 0x%08X & Cond 0x%08X ===\n", mutex_ea, cond_ea);
+    if (m) {
+        fprintf(stderr, "  MUTEX 0x%08X: owner=tid_%u recur=%u locks=%llu unlocks=%llu trylocks=%llu waiters=%u",
+                mutex_ea, m_owner, m_recur, (unsigned long long)m->lock_count, (unsigned long long)m->unlock_count,
+                (unsigned long long)m->trylock_count, m->waiters.count);
+        fprintf(stderr, " | waiter tids:");
+        for (GowSyncWaiter* w = m->waiters.head; w; w = w->next) {
+            fprintf(stderr, " %u", w->thread_id);
+        }
+        fprintf(stderr, "\n");
+    }
+    if (c) {
+        fprintf(stderr, "  COND 0x%08X: bound_mutex=0x%08X waits=%llu wakeups=%llu active_waiters=%u signals=%llu sig_all=%llu sig_to=%llu zero_wait_sigs=%llu",
+                cond_ea, c->lwmutex_ea, (unsigned long long)c->wait_count, (unsigned long long)c->wakeup_count,
+                c->waiters.count, (unsigned long long)c->signal_count, (unsigned long long)c->signal_all_count,
+                (unsigned long long)c->signal_to_count, (unsigned long long)c->zero_waiter_signals);
+        fprintf(stderr, " | waiter tids:");
+        for (GowSyncWaiter* w = c->waiters.head; w; w = w->next) {
+            fprintf(stderr, " %u", w->thread_id);
+        }
+        fprintf(stderr, " (last_waiter=tid_%u, last_signaler=tid_%u)\n", c->last_waiter_tid, c->last_signaler_tid);
+    }
+    bool t1_in_m = false, t1_in_c = false;
+    if (m) for (GowSyncWaiter* w = m->waiters.head; w; w = w->next) if (w->thread_id == 1) t1_in_m = true;
+    if (c) for (GowSyncWaiter* w = c->waiters.head; w; w = w->next) if (w->thread_id == 1) t1_in_c = true;
+    fprintf(stderr, "  [TID1-SYNC-STATUS] tid=1 waiting_on_mutex=%s waiting_on_cond=%s mutex_is_free=%s (held_by_tid=%u)\n",
+            t1_in_m ? "YES" : "NO", t1_in_c ? "YES" : "NO", (m_owner == 0) ? "YES" : "NO", m_owner);
+    fprintf(stderr, "=========================================================\n\n");
     LeaveCriticalSection(&g_gow_sync_lock);
 }
 

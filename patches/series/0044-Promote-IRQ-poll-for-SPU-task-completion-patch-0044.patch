@@ -1,0 +1,38 @@
+From fb7acf45a80a79d5c36922ad09c0d9196dff8ee6 Mon Sep 17 00:00:00 2001
+From: YJuDeAd <robinrashi@gmail.com>
+Date: Sun, 25 Oct 2026 04:54:21 +0530
+Subject: [PATCH 44/47] Promote IRQ poll for SPU task completion (patch 0044)
+
+---
+ tools/spu_lifter.py | 8 ++++++++
+ 1 file changed, 8 insertions(+)
+
+diff --git a/tools/spu_lifter.py b/tools/spu_lifter.py
+index 77a3efe..5aefd68 100644
+--- a/tools/spu_lifter.py
++++ b/tools/spu_lifter.py
+@@ -507,6 +507,7 @@ _GPR_RE = re.compile(r"ctx->gpr\[(\d+)\]")
+ _PURE_CTX_RE = re.compile(r"ctx->gpr\[\d+\]|spu_ls_(?:read|write)128\(ctx,")
+ _ASSIGN_RE = re.compile(r"ctx->gpr\[(\d+)\]\s*=(?!=)")
+ # `{ ctx->pc = ...; g_spu_trampoline_fn = ...; return; }`, alone or behind an if
++_IRQ_EXIT_RE = re.compile(r"\{ (ctx->pc = [^;]+; g_spu_trampoline_fn = [^;]+; return;) \}")
+ _EXIT_BLOCK_RE = re.compile(r"^(if \(.*\) )?\{ (ctx->pc = [^;]+; g_spu_trampoline_fn = [^;]+; return;) \}$")
+ 
+ 
+@@ -546,6 +547,13 @@ def promote_registers(body_lines: list) -> list:
+         if pure(b):
+             out.append(loc(b))
+             continue
++        if "ctx->int_enable && (ctx->event_status & ctx->event_mask)" in b:
++            # A merged loop's back edge with its interrupt poll (_irq_poll):
++            # the poll reads no register, so the registers flush only on the
++            # rare exit taken for an interrupt and the loop keeps its locals.
++            b = _IRQ_EXIT_RE.sub(lambda m: f"{{ {flush} {m.group(1)} }}", loc(b))
++            out.append(b)
++            continue
+         m = _EXIT_BLOCK_RE.match(b)
+         if m:   # the exit reads no register (ctx->pc is a constant): flush inside
+             cond = loc(m.group(1) or "")
+-- 
+2.48.1.windows.1
+

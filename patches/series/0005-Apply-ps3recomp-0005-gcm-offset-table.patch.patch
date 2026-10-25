@@ -1,0 +1,64 @@
+From 6f9daa045ba66ff18926635cd1a70aae2c71be66 Mon Sep 17 00:00:00 2001
+From: YJuDeAd <robinrashi@gmail.com>
+Date: Sun, 25 Oct 2026 04:34:52 +0530
+Subject: [PATCH 05/47] Apply ps3recomp-0005-gcm-offset-table.patch
+
+---
+ libs/video/cellGcmSys.c | 20 ++++++++++++++++++++
+ 1 file changed, 20 insertions(+)
+
+diff --git a/libs/video/cellGcmSys.c b/libs/video/cellGcmSys.c
+index 0f1f952..a0ebd6a 100644
+--- a/libs/video/cellGcmSys.c
++++ b/libs/video/cellGcmSys.c
+@@ -385,6 +385,23 @@ static int s_gcm_syscall_mode = 0;
+  * Internal helpers
+  * -----------------------------------------------------------------------*/
+ 
++/* Set once the title has asked for the offset tables (cellGcmGetOffsetTable):
++ * from then on every mapping change is written through to the guest copy it
++ * holds a pointer to. The copy used to be refreshed only by that call, so a
++ * title that took the pointer at boot and mapped afterwards read 0xFFFF for
++ * its new pages: God of War: Ascension's renderer computed io offset -1 for
++ * the main memory it had just mapped ("iooffset == -1"), and its later unmap
++ * failed. */
++static int s_offset_tables_published = 0;
++static void offset_table_write_through(u32 ea_page, u32 io_page)
++{
++    if (!s_offset_tables_published) return;
++    if (ea_page < GCM_OFFSET_TABLE_PAGES)
++        vm_write16(GCM_OFFSET_TABLE_IO_ADDR + ea_page * 2, s_io_address_table[ea_page]);
++    if (io_page < GCM_OFFSET_TABLE_PAGES)
++        vm_write16(GCM_OFFSET_TABLE_EA_ADDR + io_page * 2, s_ea_address_table[io_page]);
++}
++
+ /* Populate the offset table entries for an IO mapping */
+ static void populate_offset_table(u32 ea, u32 io, u32 size)
+ {
+@@ -405,6 +422,7 @@ static void populate_offset_table(u32 ea, u32 io, u32 size)
+     for (u32 i = 0; i < pages && (ea_page + i) < 65536 && (io_page + i) < 65536; i++) {
+         s_io_address_table[ea_page + i] = (u16)(io_page + i);
+         s_ea_address_table[io_page + i] = (u16)(ea_page + i);
++        offset_table_write_through(ea_page + i, io_page + i);
+     }
+ }
+ 
+@@ -418,6 +436,7 @@ static void clear_offset_table(u32 ea, u32 io, u32 size)
+     for (u32 i = 0; i < pages && (ea_page + i) < 65536 && (io_page + i) < 65536; i++) {
+         s_io_address_table[ea_page + i] = 0xFFFF;
+         s_ea_address_table[io_page + i] = 0xFFFF;
++        offset_table_write_through(ea_page + i, io_page + i);
+     }
+ }
+ 
+@@ -2937,6 +2956,7 @@ s32 cellGcmGetOffsetTable(CellGcmOffsetTable* table)
+         return CELL_GCM_ERROR_INVALID_VALUE;
+ 
+     gcm_publish_offset_tables();
++    s_offset_tables_published = 1;
+ 
+     /* The guest struct is two 4-byte EAs, not two host pointers. */
+     vm_write32(ea + 0, GCM_OFFSET_TABLE_IO_ADDR);
+-- 
+2.48.1.windows.1
+
