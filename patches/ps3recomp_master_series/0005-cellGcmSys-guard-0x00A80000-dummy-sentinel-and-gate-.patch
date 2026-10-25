@@ -1,0 +1,90 @@
+From 9841536dabbcd1b0e54f4485fbaa119c42654298 Mon Sep 17 00:00:00 2001
+From: YJuDeAd <robinrashi@gmail.com>
+Date: Thu, 22 Oct 2026 09:45:32 +0530
+Subject: [PATCH 5/6] cellGcmSys: guard 0x00A80000 dummy sentinel and gate
+ self-jump step-over on dl_head != dl_tail
+
+---
+ libs/video/cellGcmSys.c | 53 ++++++++++++++++++++++++++++++++++-------
+ 1 file changed, 45 insertions(+), 8 deletions(-)
+
+diff --git a/libs/video/cellGcmSys.c b/libs/video/cellGcmSys.c
+index b0849ab..b170521 100644
+--- a/libs/video/cellGcmSys.c
++++ b/libs/video/cellGcmSys.c
+@@ -1369,6 +1369,14 @@ static u32 gcm_spu_block_for_put(u32 put)
+  * is not, it deadlocks the title. Sweep the skipped range first. */
+ static void gcm_fifo_resync_why(const char* why, u32* getoff, u32 put)
+ {
++    if (put == 0x00A80000u) {
++        static int s_dummy_put_suppress = 0;
++        if (s_dummy_put_suppress++ < 5) {
++            fprintf(stderr, "[cellGcmSys] FIFO resync (%s) suppressed for dummy put sentinel 0x00A80000 (getoff=0x%08X)\n",
++                    why, *getoff);
++        }
++        return;
++    }
+     static int n = 0;
+     if (n++ < 8)
+         fprintf(stderr, "[cellGcmSys] FIFO resync (%s) 0x%08X -> put 0x%08X\n",
+@@ -1814,20 +1822,49 @@ static void gcm_rsx_process_fifo_unlocked(void)
+                       if (park_off != s_fifo_getoff || park_put != put) {
+                           park_off = s_fifo_getoff; park_put = put; park_since = now;
+                       } else if (now - park_since >= GCM_PARK_GRACE_MS) {
+-                          park_off = 0;
+                           static int s_park_dump = 0;
+                           if (s_park_dump++ < 3) {
+                               gcm_fifo_dump_around(s_fifo_getoff);
+                           }
+-                          u32 next_ea = (s_fifo_getoff + 4 < GCM_MAX_IO_SIZE) ? gcm_io2ea(s_fifo_getoff + 4) : 0;
+-                          u32 next_w = next_ea ? vm_read32(next_ea) : 0;
+-                          if (next_w != 0 && (next_w >> 29) <= 1) {
+-                              fprintf(stderr, "[cellGcmSys] FIFO step-over parked self-jump 0x%08X -> 0x%08X (next_w=0x%08X)\n",
+-                                      s_fifo_getoff, s_fifo_getoff + 4, next_w);
+-                              s_fifo_getoff += 4;
++                          u32 dl_h = vm_read32(0x009711D4u);
++                          u32 dl_t = vm_read32(0x009711D8u);
++                          u32 found_off = 0;
++                          if (dl_h != dl_t) {
++                              for (u32 off = 4; off <= 64; off += 4) {
++                                  if (s_fifo_getoff + off >= GCM_MAX_IO_SIZE) break;
++                                  u32 ea = gcm_io2ea(s_fifo_getoff + off);
++                                  if (!ea) break;
++                                  u32 w_ahead = vm_read32(ea);
++                                  if (w_ahead == 0) continue; /* NOP padding */
++                                  u32 t_ahead = w_ahead >> 29;
++                                  if (t_ahead <= 2 && w_ahead != (0x20000000u | (s_fifo_getoff + off))) {
++                                      found_off = s_fifo_getoff + off;
++                                      break;
++                                  }
++                                  break;
++                              }
++                          }
++                          if (found_off != 0) {
++                              park_off = 0;
++                              fprintf(stderr, "[cellGcmSys] FIFO step-over parked self-jump 0x%08X -> 0x%08X (w=0x%08X dl_head=%u dl_tail=%u)\n",
++                                      s_fifo_getoff, found_off, vm_read32(gcm_io2ea(found_off)), dl_h, dl_t);
++                              s_fifo_getoff = found_off;
+                               continue;
+                           }
+-                          gcm_fifo_resync_why("jump-park", &s_fifo_getoff, put);
++                          bool can_resync = false;
++                          if (put != 0x00A80000u && put < GCM_MAX_IO_SIZE) {
++                              u32 put_ea = gcm_io2ea(put);
++                              if (put_ea) {
++                                  u32 put_w = vm_read32(put_ea);
++                                  if ((put_w >> 29) <= 2 && put_w != 0) {
++                                      can_resync = true;
++                                  }
++                              }
++                          }
++                          if (can_resync) {
++                              park_off = 0;
++                              gcm_fifo_resync_why("jump-park", &s_fifo_getoff, put);
++                          }
+                       }
+                   }
+                   why = "parked";
+-- 
+2.48.1.windows.1
+

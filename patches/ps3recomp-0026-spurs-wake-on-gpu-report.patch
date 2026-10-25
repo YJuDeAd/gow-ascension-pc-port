@@ -1,0 +1,291 @@
+From 94991ad9a8db6813ac122c2dfb65910321c6854f Mon Sep 17 00:00:00 2001
+From: Arnaldo Lima <arnaldolimaof@gmail.com>
+Date: Sat, 17 Oct 2026 11:39:18 -0300
+Subject: [PATCH] SPURS: a GPU report wakes the kernel and clears idle
+ back-off; task and walker diagnostics
+
+from gow-ascension-pc@676eefe
+
+- spurs_external_event(), called when the RSX writes a report: a workload
+  that ran and found nothing is backed off up to 2^4 kernel passes, and a
+  report changes no readyCount or signal, so a Wws job list waiting at a
+  kRsxBarrier saw the report only at its next back-off slot. God of War:
+  Ascension's RsxSync reacted to a frame's report up to ~17 ms late; with
+  the wake its EDGE lists finish ~9 ms into the frame instead of ~24.
+  SPURS_IDLE_BACKOFF_MAX=<n> sets the cap (default 4).
+- SPU_TASK_TIMELOG=1: taskset tasks' WAIT_SIGNAL enter/exit with t=<us>.
+- GCM_WALK_POLL_US=<us>: the present thread's idle wait between FIFO walks
+  (default 4000; under 1000 it spins, yielding). A diagnostic: shorter did
+  not help this title.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ libs/spurs/cellSpurs.c          |  32 +++++++-
+ libs/video/cellGcmSys.c         |   3 +
+ runtime/ppu/tests/boot_main.cpp | 126 ++++++++++++++++++--------------
+ runtime/spu/spu_workload.c      |  10 +++
+ 4 files changed, 115 insertions(+), 56 deletions(-)
+
+diff --git a/libs/spurs/cellSpurs.c b/libs/spurs/cellSpurs.c
+index 42c4bee..2b370af 100644
+--- a/libs/spurs/cellSpurs.c
++++ b/libs/spurs/cellSpurs.c
+@@ -491,6 +491,36 @@ static u32 wkl_maxcont(u32 ea, u32 wid)
+ static void wkl_curcont_set(u32 ea, u32 wid, u8 v)
+ { if (wid < 16) vm_base[ea + SPURS_WKL_CURCONT + wid] = v; }
+ 
++/* Something a workload may be polling for happened outside SPURS (the RSX
++ * wrote a report). A workload that ran and found nothing to do is backed off
++ * (idle[], up to 2^4 kernel passes, ~16 ms), and no readyCount or signal
++ * changes when the GPU writes, so a Wws job list waiting at a kRsxBarrier only
++ * saw the report at its next back-off slot: God of War: Ascension's RsxSync
++ * reacted to a frame's report up to ~17 ms late, and the frame missed its
++ * vblank. Clear the back-off and wake the kernel. Called from the GPU thread,
++ * sometimes under the FIFO lock, so it takes no lock: the back-off bytes are a
++ * heuristic (a racing increment only delays one admission, as before), and a
++ * condition variable may be woken without its lock. */
++void spurs_external_event(void)
++{
++    for (int i = 0; i < MAX_SPURS_INST; i++) {
++        struct SpursInst* si = &s_inst[i];
++        if (!__atomic_load_n(&si->ea, __ATOMIC_ACQUIRE)) continue;
++        for (u32 w = 0; w < SPURS_MAX_WID; w++)
++            __atomic_store_n(&si->idle[w], (u8)0, __ATOMIC_RELAXED);
++        WakeAllConditionVariable(&si->wake);
++    }
++}
++
++/* SPURS_IDLE_BACKOFF_MAX=<n>: the back-off cap, 2^n kernel passes (default 4). */
++static u8 spurs_idle_backoff_max(void)
++{
++    static int s_max = -1;
++    if (s_max < 0) { const char* e = getenv("SPURS_IDLE_BACKOFF_MAX"); s_max = e ? atoi(e) : 4;
++                     if (s_max < 0) s_max = 0; if (s_max > 7) s_max = 7; }
++    return (u8)s_max;
++}
++
+ static struct SpursInst* spurs_inst_find(u32 ea)
+ {
+     for (int i = 0; i < MAX_SPURS_INST; i++)
+@@ -1886,7 +1916,7 @@ static DWORD WINAPI spurs_pm_worker(LPVOID p)
+         wkl_curcont_set(slot->ea, wid, si->active[wid]);
+         ef_line_end(slot->ea);
+         if (polls) si->idle[wid] = 0;
+-        else if (si->idle[wid] < 4) si->idle[wid]++;
++        else if (si->idle[wid] < spurs_idle_backoff_max()) si->idle[wid]++;
+         slot->busy = 0;
+         WakeAllConditionVariable(&si->wake);
+     }
+diff --git a/libs/video/cellGcmSys.c b/libs/video/cellGcmSys.c
+index 398fcb2..b66900a 100644
+--- a/libs/video/cellGcmSys.c
++++ b/libs/video/cellGcmSys.c
+@@ -2140,6 +2140,9 @@ static void gcm_rsx_process_fifo_unlocked(void)
+                             s_report_data[idx].timestamp = ts;
+                             s_report_data[idx].value = val;
+                         }
++                        /* SPU code polls these reports (a Wws job list's RSX
++                         * barrier): let the SPURS kernel look again now. */
++                        { extern void spurs_external_event(void); spurs_external_event(); }
+                     }
+                 } else
+                     gcm_2d_method(subch, m, vm_read32(dea));
+diff --git a/runtime/ppu/tests/boot_main.cpp b/runtime/ppu/tests/boot_main.cpp
+index 1d457ec..2027b9b 100644
+--- a/runtime/ppu/tests/boot_main.cpp
++++ b/runtime/ppu/tests/boot_main.cpp
+@@ -76,7 +76,7 @@ void     ps3_load_prx_modules(void) {}
+ 
+ #ifdef _WIN32
+ #include <windows.h>
+-#include <intrin.h>   /* _ReturnAddress */
++#include <intrin.h>   /* _ReturnAddress */
+ /* timeBeginPeriod: windows.h is included with WIN32_LEAN_AND_MEAN, which
+  * excludes the multimedia timer API, so it must be asked for by name -- and
+  * AFTER windows.h, since timeapi.h uses UINT and friends. */
+@@ -121,28 +121,28 @@ char* __cdecl cached_getenv(const char* name)
+         const char* k = s_env[i].key;
+         MemoryBarrier();
+         if (!k) break;
+-        if (!_stricmp(k, name)) {
+-            /* GETENV_STATS=1: which gate is being polled on a hot path. */
+-            static int st = -1;
+-            if (st < 0) st = env_lookup_os("GETENV_STATS") ? 1 : 0;
+-            if (st) {
+-                static unsigned cnt[1024]; static void* ra[1024]; static unsigned long long tot;
+-                cnt[i]++; ra[i] = _ReturnAddress();
+-                if ((++tot & ((1u << 22) - 1)) == 0) {
+-                    const uintptr_t exe = (uintptr_t)GetModuleHandleA(NULL);
+-                    for (int r = 0; r < 5; r++) {
+-                        unsigned b = 0;
+-                        for (unsigned j = 1; j <= mask; j++) if (cnt[j] > cnt[b]) b = j;
+-                        if (!cnt[b]) break;
+-                        fprintf(stderr, "[getenv-stats] %-28s %u calls  caller rva=0x%llX%c",
+-                                s_env[b].key, cnt[b], (unsigned long long)((uintptr_t)ra[b] - exe), 10);
+-                        cnt[b] = 0;
+-                    }
+-                    memset(cnt, 0, sizeof cnt);
+-                }
+-            }
+-            return (char*)s_env[i].val;
+-        }
++        if (!_stricmp(k, name)) {
++            /* GETENV_STATS=1: which gate is being polled on a hot path. */
++            static int st = -1;
++            if (st < 0) st = env_lookup_os("GETENV_STATS") ? 1 : 0;
++            if (st) {
++                static unsigned cnt[1024]; static void* ra[1024]; static unsigned long long tot;
++                cnt[i]++; ra[i] = _ReturnAddress();
++                if ((++tot & ((1u << 22) - 1)) == 0) {
++                    const uintptr_t exe = (uintptr_t)GetModuleHandleA(NULL);
++                    for (int r = 0; r < 5; r++) {
++                        unsigned b = 0;
++                        for (unsigned j = 1; j <= mask; j++) if (cnt[j] > cnt[b]) b = j;
++                        if (!cnt[b]) break;
++                        fprintf(stderr, "[getenv-stats] %-28s %u calls  caller rva=0x%llX%c",
++                                s_env[b].key, cnt[b], (unsigned long long)((uintptr_t)ra[b] - exe), 10);
++                        cnt[b] = 0;
++                    }
++                    memset(cnt, 0, sizeof cnt);
++                }
++            }
++            return (char*)s_env[i].val;
++        }
+     }
+     AcquireSRWLockExclusive(&s_env_lock);
+     const char* val = NULL; int found = 0;
+@@ -513,9 +513,25 @@ static DWORD WINAPI vblank_ticker(LPVOID)
+          * fence still paid the whole tick. Waiting on it keeps the same 4 ms
+          * ceiling when nothing kicks, and drains on demand when something
+          * does. */
+-        { /* at most 4 ms, and no later than the next vblank */
+-          const double rem_ms = (next_tick_us - (double)ps3_qpc_us()) / 1000.0;
+-          cellGcm_fifo_kick_wait(rem_ms <= 0.0 ? 0u : rem_ms >= 4.0 ? 4u : (unsigned)rem_ms); }
++        { /* At most GCM_WALK_POLL_US (default 4000), and no later than the next
++           * vblank. The FIFO walker below only runs again when this returns: a
++           * kick (a guest thread's dry fence wait) ends it early, but nothing
++           * kicks when the PPU moves `put` or an SPU releases a semaphore the
++           * GPU waits on, so each GPU<->SPU hand-off in a frame waited up to
++           * the whole poll. Under 1 ms it spins, yielding, instead of sleeping
++           * (a sleep cannot be shorter than the 1 ms timer period). */
++          static double s_poll_us = -1.0;
++          if (s_poll_us < 0.0) { const char* e = getenv("GCM_WALK_POLL_US");
++                                 s_poll_us = e ? atof(e) : 4000.0;
++                                 if (s_poll_us < 0.0) s_poll_us = 0.0; }
++          const double t_us = (double)ps3_qpc_us();
++          double w_us = next_tick_us - t_us;
++          if (w_us > s_poll_us) w_us = s_poll_us;
++          if (w_us >= 1000.0) cellGcm_fifo_kick_wait((unsigned)(w_us / 1000.0));
++          else {
++              const double end = t_us + (w_us > 0.0 ? w_us : 0.0);
++              do { cellGcm_fifo_kick_wait(0); SwitchToThread(); } while ((double)ps3_qpc_us() < end);
++          } }
+         ULONGLONG now = GetTickCount64();
+         const double now_us = (double)ps3_qpc_us();
+         int fired = 0;
+@@ -984,45 +1000,45 @@ static DWORD WINAPI debug_console(LPVOID param)
+             dump_threads("console", self);
+         } else if (!strcmp(verb, "find32") && sscanf(cmd, "%*s %x", &a) == 1) {
+             /* find32 <hex>: every aligned big-endian u32 equal to <hex> in committed
+-             * guest memory below 0xC0000000 (first 4096 hits). */
++             * guest memory below 0xC0000000 (first 4096 hits). */
+             const uint32_t be = ((a & 0xFF) << 24) | ((a & 0xFF00) << 8) | ((a >> 8) & 0xFF00) | (a >> 24);
+             int hits = 0;
+-            for (uintptr_t p = 0; p < 0xC0000000u && hits < 4096 && vm_base; ) {
++            for (uintptr_t p = 0; p < 0xC0000000u && hits < 4096 && vm_base; ) {
+                 MEMORY_BASIC_INFORMATION mi;
+                 if (!VirtualQuery(vm_base + p, &mi, sizeof mi)) break;
+                 const uintptr_t end = (uintptr_t)((uint8_t*)mi.BaseAddress + mi.RegionSize) - (uintptr_t)vm_base;
+                 if (mi.State == MEM_COMMIT && !(mi.Protect & (PAGE_NOACCESS | PAGE_GUARD)))
+-                    for (uintptr_t q = p & ~3u; q + 4 <= end && q < 0xC0000000u && hits < 4096; q += 4)
++                    for (uintptr_t q = p & ~3u; q + 4 <= end && q < 0xC0000000u && hits < 4096; q += 4)
+                         if (*(const uint32_t*)(vm_base + q) == be) { dbg_printf("  0x%08X%c", (unsigned)q, 10); hits++; }
+                 p = end;
+             }
+             dbg_printf("  %d hit(s)%c", hits, 10);
+-        } else if (!strcmp(verb, "qbset") && sscanf(cmd, "%*s %x %x", &a, &b) == 2) {
+-            /* qbset <name-crc> <value>: set every integer QB struct member with
+-             * that name. A member is 16 bytes: xx 01|81 00 00 | name | value | next,
+-             * big-endian (GH3: bot_play, unlocked). Prints how many it set. */
+-            const uint32_t be_name = ((a & 0xFF) << 24) | ((a & 0xFF00) << 8) | ((a >> 8) & 0xFF00) | (a >> 24);
+-            const uint32_t be_val  = ((b & 0xFF) << 24) | ((b & 0xFF00) << 8) | ((b >> 8) & 0xFF00) | (b >> 24);
+-            unsigned n = 0;
+-            for (uintptr_t p = 0; p < 0xC0000000u && vm_base; ) {
+-                MEMORY_BASIC_INFORMATION mi;
+-                if (!VirtualQuery(vm_base + p, &mi, sizeof mi)) break;
+-                const uintptr_t end = (uintptr_t)((uint8_t*)mi.BaseAddress + mi.RegionSize) - (uintptr_t)vm_base;
+-                if (mi.State == MEM_COMMIT && (mi.Protect & (PAGE_READWRITE | PAGE_EXECUTE_READWRITE)))
+-                    for (uintptr_t q = (p + 4) & ~3u; q + 8 <= end; q += 4)
+-                        if (*(const uint32_t*)(vm_base + q) == be_name) {
+-                            /* type word: any flags byte, then 0x01 or 0x81 (integer), 00 00;
+-                             * only 0/1 values change -- an unlocked tag is a flag. */
+-                            const uint8_t* t = vm_base + q - 4;
+-                            const uint32_t v = *(const uint32_t*)(vm_base + q + 4);
+-                            if ((t[1] == 0x01 || t[1] == 0x81) && !t[2] && !t[3] &&
+-                                (v == 0 || v == 0x01000000u)) {
+-                                *(uint32_t*)(vm_base + q + 4) = be_val; n++;
+-                            }
+-                        }
+-                p = end;
+-            }
+-            dbg_printf("  qbset 0x%08X = %u: %u member(s)%c", a, b, n, 10);
++        } else if (!strcmp(verb, "qbset") && sscanf(cmd, "%*s %x %x", &a, &b) == 2) {
++            /* qbset <name-crc> <value>: set every integer QB struct member with
++             * that name. A member is 16 bytes: xx 01|81 00 00 | name | value | next,
++             * big-endian (GH3: bot_play, unlocked). Prints how many it set. */
++            const uint32_t be_name = ((a & 0xFF) << 24) | ((a & 0xFF00) << 8) | ((a >> 8) & 0xFF00) | (a >> 24);
++            const uint32_t be_val  = ((b & 0xFF) << 24) | ((b & 0xFF00) << 8) | ((b >> 8) & 0xFF00) | (b >> 24);
++            unsigned n = 0;
++            for (uintptr_t p = 0; p < 0xC0000000u && vm_base; ) {
++                MEMORY_BASIC_INFORMATION mi;
++                if (!VirtualQuery(vm_base + p, &mi, sizeof mi)) break;
++                const uintptr_t end = (uintptr_t)((uint8_t*)mi.BaseAddress + mi.RegionSize) - (uintptr_t)vm_base;
++                if (mi.State == MEM_COMMIT && (mi.Protect & (PAGE_READWRITE | PAGE_EXECUTE_READWRITE)))
++                    for (uintptr_t q = (p + 4) & ~3u; q + 8 <= end; q += 4)
++                        if (*(const uint32_t*)(vm_base + q) == be_name) {
++                            /* type word: any flags byte, then 0x01 or 0x81 (integer), 00 00;
++                             * only 0/1 values change -- an unlocked tag is a flag. */
++                            const uint8_t* t = vm_base + q - 4;
++                            const uint32_t v = *(const uint32_t*)(vm_base + q + 4);
++                            if ((t[1] == 0x01 || t[1] == 0x81) && !t[2] && !t[3] &&
++                                (v == 0 || v == 0x01000000u)) {
++                                *(uint32_t*)(vm_base + q + 4) = be_val; n++;
++                            }
++                        }
++                p = end;
++            }
++            dbg_printf("  qbset 0x%08X = %u: %u member(s)%c", a, b, n, 10);
+         } else if (!strcmp(verb, "prof") && sscanf(cmd, "%*s %u %u", &a, &b) >= 1) {
+             dbg_prof((DWORD)a, b ? b : 5);
+         } else if (!strcmp(verb, "hle")) {
+diff --git a/runtime/spu/spu_workload.c b/runtime/spu/spu_workload.c
+index 5b359c4..3d1caf1 100644
+--- a/runtime/spu/spu_workload.c
++++ b/runtime/spu/spu_workload.c
+@@ -1162,6 +1162,13 @@ int spu_taskset_wait_signal(uint32_t taskset_ea, uint32_t taskId)
+      * per round) -- decisive for "is the Bink decode CPU-bound". TLS: each
+      * task runs on its own host thread. */
+     static _Thread_local unsigned long long s_wait_exit_ms;
++    /* SPU_TASK_TIMELOG=1: every WAIT_SIGNAL enter and exit with t=<us> on the
++     * clock of [atom-ea]/[ww]/[GET_REPORT] (tools/frame_timeline.py). */
++    static int s_ttl = -1;
++    if (s_ttl < 0) s_ttl = getenv("SPU_TASK_TIMELOG") ? 1 : 0;
++    if (s_ttl) { extern unsigned long long ps3_qpc_us(void);
++        fprintf(stderr, "[task-time] t=%lluus enter task=%u taskset=0x%08X\n",
++                ps3_qpc_us(), taskId, taskset_ea); }
+     { extern unsigned long long ps3_ms_now(void);
+       unsigned long long _now = ps3_ms_now();
+       static int _n = 0; if (_n++ < 200 || (_n % 500) == 0)
+@@ -1246,6 +1253,9 @@ int spu_taskset_wait_signal(uint32_t taskset_ea, uint32_t taskId)
+     s_task_out = 1; __atomic_fetch_add(&s_tasks_out_of_wait, 1, __ATOMIC_ACQ_REL);
+     { extern unsigned long long ps3_ms_now(void);
+       s_wait_exit_ms = ps3_ms_now(); }   /* stamp for the next entry's ran= */
++    if (s_ttl) { extern unsigned long long ps3_qpc_us(void);
++        fprintf(stderr, "[task-time] t=%lluus exit task=%u taskset=0x%08X\n",
++                ps3_qpc_us(), taskId, taskset_ea); }
+     { static int _x = -1; if (_x < 0) _x = getenv("SPU_WAITSIG_EXITLOG") ? 1 : 0;
+       if (_x) fprintf(stderr, "[spu_workload] WAIT_SIGNAL exit task=%u taskset=0x%08X t=%llu\n",
+                       taskId, taskset_ea, (unsigned long long)s_wait_exit_ms); }
+-- 
+2.55.0.windows.5
+

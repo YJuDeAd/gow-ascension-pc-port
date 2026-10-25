@@ -1,0 +1,455 @@
+From 90ef4572032fb327bade52f8c051ba2a73983b1e Mon Sep 17 00:00:00 2001
+From: Arnaldo Lima <arnaldolimaof@gmail.com>
+Date: Thu, 15 Oct 2026 23:10:13 -0300
+Subject: [PATCH 04/14] Edge Zlib on the host, the SDK LFQueue line, Task2,
+ MapEaIoAddressWithFlags
+
+from gow-ascension-pc@676eefe
+
+PS3_EDGE_ZLIB_HLE=1: _cellSpursLFQueuePushBody services an Edge Zlib
+inflate element on the host (the inflater is the Twisted Metal port's, MIT,
+as libs/codec/edge_inflate.cpp), decrements the request's busy counter and
+sets its event flag, as the title polls them. God of War: Ascension inflates
+some ten thousand blocks in its first ninety seconds this way and goes on
+to its renderer.
+
+PS3_LFQUEUE_SDK_LAYOUT=1: _cellSpursLFQueueInitialize writes the SDK's
+CellSyncLFQueue line (direction at +0x24, ANY2ANY state), which this
+title's libsync reads; off by default.
+
+_cellSpursTaskAttribute2Initialize and cellSpursCreateTask2, forwarded to
+cellSpursCreateTask with the attribute's context; cellGcmMapEaIoAddressWithFlags,
+forwarded to cellGcmMapEaIoAddress.
+---
+ CMakeLists.txt              |   1 +
+ libs/codec/edge_inflate.cpp | 228 ++++++++++++++++++++++++++++++++++++
+ libs/spurs/cellSpurs.c      | 100 ++++++++++++++++
+ libs/spurs/cellSpurs.h      |   3 +
+ libs/video/cellGcmSys.c     |  12 ++
+ libs/video/cellGcmSys.h     |   1 +
+ 6 files changed, 345 insertions(+)
+ create mode 100644 libs/codec/edge_inflate.cpp
+
+diff --git a/CMakeLists.txt b/CMakeLists.txt
+index cefc2a9..97f43d3 100644
+--- a/CMakeLists.txt
++++ b/CMakeLists.txt
+@@ -36,6 +36,7 @@ file(GLOB_RECURSE HLE_SOURCES
+     "libs/spurs/*.c"
+     "libs/sync/*.c"
+     "libs/codec/*.c"
++    "libs/codec/edge_inflate.cpp"   # RFC 1951 inflater for Edge Zlib requests done on the host
+     "libs/font/*.c"
+     "libs/misc/*.c"
+     "libs/hardware/*.c"
+diff --git a/libs/codec/edge_inflate.cpp b/libs/codec/edge_inflate.cpp
+new file mode 100644
+index 0000000..3966f66
+--- /dev/null
++++ b/libs/codec/edge_inflate.cpp
+@@ -0,0 +1,228 @@
++/* Taken from the Twisted Metal port (sp00nznet/twistedmetal, src/tm_inflate.cpp,
++ * MIT, Copyright (c) 2026 Ned Heller / sp00nznet), with its functions renamed
++ * edge_inflate / edge_inflate_selftest so a port that links its own copy does
++ * not collide. Used by _cellSpursLFQueuePushBody's Edge Zlib path
++ * (libs/spurs/cellSpurs.c). */
++/*
++ * Minimal DEFLATE / zlib decoder, for HLE-ing the title's SPU decompressor.
++ *
++ * Twisted Metal inflates its packed assets with Sony's Edge Zlib running as a
++ * SPURS task on the SPU. That task never receives work here, so nothing loads.
++ * The requests themselves are plain zlib streams (verified: a captured 63-byte
++ * request inflates to exactly the 132 bytes its descriptor asks for), so the
++ * decompression can simply be done on the host instead — which is what
++ * ps3recomp's own porting guide recommends for SPU decompression work.
++ *
++ * ps3recomp links no zlib and Windows exposes no system one, so this is a
++ * self-contained inflater. It follows RFC 1951 directly and is written for
++ * clarity over speed: assets are inflated once at load time.
++ *
++ * edge_inflate_selftest() checks it against a real request captured from the
++ * running title.
++ */
++
++#include <stdint.h>
++#include <stdio.h>
++#include <string.h>
++
++namespace {
++
++struct Bits {
++    const uint8_t* src;
++    uint32_t len, pos;
++    uint32_t bitbuf, bitcnt;
++    bool bad;
++
++    int bit()
++    {
++        if (!bitcnt) {
++            if (pos >= len) { bad = true; return 0; }
++            bitbuf = src[pos++];
++            bitcnt = 8;
++        }
++        const int b = bitbuf & 1;
++        bitbuf >>= 1;
++        bitcnt--;
++        return b;
++    }
++    uint32_t bits(int n)
++    {
++        uint32_t v = 0;
++        for (int i = 0; i < n; i++) v |= (uint32_t)bit() << i;
++        return v;
++    }
++};
++
++/* Canonical Huffman decoding table: counts per length, plus symbols in order. */
++struct Huff {
++    int16_t count[16];
++    int16_t sym[288];
++};
++
++void huff_build(Huff* h, const uint8_t* lengths, int n)
++{
++    memset(h->count, 0, sizeof h->count);
++    for (int i = 0; i < n; i++) h->count[lengths[i]]++;
++    h->count[0] = 0;
++    int16_t offs[16];
++    offs[1] = 0;
++    for (int l = 1; l < 15; l++) offs[l + 1] = (int16_t)(offs[l] + h->count[l]);
++    for (int i = 0; i < n; i++)
++        if (lengths[i]) h->sym[offs[lengths[i]]++] = (int16_t)i;
++}
++
++int huff_decode(Bits& b, const Huff* h)
++{
++    int code = 0, first = 0, index = 0;
++    for (int len = 1; len <= 15; len++) {
++        code |= b.bit();
++        const int count = h->count[len];
++        if (code - first < count) return h->sym[index + (code - first)];
++        index += count;
++        first = (first + count) << 1;
++        code <<= 1;
++        if (b.bad) break;
++    }
++    return -1;
++}
++
++const uint16_t LEN_BASE[29] = {
++    3,4,5,6,7,8,9,10,11,13,15,17,19,23,27,31,35,43,51,59,67,83,99,115,131,163,195,227,258 };
++const uint8_t LEN_EXTRA[29] = {
++    0,0,0,0,0,0,0,0,1,1,1,1,2,2,2,2,3,3,3,3,4,4,4,4,5,5,5,5,0 };
++const uint16_t DIST_BASE[30] = {
++    1,2,3,4,5,7,9,13,17,25,33,49,65,97,129,193,257,385,513,769,1025,1537,2049,3073,
++    4097,6145,8193,12289,16385,24577 };
++const uint8_t DIST_EXTRA[30] = {
++    0,0,0,0,1,1,2,2,3,3,4,4,5,5,6,6,7,7,8,8,9,9,10,10,11,11,12,12,13,13 };
++
++/* One compressed block into `out`; returns bytes written or -1. */
++int inflate_block(Bits& b, uint8_t* out, uint32_t cap, uint32_t written,
++                  const Huff* lit, const Huff* dist)
++{
++    for (;;) {
++        const int sym = huff_decode(b, lit);
++        if (sym < 0 || b.bad) return -1;
++        if (sym < 256) {
++            if (written >= cap) return -1;
++            out[written++] = (uint8_t)sym;
++        } else if (sym == 256) {
++            return (int)written;
++        } else {
++            const int s = sym - 257;
++            if (s >= 29) return -1;
++            const uint32_t length = LEN_BASE[s] + b.bits(LEN_EXTRA[s]);
++            const int ds = huff_decode(b, dist);
++            if (ds < 0 || ds >= 30) return -1;
++            const uint32_t d = DIST_BASE[ds] + b.bits(DIST_EXTRA[ds]);
++            if (d > written || written + length > cap) return -1;
++            for (uint32_t i = 0; i < length; i++, written++)
++                out[written] = out[written - d];
++        }
++    }
++}
++
++}  // namespace
++
++/* Inflate a raw DEFLATE or zlib stream. Returns bytes written, or -1.
++ * A leading 0x78 (CMF with CM=8) is treated as a zlib wrapper and skipped. */
++extern "C" int edge_inflate(uint8_t* out, uint32_t out_cap, const uint8_t* src, uint32_t src_len)
++{
++    if (!out || !src || src_len < 1) return -1;
++
++    uint32_t start = 0;
++    if (src_len >= 2 && (src[0] & 0x0F) == 8 && ((src[0] << 8) | src[1]) % 31 == 0)
++        start = 2;   /* zlib header (RFC 1950) */
++
++    Bits b{src, src_len, start, 0, 0, false};
++    uint32_t written = 0;
++
++    for (;;) {
++        const int final = b.bit();
++        const int type = (int)b.bits(2);
++        if (b.bad) return -1;
++
++        if (type == 0) {                        /* stored */
++            b.bitcnt = 0;
++            if (b.pos + 4 > b.len) return -1;
++            const uint32_t n = (uint32_t)src[b.pos] | ((uint32_t)src[b.pos + 1] << 8);
++            b.pos += 4;
++            if (b.pos + n > b.len || written + n > out_cap) return -1;
++            memcpy(out + written, src + b.pos, n);
++            b.pos += n;
++            written += n;
++        } else if (type == 1 || type == 2) {
++            Huff lit, dist;
++            if (type == 1) {                    /* fixed Huffman */
++                uint8_t l[288], d[30];
++                for (int i = 0; i < 144; i++) l[i] = 8;
++                for (int i = 144; i < 256; i++) l[i] = 9;
++                for (int i = 256; i < 280; i++) l[i] = 7;
++                for (int i = 280; i < 288; i++) l[i] = 8;
++                for (int i = 0; i < 30; i++) d[i] = 5;
++                huff_build(&lit, l, 288);
++                huff_build(&dist, d, 30);
++            } else {                            /* dynamic Huffman */
++                static const uint8_t ORDER[19] = {
++                    16,17,18,0,8,7,9,6,10,5,11,4,12,3,13,2,14,1,15 };
++                const int hlit  = (int)b.bits(5) + 257;
++                const int hdist = (int)b.bits(5) + 1;
++                const int hclen = (int)b.bits(4) + 4;
++                if (hlit > 286 || hdist > 30) return -1;
++
++                uint8_t cl[19] = {0};
++                for (int i = 0; i < hclen; i++) cl[ORDER[i]] = (uint8_t)b.bits(3);
++                Huff clh;
++                huff_build(&clh, cl, 19);
++
++                uint8_t lengths[288 + 30] = {0};
++                int i = 0;
++                while (i < hlit + hdist) {
++                    const int sym = huff_decode(b, &clh);
++                    if (sym < 0 || b.bad) return -1;
++                    if (sym < 16) {
++                        lengths[i++] = (uint8_t)sym;
++                    } else if (sym == 16) {
++                        if (!i) return -1;
++                        const uint8_t prev = lengths[i - 1];
++                        for (int r = 3 + (int)b.bits(2); r && i < hlit + hdist; r--)
++                            lengths[i++] = prev;
++                    } else if (sym == 17) {
++                        for (int r = 3 + (int)b.bits(3); r && i < hlit + hdist; r--)
++                            lengths[i++] = 0;
++                    } else {
++                        for (int r = 11 + (int)b.bits(7); r && i < hlit + hdist; r--)
++                            lengths[i++] = 0;
++                    }
++                }
++                huff_build(&lit, lengths, hlit);
++                huff_build(&dist, lengths + hlit, hdist);
++            }
++            const int n = inflate_block(b, out, out_cap, written, &lit, &dist);
++            if (n < 0) return -1;
++            written = (uint32_t)n;
++        } else {
++            return -1;                          /* type 3 is reserved */
++        }
++        if (final) break;
++        if (b.bad) return -1;
++    }
++    return (int)written;
++}
++
++/* Checked against a real decompression request captured from the running
++ * title: 63 bytes of zlib in, 132 bytes of asset manifest out, beginning
++ * "ui\0". Returns 0 on success. */
++extern "C" int edge_inflate_selftest(void)
++{
++    static const uint8_t SRC[63] = {
++        0x78,0xDA,0x2B,0xCD,0x64,0xC0,0x00,0x79,0xE9,0x05,0x70,0xF6,0x8E,0x83,0xDD,0xCC,
++        0xC7,0x4A,0xBA,0xA7,0x9D,0xDF,0x79,0x86,0xB1,0x14,0x8B,0xDA,0x82,0x92,0x22,0x38,
++        0x5B,0xA2,0x8F,0x81,0xA1,0x4C,0xFD,0xCC,0x6C,0x5C,0x6A,0xCB,0x8A,0x12,0x73,0x61,
++        0xEC,0x86,0xDA,0x27,0xEC,0x6A,0xDD,0xEB,0xC1,0x6A,0x01,0x8B,0xAC,0x18,0xDA };
++    uint8_t out[256];
++    const int n = edge_inflate(out, sizeof out, SRC, sizeof SRC);
++    if (n != 132) { fprintf(stderr, "[inflate] selftest: got %d, want 132\n", n); return 1; }
++    if (memcmp(out, "ui\0", 3) != 0) { fprintf(stderr, "[inflate] selftest: bad output\n"); return 1; }
++    return 0;
++}
+diff --git a/libs/spurs/cellSpurs.c b/libs/spurs/cellSpurs.c
+index 58e6734..cf5eed0 100644
+--- a/libs/spurs/cellSpurs.c
++++ b/libs/spurs/cellSpurs.c
+@@ -1257,6 +1257,38 @@ s32 _cellSpursTaskAttributeInitialize(CellSpursTaskAttribute* attr, u32 revision
+ /* Create a task from a pre-initialized attribute (carries ELF EA + context).
+  * Forwards to cellSpursCreateTask, which translates taskset/taskId and runs the
+  * SPU image through spu_workload_dispatch. */
++/* (attr, revision): the second-generation task attribute, big-endian:
++ * revision (+0x00), sizeContext (+0x04), eaContext (+0x08, 64-bit), the
++ * 16-byte lsPattern (+0x10), the name pointer (+0x20). Only those 0x24 bytes
++ * are written: the attribute usually sits on the caller's stack, and its full
++ * size is not established here. God of War: Ascension calls it. */
++s32 _cellSpursTaskAttribute2Initialize(void* attr, u32 revision)
++{
++    if (!attr) return CELL_SPURS_TASK_ERROR_NULL_POINTER;
++    const uint32_t a = (uint32_t)(uintptr_t)attr;
++    vm_write32(a + 0x00, revision);
++    for (uint32_t o = 0x04; o < 0x24; o += 4) vm_write32(a + o, 0);
++    printf("[cellSpurs] _TaskAttribute2Initialize(attr=0x%08X rev=%u)\n", a, revision);
++    return CELL_OK;
++}
++
++/* (taskset2, *id, elf, argument, attr2): made as cellSpursCreateTask makes a
++ * task, with the context and lsPattern the second-generation attribute
++ * carries (see _cellSpursTaskAttribute2Initialize), none without one. */
++s32 cellSpursCreateTask2(CellSpursTaskset* taskset, CellSpursTaskId* taskId,
++                         void* elf, u32 argument_ea, u32 attr_ea)
++{
++    u32 size = 0, ctx = 0, ls = 0;
++    if (attr_ea) {
++        size = vm_read32(attr_ea + 0x04);
++        ctx  = vm_read32(attr_ea + 0x0C);   /* low word of the 64-bit eaContext */
++        ls   = attr_ea + 0x10;
++    }
++    printf("[cellSpurs] CreateTask2 elf=0x%08X arg=0x%08X ctx=0x%08X size=0x%X\n",
++           (u32)(uintptr_t)elf, argument_ea, ctx, size);
++    return cellSpursCreateTask(taskset, taskId, elf, (void*)(uintptr_t)ctx, size, ls, argument_ea);
++}
++
+ s32 cellSpursCreateTaskWithAttribute(CellSpursTaskset* taskset,
+                                      CellSpursTaskId* taskId,
+                                      CellSpursTaskAttribute* attr)
+@@ -3394,6 +3426,36 @@ s32 _cellSpursLFQueueInitialize(u64 owner_ea, u64 queue_ea, u64 buffer_ea,
+     uint32_t q = (uint32_t)queue_ea;
+     for (uint32_t o = 0; o < 128; o += 4) vm_write32(q + o, 0);
+ 
++    /* PS3_LFQUEUE_SDK_LAYOUT=1: the SDK's CellSyncLFQueue line, as God of War:
++     * Ascension's libsync reads it (its SPU pop path compares the direction at
++     * +0x24 with 3 and works on push2 at +0x30 and pop2 at +0x50): pop1 and
++     * push1 (+0x00, +0x08) zero, size, depth, buffer, m_bs[4] (+0x20),
++     * direction (+0x24), m_v1 (+0x28), push2 (+0x30), pop2 (+0x50), eaSignal
++     * (+0x70). For ANY2ANY m_bs[0..1], m_v1, push2 and pop2 start all ones.
++     * Off by default: the ring layout below was derived from another title's
++     * consumer, and that title has not been checked with this one. */
++    { static int s_sdk = -1;
++      if (s_sdk < 0) s_sdk = getenv("PS3_LFQUEUE_SDK_LAYOUT") ? 1 : 0;
++      if (s_sdk) {
++          vm_write32(q + 0x10, size);
++          vm_write32(q + 0x14, depth);
++          vm_write64(q + 0x18, (u64)(uint32_t)buffer_ea);
++          vm_write32(q + 0x24, direction);
++          if (direction == 3) {
++              vm_write8(q + 0x20, 0xFF); vm_write8(q + 0x21, 0xFF);
++              vm_write32(q + 0x28, 0xFFFFFFFFu);
++              vm_write16(q + 0x30, 0xFFFF);
++              vm_write16(q + 0x50, 0xFFFF);
++          } else {
++              for (int i = 0; i < 4; i++) vm_write8(q + 0x20 + i, 0xFF);
++          }
++          vm_write64(q + 0x70, (u64)(uint32_t)owner_ea);
++          memset(vm_base + (uint32_t)buffer_ea, 0, (size_t)size * depth);
++          printf("[cellSpurs] _LFQueueInitialize(owner=0x%08X q=0x%08X buf=0x%08X size=%u depth=%u dir=%u) -> SDK layout\n",
++                 (u32)owner_ea, (u32)queue_ea, (u32)buffer_ea, size, depth, direction);
++          return CELL_OK;
++      } }
++
+     /* W3 at +0x0C is the ring modulus the consumer reduces indices by: the
+      * empty test is (W1-W0) mod 2*W3 and the buffer slot is index mod W3
+      * (derived at 0x12914..0x129B8). Leaving it zero degenerated both and made
+@@ -3441,6 +3503,44 @@ s32 _cellSpursLFQueuePushBody(u64 queue_ea, u64 data_ea, u32 isBlocking)
+     if (!queue_ea || !data_ea) return CELL_SPURS_TASK_ERROR_NULL_POINTER;
+     if (s_off) return CELL_OK;
+ 
++    /* PS3_EDGE_ZLIB_HLE=1: an Edge Zlib inflate queue is serviced on the host,
++     * as the Twisted Metal port does, instead of handing the element to the
++     * SPU task. God of War: Ascension's element (32 bytes, big-endian, read off
++     * its queue and checked against the request it describes):
++     *   +0x00 source (the request's +0x0C, past the 2-byte zlib header)
++     *   +0x04 destination (the request's in-place buffer, +0x14)
++     *   +0x08 compressed size   +0x0C output capacity
++     *   +0x10 the request's busy counter (+0x28), low bits used as flags
++     *   +0x14 an event flag     +0x18 its bits in the upper halfword
++     * The counter is what the title polls; it is decremented once the output
++     * is in place, and the event flag set when it reaches 0. */
++    { static int s_edge = -1;
++      if (s_edge < 0) s_edge = getenv("PS3_EDGE_ZLIB_HLE") ? 1 : 0;
++      if (s_edge) {
++          const uint32_t e = (uint32_t)data_ea;
++          const uint32_t src = vm_read32(e + 0x00), dst = vm_read32(e + 0x04);
++          const uint32_t srclen = vm_read32(e + 0x08), cap = vm_read32(e + 0x0C);
++          const uint32_t counter = vm_read32(e + 0x10) & ~3u;
++          const uint32_t flag = vm_read32(e + 0x14);
++          const u16 bits = (u16)(vm_read32(e + 0x18) >> 16);
++          extern int edge_inflate(uint8_t* out, uint32_t out_cap, const uint8_t* src, uint32_t src_len);
++          if (src && dst && counter && srclen && srclen < 0x01000000u && cap && cap <= 0x01000000u) {
++              uint8_t* tmp = (uint8_t*)malloc(cap);
++              const int n = tmp ? edge_inflate(tmp, cap, vm_base + src, srclen) : -1;
++              if (n >= 0) memcpy(vm_base + dst, tmp, (size_t)n);
++              free(tmp);
++              const uint32_t left = vm_read32(counter);
++              if (left) vm_write32(counter, left - 1u);
++              if (left == 1u && flag && bits)
++                  cellSpursEventFlagSet((CellSpursEventFlag*)(uintptr_t)flag, bits);
++              static int _e = 0;
++              if (_e++ < 12 || n < 0)
++                  printf("[edge] inflate #%d src=0x%08X len=%u -> dst=0x%08X cap=%u: %d bytes; counter 0x%08X %u -> %u flag=0x%08X bits=0x%04X\n",
++                         _e, src, srclen, dst, cap, n, counter, left, left ? left - 1u : 0u, flag, bits);
++              return CELL_OK;
++          }
++      } }
++
+     const uint32_t q = (uint32_t)queue_ea;
+     /* Raw big-endian access while the lock-line lock is held: the vm_ accessors
+      * take that same (non-recursive) lock. */
+diff --git a/libs/spurs/cellSpurs.h b/libs/spurs/cellSpurs.h
+index d1d50e6..ef856f2 100644
+--- a/libs/spurs/cellSpurs.h
++++ b/libs/spurs/cellSpurs.h
+@@ -219,6 +219,9 @@ s32 cellSpursInitializeWithAttribute2(CellSpurs* spurs,
+ s32 _cellSpursTasksetAttribute2Initialize(void* attr, u32 revision);
+ s32 cellSpursCreateTaskset2(CellSpurs* spurs, CellSpursTaskset* taskset,
+                             const void* attr);
++s32 _cellSpursTaskAttribute2Initialize(void* attr, u32 revision);
++s32 cellSpursCreateTask2(CellSpursTaskset* taskset, CellSpursTaskId* taskId,
++                         void* elf, u32 argument_ea, u32 attr_ea);
+ 
+ s32 cellSpursGetNumSpuThread(const CellSpurs* spurs, u32* nThreads);
+ s32 cellSpursSetMaxContention(CellSpurs* spurs, CellSpursWorkloadId wid,
+diff --git a/libs/video/cellGcmSys.c b/libs/video/cellGcmSys.c
+index da009b4..72a2199 100644
+--- a/libs/video/cellGcmSys.c
++++ b/libs/video/cellGcmSys.c
+@@ -2772,6 +2772,18 @@ s32 cellGcmMapMainMemory(u32 ea, u32 size, u32* offset)
+     return CELL_OK;
+ }
+ 
++s32 cellGcmMapEaIoAddress(u32 ea, u32 io, u32 size);
++
++/* (ea, io, size, flags): the mapping with the page flags the RSX takes;
++ * there is one address space here, so the flags change nothing. God of War:
++ * Ascension maps its IO range this way and, unregistered, saw garbage
++ * ("iooffset == -1"). */
++s32 cellGcmMapEaIoAddressWithFlags(u32 ea, u32 io, u32 size, u32 flags)
++{
++    printf("[cellGcmSys] MapEaIoAddressWithFlags(flags=0x%X) -> MapEaIoAddress\n", flags);
++    return cellGcmMapEaIoAddress(ea, io, size);
++}
++
+ /* NID: 0x5A41C10F */
+ s32 cellGcmMapEaIoAddress(u32 ea, u32 io, u32 size)
+ {
+diff --git a/libs/video/cellGcmSys.h b/libs/video/cellGcmSys.h
+index eab83e1..ebdb1cc 100644
+--- a/libs/video/cellGcmSys.h
++++ b/libs/video/cellGcmSys.h
+@@ -314,6 +314,7 @@ s32 cellGcmMapMainMemory(u32 ea, u32 size, u32* offset);
+ 
+ /* NID: 0x5A41C10F */
+ s32 cellGcmMapEaIoAddress(u32 ea, u32 io, u32 size);
++s32 cellGcmMapEaIoAddressWithFlags(u32 ea, u32 io, u32 size, u32 flags);
+ 
+ /* NID: 0x626E8518 */
+ s32 cellGcmMapEaIoAddressWithFlags(u32 ea, u32 io, u32 size, u32 flags);
+-- 
+2.50.1 (Apple Git-155)
+

@@ -1,0 +1,153 @@
+From 9e5553c11afd642a06a61e6cd1086459221ccd0c Mon Sep 17 00:00:00 2001
+From: Arnaldo Lima <arnaldolimaof@gmail.com>
+Date: Fri, 16 Oct 2026 21:10:06 -0300
+Subject: [PATCH] Live draw: X16 textures, framebuffer sRGB and texture gamma;
+ FP DDX/DDY
+
+from gow-ascension-pc@676eefe
+
+God of War: Ascension's menu text came out as solid blocks, then (once
+decoded) dark brown, bloated and with its counters filled. Three gaps:
+
+- X16 (0x94) textures were not decoded, so the font atlas (256x256, pitch
+  512) bound nothing and every glyph drew as a quad. Decoded as one 16-bit
+  unorm channel, cut to its high byte, laid out A,R,G,B = x,1,x,1.
+- The live draw engine ignored NV4097_SET_SHADER_PACKER (0x1FEC) and the
+  textures' gamma flags, both of which the shared draw engine already
+  models. The title lights in linear space and asks the RSX to encode, so
+  everything it drew that way came out dark. Ported: gamma-decoded fetches
+  through rsx_fp_decompile_buffered_color_ex, rsx_fp_apply_srgb_output on
+  the colour targets, both in the pipeline key. LD_NO_SRGB=1 turns it off.
+- The fragment decompiler left DDX/DDY as TODO comments. The font is a
+  distance field whose edge width is max(|ddx|, |ddy|): with 0 the glyphs
+  bloated. Now ddx()/ddy().
+
+The language prompt and the screen-adjust menu now read cleanly.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ libs/video/rsx_fp_decompiler.c |  5 ++++
+ libs/video/rsx_live_draw.c     | 53 ++++++++++++++++++++++++++++++----
+ 2 files changed, 53 insertions(+), 5 deletions(-)
+
+diff --git a/libs/video/rsx_fp_decompiler.c b/libs/video/rsx_fp_decompiler.c
+index 4e175d2..c5bc3d1 100644
+--- a/libs/video/rsx_fp_decompiler.c
++++ b/libs/video/rsx_fp_decompiler.c
+@@ -781,6 +781,11 @@ static int rsx_fp_decompile_internal(
+         case OP_MAX: snprintf(rhs, sizeof(rhs), "max((%s), (%s))", a, b); break;
+         case OP_FRC: snprintf(rhs, sizeof(rhs), "frac(%s)", a); break;
+         case OP_FLR: snprintf(rhs, sizeof(rhs), "floor(%s)", a); break;
++        /* Screen-space derivatives. God of War: Ascension's distance-field
++         * font takes its edge width from max(|ddx|, |ddy|); left unhandled, the
++         * width was 0 and every glyph drew bloated, its counters filled. */
++        case OP_DDX: snprintf(rhs, sizeof(rhs), "ddx(%s)", a); break;
++        case OP_DDY: snprintf(rhs, sizeof(rhs), "ddy(%s)", a); break;
+         case OP_RCP: snprintf(rhs, sizeof(rhs), "(1.0 / (%s).x)", a); break;
+         /* Pack/unpack (RPCS3 FragmentProgramDecompiler PK/UP cases and the pkg/upg
+          * builtins): the packed word is a scalar that replicates. */
+diff --git a/libs/video/rsx_live_draw.c b/libs/video/rsx_live_draw.c
+index 9e3996b..bb2b6e7 100644
+--- a/libs/video/rsx_live_draw.c
++++ b/libs/video/rsx_live_draw.c
+@@ -191,6 +191,7 @@ extern volatile unsigned long long g_yz_auto_start_tick;
+ #define TEX_FMT_DXT45      0x88
+ #define TEX_FMT_G8B8       0x8B
+ #define TEX_FMT_DEPTH24_D8 0x90
++#define TEX_FMT_X16        0x94
+ #define TEX_FMT_LINEAR     0x20
+ #define TEX_FMT_UNNORM     0x40
+ #define TEX_FMT_BASE_MASK  0x9F
+@@ -1890,6 +1891,12 @@ static void decode_texel(u32 base_fmt, const u8* p, u32 remap, u8 d[4])
+         break;
+     }
+     case TEX_FMT_DEPTH24_D8: s[0] = 255; s[1] = s[2] = s[3] = p[0]; break;
++    /* X16: one 16-bit unorm channel, big-endian, cut to its high byte (the
++     * cache is RGBA8). Laid out A,R,G,B = x,1,x,1, the default mapping
++     * RPCS3 gives it, so a shader reading .a or .g gets the value. God of
++     * War: Ascension's font atlas is X16 (256x256, pitch 512): undecoded,
++     * every glyph drew as a solid block. */
++    case TEX_FMT_X16: s[0] = p[0]; s[1] = 255; s[2] = p[0]; s[3] = 255; break;
+     default: s[0] = p[0]; s[1] = p[1]; s[2] = p[2]; s[3] = p[3]; break;
+     }
+     d[0] = remap_comp(s, remap, 1);
+@@ -2028,7 +2035,8 @@ static u32 texture_source_span(const rsx_dsp_texture* t)
+     case TEX_FMT_A4R4G4B4:
+     case TEX_FMT_A1R5G5B5:
+     case TEX_FMT_R5G6B5:
+-    case TEX_FMT_G8B8: texel_size = 2; break;
++    case TEX_FMT_G8B8:
++    case TEX_FMT_X16: texel_size = 2; break;
+     case RSX_TEX_FMT_W16Z16Y16X16_FLOAT: texel_size = 8; break;
+     case TEX_FMT_A8R8G8B8:
+     case TEX_FMT_DEPTH24_D8: texel_size = 4; break;
+@@ -2211,7 +2219,8 @@ static ID3D12Resource* decode_guest_texture(const rsx_dsp_texture* t, u32 remap)
+     case TEX_FMT_A4R4G4B4:
+     case TEX_FMT_A1R5G5B5:
+     case TEX_FMT_R5G6B5:
+-    case TEX_FMT_G8B8: texel_size = 2; break;
++    case TEX_FMT_G8B8:
++    case TEX_FMT_X16: texel_size = 2; break;
+     case TEX_FMT_A8R8G8B8:
+     case TEX_FMT_DEPTH24_D8: texel_size = 4; break;
+     case RSX_TEX_FMT_W16Z16Y16X16_FLOAT: texel_size = 8; break;
+@@ -4396,6 +4405,33 @@ static ID3D12PipelineState* get_pso(
+         key = fnv1a(
+             &packed_payload, sizeof(packed_payload), key);
+     }
++    /* Framebuffer sRGB and texture gamma, as the shared draw engine does
++     * (rsx_draw_engine.c): NV4097_SET_SHADER_PACKER (0x1FEC) asks the RSX to
++     * encode the colour it writes, and each texture's gamma flags to decode
++     * what it samples. Neither was modelled here, so a title that lights in
++     * linear space drew dark: God of War: Ascension's menu text came out dark
++     * brown and its brightness screen near black. Both are pipeline identity.
++     * LD_NO_SRGB=1 leaves both off. */
++    u8 ld_gamma_masks[16] = {0};
++    u32 ld_srgb_output = 0, ld_gamma_units = 0;
++    { static int off = -1;
++      if (off < 0) off = getenv("LD_NO_SRGB") ? 1 : 0;
++      if (!off) {
++          extern u8 rsx_texture_gamma_mask(u32, u32, u32, u32);
++          ld_srgb_output = (u32)rsx_fp_srgb_output_enabled(
++              rsx_dsp_reg(&g.rsx, 0x1FECu), fp_ctrl,
++              rsx_dsp_reg(&g.rsx, 0x0208u) & 0x1Fu);
++          for (u32 gu = 0; gu < 16; gu++) {
++              rsx_dsp_texture gt; rsx_dsp_get_texture(&g.rsx, gu, &gt);
++              if (gt.enabled)
++                  ld_gamma_masks[gu] = rsx_texture_gamma_mask(gt.format, gt.remap, gt.filter, gt.wrap);
++          }
++          ld_gamma_units = rsx_fp_texture_gamma_units(fp_uc, fp_size, ld_gamma_masks);
++          for (u32 gu = 0; gu < 16; gu++)
++              if (!(ld_gamma_units & (1u << gu))) ld_gamma_masks[gu] = 0;
++      }
++      if (ld_srgb_output) key = fnv1a(&ld_srgb_output, sizeof(ld_srgb_output), key);
++      if (ld_gamma_units) key = fnv1a(ld_gamma_masks, sizeof(ld_gamma_masks), key); }
+     if (ld_fp_constants_buffered())
+         key = ld_hash_structural_render_state(&rs, key);
+     else
+@@ -4466,12 +4502,19 @@ static ID3D12PipelineState* get_pso(
+     u32 decompiled_constant_count = 0;
+     int fi;
+     if (ld_fp_constants_buffered()) {
+-        fi = rsx_fp_decompile_buffered_ex(
+-            fp_uc, fp_size, fp_ctrl, cube_mask, ps_hlsl,
+-            sizeof(ps_hlsl), &decompiled_constant_count);
++        fi = ld_gamma_units
++            ? rsx_fp_decompile_buffered_color_ex(
++                fp_uc, fp_size, fp_ctrl, cube_mask, ld_gamma_masks, ps_hlsl,
++                sizeof(ps_hlsl), &decompiled_constant_count)
++            : rsx_fp_decompile_buffered_ex(
++                fp_uc, fp_size, fp_ctrl, cube_mask, ps_hlsl,
++                sizeof(ps_hlsl), &decompiled_constant_count);
+         if (fi > 0 &&
+             decompiled_constant_count != g.fp_constants.count)
+             fi = -1;
++        if (fi > 0 && ld_srgb_output &&
++            rsx_fp_apply_srgb_output(ps_hlsl, sizeof(ps_hlsl)) < 0)
++            fi = -1;
+         if (fi > 0 && rs.alpha_test_enable &&
+             rsx_fp_apply_alpha_test_buffered(
+                 ps_hlsl, sizeof(ps_hlsl), rs.alpha_func) < 0)
+-- 
+2.55.0.windows.5
+

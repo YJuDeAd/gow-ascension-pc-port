@@ -1,0 +1,48 @@
+From 9b8085b63532f51f5e2e1375c5e660c177559912 Mon Sep 17 00:00:00 2001
+From: Arnaldo Lima <arnaldolimaof@gmail.com>
+Date: Sun, 18 Oct 2026 22:48:05 -0300
+Subject: [PATCH] spu_lifter: promote_registers keeps locals across a merged
+ loop's interrupt poll
+
+from gow-ascension-pc@676eefe
+
+The poll _irq_poll puts on a merged back edge reads no register; treated
+as an opaque line it flushed and reloaded every promoted register on each
+iteration. It now flushes only inside the exit taken for an interrupt.
+(--merge-chunks with --promote-regs measured no faster in God of War:
+Ascension's level; both stay opt-in.)
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ tools/spu_lifter.py | 8 ++++++++
+ 1 file changed, 8 insertions(+)
+
+diff --git a/tools/spu_lifter.py b/tools/spu_lifter.py
+index 2ab017e..16005da 100644
+--- a/tools/spu_lifter.py
++++ b/tools/spu_lifter.py
+@@ -507,6 +507,7 @@ _GPR_RE = re.compile(r"ctx->gpr\[(\d+)\]")
+ _PURE_CTX_RE = re.compile(r"ctx->gpr\[\d+\]|spu_ls_(?:read|write)128\(ctx,")
+ _ASSIGN_RE = re.compile(r"ctx->gpr\[(\d+)\]\s*=(?!=)")
+ # `{ ctx->pc = ...; g_spu_trampoline_fn = ...; return; }`, alone or behind an if
++_IRQ_EXIT_RE = re.compile(r"\{ (ctx->pc = [^;]+; g_spu_trampoline_fn = [^;]+; return;) \}")
+ _EXIT_BLOCK_RE = re.compile(r"^(if \(.*\) )?\{ (ctx->pc = [^;]+; g_spu_trampoline_fn = [^;]+; return;) \}$")
+ 
+ 
+@@ -546,6 +547,13 @@ def promote_registers(body_lines: list) -> list:
+         if pure(b):
+             out.append(loc(b))
+             continue
++        if "ctx->int_enable && (ctx->event_status & ctx->event_mask)" in b:
++            # A merged loop's back edge with its interrupt poll (_irq_poll):
++            # the poll reads no register, so the registers flush only on the
++            # rare exit taken for an interrupt and the loop keeps its locals.
++            b = _IRQ_EXIT_RE.sub(lambda m: f"{{ {flush} {m.group(1)} }}", loc(b))
++            out.append(b)
++            continue
+         m = _EXIT_BLOCK_RE.match(b)
+         if m:   # the exit reads no register (ctx->pc is a constant): flush inside
+             cond = loc(m.group(1) or "")
+-- 
+2.55.0.windows.5
+

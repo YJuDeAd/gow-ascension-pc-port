@@ -4,9 +4,9 @@
 
 | Field | Value |
 |---|---|
-| **Active Phase** | Milestone 3 Complete (Phases 9, 10, 11 100% Complete) |
+| **Active Phase** | Milestone 3 Complete (Phases 9, 10, 11 100% Complete) — 44-Patch Render Pipeline Bringup |
 | **Milestone** | 3 — In-Game Playability, Audio Output & PC Enhancements (100% COMPLETE) |
-| **Last Updated** | 2026-10-17 |
+| **Last Updated** | 2026-10-25 |
 
 ## Progress
 
@@ -181,3 +181,4 @@ _None yet — Phase 1 not started._
 
 
 
+| 2026-10-24 | Quick task completed: fixed vblank ticker catch-up loop (bounded 240, integrated clock), exposed alternating display buffer IDs and updated cellGcm_take_flip_pending_synced for GOW display list jumps, corrected LD_FRAME_ANATOMY frame indexing and captured 12 passes at present=726 with 11 draws, and instrumented NV4097(0x1808) 4 sub-stages (b: 63.8% texture, c: 36.0% shader/PSO). |

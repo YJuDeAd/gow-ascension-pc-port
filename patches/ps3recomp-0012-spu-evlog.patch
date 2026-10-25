@@ -1,0 +1,125 @@
+From 5441f972a9b0be93393a339e45ae3c9c5aa7a529 Mon Sep 17 00:00:00 2001
+From: Arnaldo Lima <arnaldolimaof@gmail.com>
+Date: Fri, 16 Oct 2026 13:01:26 -0300
+Subject: [PATCH 12/14] SPU_EVLOG: a policy module's interrupt path, in order
+
+from gow-ascension-pc@676eefe
+
+SPU_EVLOG=1 [SPU_EVLOG_WID=<wid>] logs, for one workload or all, each
+run's begin and end, every event-mask, tag-mask, tag-update and
+stall-acknowledge write, every stall-and-notify raised (tag, list EA)
+and every interrupt taken (srr0, vector), with the event mask, event
+status, interrupt enable and parked lists at that moment. It shows God
+of War: Ascension's Wws job managers doing exactly one job per run --
+load (tag 0 notify), run, store fence (tag 5 notify) -- and yielding.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ runtime/spu/spu_channels.c | 26 +++++++++++++++++++++++++-
+ runtime/spu/spu_dma.h      |  2 ++
+ runtime/spu/spu_drain.c    |  2 ++
+ runtime/spu/spurs_policy.c |  4 ++++
+ 4 files changed, 33 insertions(+), 1 deletion(-)
+
+diff --git a/runtime/spu/spu_channels.c b/runtime/spu/spu_channels.c
+index 291cd5f..f768a36 100644
+--- a/runtime/spu/spu_channels.c
++++ b/runtime/spu/spu_channels.c
+@@ -422,6 +422,24 @@ void spu_dmaring_dump(void)
+     }
+ }
+ 
++/* SPU_EVLOG=1 [SPU_EVLOG_WID=<wid>]: the interrupt path of a policy module
++ * in order -- stall-notify raised, interrupt taken, stall acknowledged, run
++ * begun and ended -- for one workload (wklCurrentId, LS 0x1DC) or all. */
++void spu_evlog(const spu_context* ctx, const char* what, uint32_t a, uint32_t b)
++{
++    static int s_on = -1; static int s_wid = -1;
++    if (s_on < 0) { s_on = getenv("SPU_EVLOG") ? 1 : 0;
++                    const char* w = getenv("SPU_EVLOG_WID"); s_wid = w ? atoi(w) : -1; }
++    if (!s_on || !ctx->policy_mode) return;
++    const unsigned wid = ctx->ls[0x1DF];
++    if (s_wid >= 0 && wid != (unsigned)s_wid) return;
++    static volatile LONG n;
++    if (InterlockedIncrement(&n) > 20000) return;
++    fprintf(stderr, "[evlog] t=%llu wid=%u spu=%u pc=0x%05X %s 0x%X 0x%X evmask=0x%X evstat=0x%X ie=%u parked=0x%X\n",
++            (unsigned long long)GetTickCount64(), wid, ctx->ls[0x1CB], (unsigned)(ctx->pc & SPU_LS_MASK),
++            what, a, b, ctx->event_mask, ctx->event_status, ctx->int_enable, ctx->list_stall_mask);
++}
++
+ /* Returns 1 if `cmd` is an atomic line op and was handled here, else 0. */
+ static int spu_mfc_atomic(spu_context* ctx, uint32_t cmd)
+ {
+@@ -876,6 +894,10 @@ void spu_wrch(spu_context* ctx, uint32_t channel, u128 value)
+         if (channel == MFC_Cmd && spu_mfc_atomic(ctx, v))
+             return;
+         mfc_channel_write(mfc_for(ctx), ctx, channel, v);
++        /* SPU_EVLOG=1: MFC_WrTagMask / MFC_WrTagUpdate writes under a policy
++         * module, with the event mask they meet (first 400). */
++        if (channel == MFC_WrTagUpdate || channel == MFC_WrTagMask || channel == MFC_WrListStallAck)
++            spu_evlog(ctx, channel == MFC_WrTagUpdate ? "TagUpdate" : channel == MFC_WrTagMask ? "TagMask" : "StallAck", v, 0);
+         /* MFC tag-status-update EVENT producer (channel-stall milestone). Our
+          * DMA completes synchronously, so the instant the program arms tag
+          * notification (MFC_WrTagUpdate with a non-zero mode = any/all), the
+@@ -931,7 +953,9 @@ void spu_wrch(spu_context* ctx, uint32_t channel, u128 value)
+         break;
+     case SPU_WrDec:          ctx->decrementer = v;
+                              ctx->dec_base_ns = spu_host_ns();              break;
+-    case SPU_WrEventMask:    ctx->event_mask = v;                           break; /* WrEventMask */
++    case SPU_WrEventMask:
++        spu_evlog(ctx, "EventMask", v, 0);
++                             ctx->event_mask = v;                           break; /* WrEventMask */
+     case SPU_WrEventAck:
+         /* Under the lock-line lock, because every producer of the LR bit sets
+          * it under that lock: the PPU coherent store, and a peer SPU's PUTLLC,
+diff --git a/runtime/spu/spu_dma.h b/runtime/spu/spu_dma.h
+index 4aa108b..d41edff 100644
+--- a/runtime/spu/spu_dma.h
++++ b/runtime/spu/spu_dma.h
+@@ -795,6 +795,8 @@ static inline int mfc_run_list(spu_context* spu, uint32_t elem_lsa,
+             spu->list_stall_mask |= (1u << t);  /* this tag now has a parked list */
+             spu->list_stall_stat |= (1u << t);  /* accumulate into the notify mask */
+             spu->event_status    |= 0x2u;       /* SPU_EVENT_SN stall-and-notify */
++            { extern void spu_evlog(const spu_context*, const char*, uint32_t, uint32_t);
++              spu_evlog(spu, "SN-raise tag/ea", t, (uint32_t)ea_base); }
+             /* Real MFC runs a queued list asynchronously, so the notify lands
+              * AFTER the arming code finishes. We run it inline here, so hold the
+              * resulting interrupt off for a few drain ticks -- otherwise the WWS
+diff --git a/runtime/spu/spu_drain.c b/runtime/spu/spu_drain.c
+index 931d3b3..e2c4199 100644
+--- a/runtime/spu/spu_drain.c
++++ b/runtime/spu/spu_drain.c
+@@ -307,6 +307,8 @@ void (*spu_take_interrupt(spu_context* ctx,
+     }
+     ctx->srr0 = ctx->pc;             /* resume point for iret */
+     ctx->int_enable = 0;
++    { extern void spu_evlog(const spu_context*, const char*, uint32_t, uint32_t);
++      spu_evlog(ctx, "INT-take srr0/target", ctx->srr0 & SPU_LS_MASK, target & SPU_LS_MASK); }
+     spu_irq_regs_save(ctx);          /* hardware contract: handler preserves regs */
+     { static int s_it = -1; if (s_it < 0) s_it = getenv("SPU_IRQTRACE") ? 1 : 0;
+       if (s_it) { static int _n = 0; if (_n++ < 200)
+diff --git a/runtime/spu/spurs_policy.c b/runtime/spu/spurs_policy.c
+index a349ac6..7d91c87 100644
+--- a/runtime/spu/spurs_policy.c
++++ b/runtime/spu/spurs_policy.c
+@@ -311,6 +311,8 @@ int spu_run_policy_module(spu_lifted_entry_fn entry, int image_id,
+ 
+     g_spurs_pm_polls  = 0;
+     g_spurs_pm_exited = 0;
++    { extern void spu_evlog(const spu_context*, const char*, uint32_t, uint32_t);
++      spu_evlog(ctx, "RUN-begin first", (uint32_t)first, 0); }
+ 
+     /* RUN/END tracing: thousands of policy dispatches per second made these
+      * unconditional fprintf+fflush pairs a real fraction of movie playback.
+@@ -575,6 +577,8 @@ int spu_run_policy_module(spu_lifted_entry_fn entry, int image_id,
+           }
+       } }
+ 
++    { extern void spu_evlog(const spu_context*, const char*, uint32_t, uint32_t);
++      spu_evlog(ctx, "RUN-end polls/exited", g_spurs_pm_polls, g_spurs_pm_exited); }
+     int result = g_spurs_pm_exited ? 0 : -2;
+     policy_slot_release(resident);
+     return result;
+-- 
+2.50.1 (Apple Git-155)
+

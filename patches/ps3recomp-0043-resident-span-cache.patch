@@ -1,0 +1,79 @@
+From eb922fadfdd2125313ccb893602c11d3a407757c Mon Sep 17 00:00:00 2001
+From: Arnaldo Lima <arnaldolimaof@gmail.com>
+Date: Sun, 18 Oct 2026 21:59:44 -0300
+Subject: [PATCH] SPU: cached span of live streamed-code slots skips the
+ 32-slot walk
+
+from gow-ascension-pc@676eefe
+
+spu_resident_code_fn and spu_lifted_probe walked all 32 resident_code
+slots on every lookup to answer "in no streamed span", which is the
+answer for nearly every step of a job module's own code (~6% of God of
+War: Ascension's SPU threads in its first level). A per-thread cache holds
+the [lo, hi) the context's live slots cover, invalidated by a generation a
+claim bumps; evictions only shrink the set, which a stale (larger) span
+still answers by walking. No behaviour change.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ runtime/spu/spu_channels.c | 28 +++++++++++++++++++++++++++-
+ 1 file changed, 27 insertions(+), 1 deletion(-)
+
+diff --git a/runtime/spu/spu_channels.c b/runtime/spu/spu_channels.c
+index 59276a5..4f46771 100644
+--- a/runtime/spu/spu_channels.c
++++ b/runtime/spu/spu_channels.c
+@@ -1806,8 +1806,33 @@ static spu_fn spu_lookup_in_image(uint32_t addr, int image_id)
+  * image (0 when pc is in none), the result its function at pc. For a
+  * position-independent image this also sets ctx->pic_delta. Shared by the full
+  * resolver and the musttail fast path (spu_dispatch_mt.c). */
++/* The span [lo, hi) that the context's live streamed-code slots cover, cached
++ * per host thread: most lookups are for the module's own code, outside every
++ * slot, and the 32-slot walk answered "none" on every trampoline step (~6% of
++ * God of War: Ascension's SPU threads in its first level). Only a claim adds a
++ * slot, and it bumps g_rc_gen; evictions only shrink the set, which a stale
++ * (larger) span answers correctly, by walking. */
++static volatile unsigned g_rc_gen;
++static SPU_THREAD_LOCAL struct { const spu_context* ctx; unsigned gen; uint32_t lo, hi; } t_rc_span;
++static inline int spu_rc_outside(const spu_context* ctx, uint32_t pc)
++{
++    const unsigned gen = __atomic_load_n(&g_rc_gen, __ATOMIC_ACQUIRE);
++    if (t_rc_span.ctx != ctx || t_rc_span.gen != gen) {
++        uint32_t lo = SPU_LS_SIZE, hi = 0;
++        for (unsigned slot = 0; slot < SPU_RESIDENT_CODE_SLOTS; ++slot) {
++            if (!ctx->resident_code[slot].image_id) continue;
++            const uint32_t a = ctx->resident_code[slot].lsa, e = a + ctx->resident_code[slot].size;
++            if (a < lo) lo = a;
++            if (e > hi) hi = e;
++        }
++        t_rc_span.ctx = ctx; t_rc_span.gen = gen; t_rc_span.lo = lo; t_rc_span.hi = hi;
++    }
++    return pc < t_rc_span.lo || pc >= t_rc_span.hi;
++}
++
+ spu_fn spu_resident_code_fn(spu_context* ctx, uint32_t pc, int* owner)
+ {
++    if (spu_rc_outside(ctx, pc)) { *owner = 0; return NULL; }
+     for (unsigned slot = 0; slot < SPU_RESIDENT_CODE_SLOTS; ++slot) {
+         const int img = ctx->resident_code[slot].image_id;
+         if (!img || pc < ctx->resident_code[slot].lsa ||
+@@ -1972,7 +1997,7 @@ int spu_lifted_probe(spu_context* ctx, uint32_t lsa)
+     /* Fast "no": no image this context could dispatch to has a function at
+      * lsa, and lsa is in no streamed code span (whose lifts sit elsewhere). */
+     {   int spans = 0;
+-        for (unsigned slot = 0; slot < SPU_RESIDENT_CODE_SLOTS; ++slot)
++        for (unsigned slot = 0; !spu_rc_outside(ctx, lsa) && slot < SPU_RESIDENT_CODE_SLOTS; ++slot)
+             if (ctx->resident_code[slot].image_id &&
+                 lsa - ctx->resident_code[slot].lsa < ctx->resident_code[slot].size) { spans = 1; break; }
+         if (!spans && ctx->image_id > 0 &&   /* image 0 matches every image's functions */
+@@ -2168,6 +2193,7 @@ void spu_lockguard_check(spu_context* ctx, uint32_t ea, const uint8_t* src, uint
+ static void spu_pic_claim(spu_context* ctx, const spu_ovl_src* o, uint32_t lsa, uint32_t ea, uint32_t size)
+ {
+         if (lsa + o->span > SPU_LS_SIZE) return;
++        __atomic_add_fetch(&g_rc_gen, 1u, __ATOMIC_RELEASE);   /* see spu_rc_outside */
+         for (unsigned slot = 0; slot < SPU_RESIDENT_CODE_SLOTS; ++slot) {
+             if (ctx->resident_code[slot].image_id && ctx->resident_code[slot].lsa != lsa)
+                 continue;
+-- 
+2.55.0.windows.5
+

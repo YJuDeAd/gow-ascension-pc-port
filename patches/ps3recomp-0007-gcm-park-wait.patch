@@ -1,0 +1,71 @@
+From 3045258e07a2a565999afbd9d34e0ec38aac61b2 Mon Sep 17 00:00:00 2001
+From: Arnaldo Lima <arnaldolimaof@gmail.com>
+Date: Fri, 16 Oct 2026 06:50:44 -0300
+Subject: [PATCH 07/14] GCM: GCM_PARK_WAIT_MS overrides the park grace;
+ HOTREAD16 names the reader
+
+from gow-ascension-pc@676eefe
+
+Upstream waits GCM_PARK_GRACE_MS (50 ms) for a parked FIFO to be patched
+before following put. God of War: Ascension moves put to the end of a
+frame its SPU jobs are still filling and patches the park afterwards;
+recompiled, those jobs can take far longer. GCM_PARK_WAIT_MS=<ms> sets
+the wait; the default is unchanged.
+
+[HOTREAD16] prints the value, thread, guest function and lr, like the 8-
+and 32-bit detectors.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ libs/video/cellGcmSys.c    | 14 +++++++++++++-
+ runtime/ppu/ppu_loader.cpp |  2 +-
+ 2 files changed, 14 insertions(+), 2 deletions(-)
+
+diff --git a/libs/video/cellGcmSys.c b/libs/video/cellGcmSys.c
+index a2d5ce1..2e152c7 100644
+--- a/libs/video/cellGcmSys.c
++++ b/libs/video/cellGcmSys.c
+@@ -828,6 +828,18 @@ static u32 s_sema_offset = 0;   /* NV406E semaphore offset (label window) */
+ /* How long a self-JUMP park may stand with `put` somewhere else before the
+  * drain gives up on it being patched and follows `put` instead. */
+ #define GCM_PARK_GRACE_MS 50ull
++/* GCM_PARK_WAIT_MS=<ms> overrides it. God of War: Ascension moves `put` to the
++ * end of a frame its SPU jobs are still filling and only then patches the park
++ * into a JUMP to it; recompiled, those jobs take far longer than 50 ms, and
++ * following put early skips the frame, the user command that releases the
++ * render thread's frame slot with it. */
++static unsigned long long gcm_park_grace_ms(void)
++{
++    static unsigned long long ms = ~0ull;
++    if (ms == ~0ull) { const char* e = getenv("GCM_PARK_WAIT_MS");
++                       ms = e ? strtoull(e, NULL, 0) : GCM_PARK_GRACE_MS; }
++    return ms;
++}
+ /* How close `current` must get to `end` before the runtime will recycle a ring
+  * on the title's behalf. One gcmReserve is 8 bytes; a page of slack keeps a
+  * title that is merely near the end from being touched. */
+@@ -1793,7 +1805,7 @@ static void gcm_rsx_process_fifo_unlocked(void)
+                       const unsigned long long now = ps3_ms_now();
+                       if (park_off != s_fifo_getoff || park_put != put) {
+                           park_off = s_fifo_getoff; park_put = put; park_since = now;
+-                      } else if (now - park_since >= GCM_PARK_GRACE_MS) {
++                      } else if (now - park_since >= gcm_park_grace_ms()) {
+                           park_off = 0;
+                           gcm_fifo_dump_around(s_fifo_getoff);
+                           gcm_fifo_resync_why("jump-park", &s_fifo_getoff, put);
+diff --git a/runtime/ppu/ppu_loader.cpp b/runtime/ppu/ppu_loader.cpp
+index 1baea72..0ad7a42 100644
+--- a/runtime/ppu/ppu_loader.cpp
++++ b/runtime/ppu/ppu_loader.cpp
+@@ -1595,7 +1595,7 @@ uint8_t  vm_read8 (uint64_t a) { if (vm_oob((uint32_t)a,1)) return 0; vm_hotmap(
+     return vm_base[(uint32_t)a]; }
+ uint16_t vm_read16(uint64_t a) { if (vm_oob((uint32_t)a,2)) return 0; ppu_rwatch_hit((uint32_t)a, 2, __builtin_return_address(0)); vm_hotmap((uint32_t)a,2); uint16_t v; memcpy(&v, vm_base + (uint32_t)a, 2);
+     { static PPU_THREAD_LOCAL uint32_t last=0xFFFFFFFFu; static PPU_THREAD_LOCAL uint32_t n=0;
+-      if ((uint32_t)a==last) { if (++n==200000) { fprintf(stderr, "[HOTREAD16] spinning on 0x%08X\n", (uint32_t)a); n=0; } } else { last=(uint32_t)a; n=0; } }
++      if ((uint32_t)a==last) { if (++n==200000) { fprintf(stderr, "[HOTREAD16] spinning on 0x%08X val=0x%04X tid=%lu guest-fn=0x%08X lr=0x%08X\n", (uint32_t)a, __builtin_bswap16(v), GetCurrentThreadId(), ppu_prof_resolve_host(__builtin_return_address(0)), g_active_ctx?(uint32_t)g_active_ctx->lr:0); n=0; } } else { last=(uint32_t)a; n=0; } }
+     return __builtin_bswap16(v); }
+ uint32_t vm_read32(uint64_t a) { if (vm_oob((uint32_t)a,4)) return 0; ppu_rwatch_hit((uint32_t)a, 4, __builtin_return_address(0));
+     if ((uint32_t)a < 0x10000u) ppu_null_read_report((uint32_t)a, 4, __builtin_return_address(0));
+-- 
+2.50.1 (Apple Git-155)
+

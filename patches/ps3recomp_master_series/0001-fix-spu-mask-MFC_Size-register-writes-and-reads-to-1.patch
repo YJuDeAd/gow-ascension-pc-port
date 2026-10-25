@@ -1,0 +1,44 @@
+From 52fab8b1b38874bda91ac4904ad62ed2d8622b29 Mon Sep 17 00:00:00 2001
+From: YJuDeAd <robinrashi@gmail.com>
+Date: Tue, 20 Oct 2026 04:58:28 +0530
+Subject: [PATCH 1/6] fix(spu): mask MFC_Size register writes and reads to 16
+ bits per CBEA spec
+
+---
+ runtime/spu/spu_dma.h | 6 +++---
+ 1 file changed, 3 insertions(+), 3 deletions(-)
+
+diff --git a/runtime/spu/spu_dma.h b/runtime/spu/spu_dma.h
+index 9820cc2..eae1fcc 100644
+--- a/runtime/spu/spu_dma.h
++++ b/runtime/spu/spu_dma.h
+@@ -895,7 +895,7 @@ static inline int mfc_enqueue(mfc_engine* mfc, spu_context* spu)
+ 
+     uint32_t lsa  = spu->mfc_lsa;
+     uint64_t ea   = ((uint64_t)spu->mfc_eah << 32) | spu->mfc_eal;
+-    uint32_t size = spu->mfc_size;
++    uint32_t size = spu->mfc_size & 0xFFFF;
+     uint32_t tag  = spu->mfc_tag;
+     uint32_t cmd  = spu->ls[0]; /* overridden below */
+ 
+@@ -926,7 +926,7 @@ static inline int mfc_submit(mfc_engine* mfc, spu_context* spu, uint32_t cmd)
+           } } }
+     uint32_t lsa  = spu->mfc_lsa;
+     uint64_t ea   = ((uint64_t)spu->mfc_eah << 32) | spu->mfc_eal;
+-    uint32_t size = spu->mfc_size;
++    uint32_t size = spu->mfc_size & 0xFFFF;
+     uint32_t tag  = spu->mfc_tag & 0x1F;
+     int rc = 0;
+ 
+@@ -1569,7 +1569,7 @@ static inline void mfc_channel_write(mfc_engine* mfc, spu_context* spu,
+         spu->mfc_eal = value;
+         break;
+     case MFC_Size:
+-        spu->mfc_size = value;
++        spu->mfc_size = value & 0xFFFF;
+         break;
+     case MFC_TagID:
+         spu->mfc_tag = value & 0x1F;
+-- 
+2.48.1.windows.1
+

@@ -1,0 +1,628 @@
+From 19c066c3ae754ba43a60a7c48883a8b0b0c2475c Mon Sep 17 00:00:00 2001
+From: Arnaldo Lima <arnaldolimaof@gmail.com>
+Date: Sat, 17 Oct 2026 21:17:59 -0300
+Subject: [PATCH] SPU: fragments found inside bigger GETs and by content at the
+ interpreter; 32 code slots
+
+from gow-ascension-pc@676eefe
+
+- spu_overlay_note_get: a GET of 0x200+ bytes is scanned for registered
+  position-independent fragments at every quadword (first-word filter, 4096
+  bits), each one's extent ending where the next begins: jobs that bring a
+  heap copy of header + fragments, or a long stretch of the executable.
+- spu_lifted_probe: at an interpreter step no resident span covers with a
+  lifted function, the bytes at pc are looked up among the fragments'
+  function entries (64 bytes compared, and the fragment's first quadword
+  where the entry implies); a match claims the fragment there.
+- Signature and entry tables built once, under an atomic once-init.
+- SPU_RESIDENT_CODE_SLOTS 8 -> 32 (a block carries a dozen fragments).
+- lift_spu_pic.py: optional "entries" inside a fragment.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ runtime/spu/spu_channels.c | 272 +++++++++++++++++++++++++++++++------
+ runtime/spu/spu_context.h  | 189 +++++++++++++-------------
+ tools/lift_spu_pic.py      |   9 +-
+ 3 files changed, 335 insertions(+), 135 deletions(-)
+
+diff --git a/runtime/spu/spu_channels.c b/runtime/spu/spu_channels.c
+index f33b2f9..cf3a910 100644
+--- a/runtime/spu/spu_channels.c
++++ b/runtime/spu/spu_channels.c
+@@ -1701,7 +1701,7 @@ spu_lifted_fn spu_lifted_lookup(const spu_context* ctx, uint32_t lsa)
+  * marks that overlay resident in the streaming context; dispatch retries a
+  * primary-image miss against the resident overlay's registry. */
+ typedef struct { uint32_t src_ea; int image_id; uint8_t sig[16]; int has_sig; uint32_t span;
+-                 uint32_t pic_base; } spu_ovl_src;
++                 uint32_t pic_base; uint32_t first_word; int sig_ready; } spu_ovl_src;
+ /* 6 FMOD codec/DSP overlays + up to 89 WWS job-code modules (all stream into
+  * the same job code buffer at LS 0x4000, dispatched by content signature). */
+ #define SPU_OVL_SRC_MAX 512
+@@ -1800,6 +1800,118 @@ spu_fn spu_resident_code_fn(spu_context* ctx, uint32_t pc, int* owner)
+  * context's own image, and a job that fell to the interpreter at one unlifted
+  * address ran the rest of its body interpreted although every function of the
+  * resident job module (and of its code fragments) was lifted. */
++/* Position-independent fragments found by content, where the interpreter is
++ * about to run. The GET-side tracking (spu_overlay_note_get) only sees code
++ * that arrives as a fragment-sized GET from its executable address, or as a
++ * block that starts with a fragment; a job that brings its code some other
++ * way -- God of War: Ascension's module 207 in the main menu takes heap
++ * copies and long stretches of the executable that start mid-fragment, and
++ * overwrites parts of them with data in between -- left whole jobs
++ * interpreted (230 ms each, the menu at 1 fps). So at an interpreter step
++ * that no resident span covers with a lifted function, look the bytes at pc
++ * up among the lifted fragments' function entries: when they match an entry
++ * and the fragment's first quadword sits where that entry implies, the
++ * fragment is resident there -- claim it, and the step rejoins lifted code.
++ * Position-independent code that is byte-identical behaves identically, and
++ * both the entry (64 bytes) and the fragment start are compared. */
++static void spu_pic_claim(spu_context* ctx, const spu_ovl_src* o, uint32_t lsa, uint32_t ea, uint32_t size);
++static unsigned spu_pic_hash(uint32_t w);
++static int spu_pic_sigs_ready(void);
++typedef struct { uint32_t w[4]; uint32_t rel; int src; int next; } spu_pic_entry;
++static uint64_t s_pic_entry_filter[64];
++static spu_pic_entry* s_pic_entries;
++static int s_pic_entry_head[4096];
++static int spu_pic_entries_build(void);
++static int spu_pic_entries_ready(void)
++{
++    static int s_state;                    /* 0 not built, 1 building, 2 ready, 3 none */
++    int st = __atomic_load_n(&s_state, __ATOMIC_ACQUIRE);
++    if (st >= 2) return st == 2;
++    int expect = 0;
++    if (__atomic_compare_exchange_n(&s_state, &expect, 1, 0, __ATOMIC_ACQ_REL, __ATOMIC_ACQUIRE)) {
++        st = spu_pic_entries_build() ? 2 : 3;
++        __atomic_store_n(&s_state, st, __ATOMIC_RELEASE);
++        return st == 2;
++    }
++    while ((st = __atomic_load_n(&s_state, __ATOMIC_ACQUIRE)) == 1) {
++#ifdef _WIN32
++        SwitchToThread();
++#else
++        sched_yield();
++#endif
++    }
++    return st == 2;
++}
++static int spu_pic_entries_build(void)
++{
++    int s_ready = 0;
++    if (!spu_pic_sigs_ready()) return 0;
++    for (int h = 0; h < 4096; h++) s_pic_entry_head[h] = -1;
++    int cap = 0, n = 0;
++    for (uint32_t r = 0; r < s_registry_count; r++) {
++        const spu_reg_entry* e = &s_registry[r];
++        for (int i = 0; i < s_ovl_src_count; i++) {
++            const spu_ovl_src* o = &s_ovl_src[i];
++            if (!o->sig_ready || o->image_id != e->image_id) continue;
++            const uint32_t rel = e->addr - o->pic_base;
++            if (rel >= o->span) break;
++            if (n == cap) {
++                cap = cap ? cap * 2 : 1024;
++                spu_pic_entry* grown = (spu_pic_entry*)realloc(s_pic_entries, (size_t)cap * sizeof *grown);
++                if (!grown) return n > 0;
++                s_pic_entries = grown;
++            }
++            spu_pic_entry* p = &s_pic_entries[n];
++            const uint8_t* src = vm_base + o->src_ea + rel;
++            for (int k = 0; k < 4; k++)
++                p->w[k] = ((uint32_t)src[4 * k] << 24) | ((uint32_t)src[4 * k + 1] << 16) |
++                          ((uint32_t)src[4 * k + 2] << 8) | src[4 * k + 3];
++            p->rel = rel; p->src = i;
++            const unsigned h = spu_pic_hash(p->w[0]);
++            p->next = s_pic_entry_head[h]; s_pic_entry_head[h] = n;
++            s_pic_entry_filter[h >> 6] |= 1ull << (h & 63);
++            n++;
++            break;
++        }
++    }
++    (void)s_ready;
++    return n > 0;
++}
++
++static int spu_pic_content_claim(spu_context* ctx, uint32_t lsa)
++{
++    if (lsa + 64 > SPU_LS_SIZE || !spu_pic_entries_ready()) return 0;
++    const uint8_t* at = ctx->ls + lsa;
++    const uint32_t w0 = ((uint32_t)at[0] << 24) | ((uint32_t)at[1] << 16) | ((uint32_t)at[2] << 8) | at[3];
++    const unsigned h = spu_pic_hash(w0);
++    if (!((s_pic_entry_filter[h >> 6] >> (h & 63)) & 1)) return 0;
++    {   int owner = 0; const uint32_t pic = ctx->pic_delta;
++        spu_fn fn = spu_resident_code_fn(ctx, lsa, &owner);
++        ctx->pic_delta = pic;
++        if (fn) return 0; }                /* already resident and lifted */
++    for (int i = s_pic_entry_head[h]; i >= 0; i = s_pic_entries[i].next) {
++        const spu_pic_entry* p = &s_pic_entries[i];
++        if (p->w[0] != w0 || p->rel > lsa) continue;
++        const spu_ovl_src* o = &s_ovl_src[p->src];
++        const uint32_t n = (o->span - p->rel < 64u) ? o->span - p->rel : 64u;
++        if (memcmp(at, vm_base + o->src_ea + p->rel, n) != 0) continue;
++        const uint32_t lsa0 = lsa - p->rel;
++        if (memcmp(ctx->ls + lsa0, o->sig, 16) != 0) continue;
++        /* Spans this one now covers are stale: the bytes there are this fragment. */
++        for (unsigned slot = 0; slot < SPU_RESIDENT_CODE_SLOTS; ++slot)
++            if (ctx->resident_code[slot].image_id &&
++                ctx->resident_code[slot].lsa < lsa0 + o->span &&
++                lsa0 < ctx->resident_code[slot].lsa + ctx->resident_code[slot].size)
++                ctx->resident_code[slot].image_id = 0;
++        if (spu_pic_log())
++            fprintf(stderr, "[spu-pic] content-claim img=%d at lsa=0x%05X (entry +0x%X at pc=0x%05X)\n",
++                    o->image_id, lsa0, p->rel, lsa);
++        spu_pic_claim(ctx, o, lsa0, o->src_ea, o->span);
++        return 1;
++    }
++    return 0;
++}
++
+ int spu_lifted_probe(spu_context* ctx, uint32_t lsa)
+ {
+     lsa &= SPU_LS_MASK;
+@@ -1821,6 +1933,8 @@ int spu_lifted_probe(spu_context* ctx, uint32_t lsa)
+      * to lifted code. Default 9 (1 | 8). */
+     static int s_mask = -1;
+     if (s_mask < 0) { const char* e = getenv("SPU_PROBE"); s_mask = e && *e ? atoi(e) : 9; }
++    /* A lifted fragment recognised by its bytes (spu_pic_content_claim). */
++    if ((s_mask & 1) && spu_pic_content_claim(ctx, lsa)) return 1;
+     /* Fast "no": no image this context could dispatch to has a function at
+      * lsa, and lsa is in no streamed code span (whose lifts sit elsewhere). */
+     {   int spans = 0;
+@@ -2014,6 +2128,94 @@ void spu_lockguard_check(spu_context* ctx, uint32_t ea, const uint8_t* src, uint
+                 ea, size, os, on, ns, nn); }
+ }
+ 
++/* Claim a resident_code slot for a position-independent (or fixed) code span
++ * that landed at `lsa`, from `ea`, with `size` bytes from there in the GET. */
++static void spu_pic_claim(spu_context* ctx, const spu_ovl_src* o, uint32_t lsa, uint32_t ea, uint32_t size)
++{
++        if (lsa + o->span > SPU_LS_SIZE) return;
++        for (unsigned slot = 0; slot < SPU_RESIDENT_CODE_SLOTS; ++slot) {
++            if (ctx->resident_code[slot].image_id && ctx->resident_code[slot].lsa != lsa)
++                continue;
++            ctx->resident_code[slot].lsa = lsa;
++            /* A position-independent fragment's span is an upper bound
++             * (fragments are packed back to back); the GET that brings it
++             * in is the whole fragment, so its size is the exact extent. */
++            ctx->resident_code[slot].size = (o->pic_base && size < o->span) ? size : o->span;
++            ctx->resident_code[slot].source_ea = ea;
++            ctx->resident_code[slot].base = o->pic_base;
++            ctx->resident_code[slot].image_id = o->image_id;
++            s_code_seq[ctx->spu_id & 15][slot] = ++s_code_clock;
++            if (o->pic_base && spu_pic_log())
++                fprintf(stderr, "[spu-pic] claim slot=%u img=%d ea=0x%08X lsa=0x%05X size=0x%X spu=%u\n",
++                        slot, o->image_id, ea, lsa, ctx->resident_code[slot].size, ctx->spu_id);
++            return;
++        }
++        /* All spans taken: a job's fragments land at new addresses every
++         * time and the old spans are only freed when a GET overlaps them.
++         * Replace the one claimed longest ago: the running job's own
++         * fragments (at most six) are always the newest. A span replaced
++         * this way only loses its lift (its bytes fall to the
++         * interpreter). The claim order is kept per SPU outside the
++         * context; a shared spu_id only makes the choice worse, never
++         * wrong. */
++        { unsigned slot = 0;
++          const uint32_t* q = s_code_seq[ctx->spu_id & 15];
++          for (unsigned k = 1; k < SPU_RESIDENT_CODE_SLOTS; ++k)
++              if (q[k] < q[slot]) slot = k;
++          s_code_seq[ctx->spu_id & 15][slot] = ++s_code_clock;
++          if (o->pic_base && spu_pic_log())
++              fprintf(stderr, "[spu-pic] replace slot=%u img=%d (was %d) ea=0x%08X lsa=0x%05X\n",
++                      slot, o->image_id, ctx->resident_code[slot].image_id, ea, lsa);
++          ctx->resident_code[slot].lsa = lsa;
++          ctx->resident_code[slot].size = (o->pic_base && size < o->span) ? size : o->span;
++          ctx->resident_code[slot].source_ea = ea;
++          ctx->resident_code[slot].base = o->pic_base;
++          ctx->resident_code[slot].image_id = o->image_id; }
++}
++
++/* Fragment signatures for the scan below: each position-independent span's
++ * first 16 bytes, read from guest memory once it is loaded (the executable's
++ * segments are, before any SPU runs), and a 4096-bit filter on their first words. */
++static uint64_t s_pic_filter[64];   /* 4096 bits */
++static unsigned spu_pic_hash(uint32_t w) { return (w ^ (w >> 12) ^ (w >> 24)) & 4095u; }
++static int spu_pic_sigs_build(void);
++static int spu_pic_sigs_ready(void)
++{
++    static int s_state;                    /* 0 not built, 1 building, 2 ready, 3 none */
++    int st = __atomic_load_n(&s_state, __ATOMIC_ACQUIRE);
++    if (st >= 2) return st == 2;
++    int expect = 0;
++    if (__atomic_compare_exchange_n(&s_state, &expect, 1, 0, __ATOMIC_ACQ_REL, __ATOMIC_ACQUIRE)) {
++        st = spu_pic_sigs_build() ? 2 : 3;
++        __atomic_store_n(&s_state, st, __ATOMIC_RELEASE);
++        return st == 2;
++    }
++    while ((st = __atomic_load_n(&s_state, __ATOMIC_ACQUIRE)) == 1) {
++#ifdef _WIN32
++        SwitchToThread();
++#else
++        sched_yield();
++#endif
++    }
++    return st == 2;
++}
++static int spu_pic_sigs_build(void)
++{
++    int n = 0;
++    for (int i = 0; i < s_ovl_src_count; i++) {
++        spu_ovl_src* o = &s_ovl_src[i];
++        if (!o->pic_base || o->has_sig || !o->src_ea) continue;
++        memcpy(o->sig, vm_base + o->src_ea, 16);
++        o->first_word = ((uint32_t)o->sig[0] << 24) | ((uint32_t)o->sig[1] << 16) |
++                        ((uint32_t)o->sig[2] << 8) | o->sig[3];
++        if (!o->first_word) continue;
++        o->sig_ready = 1;
++        s_pic_filter[spu_pic_hash(o->first_word) >> 6] |= 1ull << (spu_pic_hash(o->first_word) & 63);
++        n++;
++    }
++    return n > 0;
++}
++
+ void spu_overlay_note_get(spu_context* ctx, uint32_t ea, const uint8_t* ls, uint32_t size)
+ {
+     uint32_t lsa = (uint32_t)(ls - ctx->ls);
+@@ -2036,45 +2238,7 @@ void spu_overlay_note_get(spu_context* ctx, uint32_t ea, const uint8_t* ls, uint
+                              : (o->src_ea == ea);
+         if (hit) {
+             if (o->span) {
+-                if (lsa + o->span > SPU_LS_SIZE) return;
+-                for (unsigned slot = 0; slot < SPU_RESIDENT_CODE_SLOTS; ++slot) {
+-                    if (ctx->resident_code[slot].image_id && ctx->resident_code[slot].lsa != lsa)
+-                        continue;
+-                    ctx->resident_code[slot].lsa = lsa;
+-                    /* A position-independent fragment's span is an upper bound
+-                     * (fragments are packed back to back); the GET that brings it
+-                     * in is the whole fragment, so its size is the exact extent. */
+-                    ctx->resident_code[slot].size = (o->pic_base && size < o->span) ? size : o->span;
+-                    ctx->resident_code[slot].source_ea = ea;
+-                    ctx->resident_code[slot].base = o->pic_base;
+-                    ctx->resident_code[slot].image_id = o->image_id;
+-                    s_code_seq[ctx->spu_id & 15][slot] = ++s_code_clock;
+-                    if (o->pic_base && spu_pic_log())
+-                        fprintf(stderr, "[spu-pic] claim slot=%u img=%d ea=0x%08X lsa=0x%05X size=0x%X spu=%u\n",
+-                                slot, o->image_id, ea, lsa, ctx->resident_code[slot].size, ctx->spu_id);
+-                    return;
+-                }
+-                /* All spans taken: a job's fragments land at new addresses every
+-                 * time and the old spans are only freed when a GET overlaps them.
+-                 * Replace the one claimed longest ago: the running job's own
+-                 * fragments (at most six) are always the newest. A span replaced
+-                 * this way only loses its lift (its bytes fall to the
+-                 * interpreter). The claim order is kept per SPU outside the
+-                 * context; a shared spu_id only makes the choice worse, never
+-                 * wrong. */
+-                { unsigned slot = 0;
+-                  const uint32_t* q = s_code_seq[ctx->spu_id & 15];
+-                  for (unsigned k = 1; k < SPU_RESIDENT_CODE_SLOTS; ++k)
+-                      if (q[k] < q[slot]) slot = k;
+-                  s_code_seq[ctx->spu_id & 15][slot] = ++s_code_clock;
+-                  if (o->pic_base && spu_pic_log())
+-                      fprintf(stderr, "[spu-pic] replace slot=%u img=%d (was %d) ea=0x%08X lsa=0x%05X\n",
+-                              slot, o->image_id, ctx->resident_code[slot].image_id, ea, lsa);
+-                  ctx->resident_code[slot].lsa = lsa;
+-                  ctx->resident_code[slot].size = (o->pic_base && size < o->span) ? size : o->span;
+-                  ctx->resident_code[slot].source_ea = ea;
+-                  ctx->resident_code[slot].base = o->pic_base;
+-                  ctx->resident_code[slot].image_id = o->image_id; }
++                spu_pic_claim(ctx, o, lsa, ea, size);
+                 return;
+             }
+             if (ctx->resident_ovl != o->image_id) {
+@@ -2088,6 +2252,34 @@ void spu_overlay_note_get(spu_context* ctx, uint32_t ea, const uint8_t* ls, uint
+             return;
+         }
+     }
++    /* Fragments inside a bigger GET. Some jobs do not stream their code from
++     * the executable: the game first copies a job's header and code fragments
++     * into a heap buffer, and the job brings the whole block in with one GET
++     * (God of War: Ascension's module 207 in the main menu: 0x29C0 bytes from
++     * the heap, a 0x60-byte header, then its fragments). No source EA matches,
++     * so look for the fragments by content at every quadword of the block; the
++     * filter on their first words keeps the scan to one load per quadword. */
++    if (size >= 0x200 && spu_pic_sigs_ready()) {
++        /* Find them all first: each one's extent ends where the next begins. */
++        const spu_ovl_src* hit_o[SPU_RESIDENT_CODE_SLOTS]; uint32_t hit_off[SPU_RESIDENT_CODE_SLOTS];
++        unsigned nhit = 0;
++        for (uint32_t off = 0; off + 16 <= size && lsa + off < SPU_LS_SIZE && nhit < SPU_RESIDENT_CODE_SLOTS; off += 16) {
++            const uint32_t w = ((uint32_t)ls[off] << 24) | ((uint32_t)ls[off + 1] << 16) |
++                               ((uint32_t)ls[off + 2] << 8) | ls[off + 3];
++            const unsigned h = spu_pic_hash(w);
++            if (!((s_pic_filter[h >> 6] >> (h & 63)) & 1)) continue;
++            for (int i = 0; i < s_ovl_src_count; i++) {
++                const spu_ovl_src* o = &s_ovl_src[i];
++                if (!o->sig_ready || o->first_word != w || memcmp(ls + off, o->sig, 16) != 0) continue;
++                hit_o[nhit] = o; hit_off[nhit] = off; nhit++;
++                break;
++            }
++        }
++        for (unsigned k = 0; k < nhit; k++) {
++            const uint32_t stop = k + 1 < nhit ? hit_off[k + 1] : size;
++            spu_pic_claim(ctx, hit_o[k], lsa + hit_off[k], ea + hit_off[k], stop - hit_off[k]);
++        }
++    }
+ }
+ 
+ /* Match a 16-byte module header against the registered content signatures.
+diff --git a/runtime/spu/spu_context.h b/runtime/spu/spu_context.h
+index cde5489..5ca4e42 100644
+--- a/runtime/spu/spu_context.h
++++ b/runtime/spu/spu_context.h
+@@ -38,17 +38,17 @@ extern "C" {
+  * Fires from every SPU image's spu_ls_read128/write128. Cheap: one cached
+  * compare on the hot path when disabled.
+  * -----------------------------------------------------------------------*/
+-/* The check sits on every spu_ls_read128/write128, so the disabled case must
+- * be one load and a branch: it was a real call (the function-local statics
+- * kept it out of line) and ~9% of GH3's FMOD mixer task. The list lives in
+- * spu_channels.c; g_spu_ls_watch_n is -1 until the first check reads the env. */
+-extern int g_spu_ls_watch_n;
+-void spu_ls_watch_slow(uint32_t lsa, int is_write, const uint8_t* p, uint32_t pc, uint32_t lr);
+-unsigned* spu_ls_watch_list(int* out_n);   /* the armed lines (n may be 0) */
++/* The check sits on every spu_ls_read128/write128, so the disabled case must
++ * be one load and a branch: it was a real call (the function-local statics
++ * kept it out of line) and ~9% of GH3's FMOD mixer task. The list lives in
++ * spu_channels.c; g_spu_ls_watch_n is -1 until the first check reads the env. */
++extern int g_spu_ls_watch_n;
++void spu_ls_watch_slow(uint32_t lsa, int is_write, const uint8_t* p, uint32_t pc, uint32_t lr);
++unsigned* spu_ls_watch_list(int* out_n);   /* the armed lines (n may be 0) */
+ static inline void spu_ls_watch_hit2(uint32_t lsa, int is_write, const uint8_t* p,
+                                      uint32_t pc, uint32_t lr) {
+-    if (__builtin_expect(g_spu_ls_watch_n == 0, 1)) return;
+-    spu_ls_watch_slow(lsa, is_write, p, pc, lr);
++    if (__builtin_expect(g_spu_ls_watch_n == 0, 1)) return;
++    spu_ls_watch_slow(lsa, is_write, p, pc, lr);
+ }
+ static inline void spu_ls_watch_hit(uint32_t lsa, int is_write, const uint8_t* p) {
+     spu_ls_watch_hit2(lsa, is_write, p, 0, 0);
+@@ -285,9 +285,12 @@ typedef struct spu_context {
+     int resident_ovl;
+     /* Independently streamed code buffers can coexist with the policy overlay.
+      * Each mapping records which translated image owns that local-store span. */
+-    /* Eight: a WWS job can stream three code fragments into each of its
+-     * two input buffers (God of War: Ascension, module 209). */
+-#define SPU_RESIDENT_CODE_SLOTS 8
++    /* A WWS job can stream three code fragments into each of its two input
++     * buffers (God of War: Ascension, module 209), and a job that brings a
++     * heap copy of a long stretch of the executable carries a dozen at once
++     * (module 207 in the main menu): with eight, the last ones found evicted
++     * the first and the job ran interpreted. */
++#define SPU_RESIDENT_CODE_SLOTS 32
+     /* base: where a position-independent image was lifted (0 = lifted in
+      * place); code there runs with pic_delta = lsa - base. */
+     struct {
+@@ -383,22 +386,22 @@ typedef struct spu_context {
+     uint64_t list_stall_ea_base[32];      /* ea base (hi32 carries), per tag */
+     uint32_t list_stall_cmd[32];          /* base (non-list) MFC command, per tag */
+ 
+-    /* Register file saved when an interrupt is taken, restored at its iret
+-     * (spu_drain.c). Per context: it used to be an 8-slot global table claimed
+-     * without a lock, and two SPU threads taking interrupts at once could take
+-     * the same slot -- one lost its save and returned from the handler with
+-     * the handler's registers. */
+-    int      irq_saved;
+-    uint32_t irq_resume_pc;
+-    u128     irq_gpr[128];
+-
+-    /* Return pc of the innermost spu_drain_call (0 = none). The interpreter
+-     * rejoins there: a return point sits mid-function, so it is no lifted
+-     * entry, and without this the interpreter ran a job's return straight on
+-     * through the caller's code until the next lifted entry -- GH3's job
+-     * manager then ran its buffer loop a second time on the job's registers
+-     * and died in its own assert (the song-freeze). */
+-    uint32_t drain_ret_pc;
++    /* Register file saved when an interrupt is taken, restored at its iret
++     * (spu_drain.c). Per context: it used to be an 8-slot global table claimed
++     * without a lock, and two SPU threads taking interrupts at once could take
++     * the same slot -- one lost its save and returned from the handler with
++     * the handler's registers. */
++    int      irq_saved;
++    uint32_t irq_resume_pc;
++    u128     irq_gpr[128];
++
++    /* Return pc of the innermost spu_drain_call (0 = none). The interpreter
++     * rejoins there: a return point sits mid-function, so it is no lifted
++     * entry, and without this the interpreter ran a job's return straight on
++     * through the caller's code until the next lifted entry -- GH3's job
++     * manager then ran its buffer loop a second time on the job's registers
++     * and died in its own assert (the song-freeze). */
++    uint32_t drain_ret_pc;
+ } spu_context;
+ 
+ /* Reserved LS addresses (inside the kernel area, below the 0xA00 policy-module
+@@ -489,26 +492,26 @@ static inline void spu_ls_write32(spu_context* ctx, uint32_t lsa, uint32_t val)
+ #define SPU_LS_FAST 1
+ #endif
+ 
+-/* Debug probes of spu_ls_read128, out of line: inlined they kept every LS
+- * load a real call (~10% of GH3's FMOD mixer task). g_spu_ls_probe is -1
+- * until the first call reads SPU_LS_LOWREAD, then 0/1. */
+-
+-/* The diagnostic gates the inline helpers below read. Defined here rather than
+- * in spu_channels.c, as one merged definition per program (selectany / weak),
+- * so every target that includes this header links whether or not it builds
+- * spu_channels.c -- the SPU unit tests and sync_stress do not. */
+-#if defined(_MSC_VER)
+-#  define SPU_GATE __declspec(selectany)
+-#else
+-#  define SPU_GATE __attribute__((weak))
+-#endif
+-SPU_GATE int g_spu_ls_probe   = -1;  /* spu_ls_read_probe (SPU_LS_LOWREAD)      */
+-SPU_GATE int g_spu_smc_watch  = -1;  /* spu_ls_write_probe_smc (SPU_SMC_WATCH)  */
+-SPU_GATE int g_wws_code_probe = 0;   /* WWS code-buffer resolution, capped      */
+-SPU_GATE int g_wws_read_probe = 0;
+-static __attribute__((noinline, cold)) void spu_ls_read_probe(const spu_context* ctx, uint32_t lsa)
++/* Debug probes of spu_ls_read128, out of line: inlined they kept every LS
++ * load a real call (~10% of GH3's FMOD mixer task). g_spu_ls_probe is -1
++ * until the first call reads SPU_LS_LOWREAD, then 0/1. */
++
++/* The diagnostic gates the inline helpers below read. Defined here rather than
++ * in spu_channels.c, as one merged definition per program (selectany / weak),
++ * so every target that includes this header links whether or not it builds
++ * spu_channels.c -- the SPU unit tests and sync_stress do not. */
++#if defined(_MSC_VER)
++#  define SPU_GATE __declspec(selectany)
++#else
++#  define SPU_GATE __attribute__((weak))
++#endif
++SPU_GATE int g_spu_ls_probe   = -1;  /* spu_ls_read_probe (SPU_LS_LOWREAD)      */
++SPU_GATE int g_spu_smc_watch  = -1;  /* spu_ls_write_probe_smc (SPU_SMC_WATCH)  */
++SPU_GATE int g_wws_code_probe = 0;   /* WWS code-buffer resolution, capped      */
++SPU_GATE int g_wws_read_probe = 0;
++static __attribute__((noinline, cold)) void spu_ls_read_probe(const spu_context* ctx, uint32_t lsa)
+ {
+-    if (g_spu_ls_probe < 0) g_spu_ls_probe = getenv("SPU_LS_LOWREAD") ? 1 : 0;
++    if (g_spu_ls_probe < 0) g_spu_ls_probe = getenv("SPU_LS_LOWREAD") ? 1 : 0;
+     /* SPU_LS_LOWREAD=1: a job that reads its OWN first bytes as data is
+      * dereferencing a null base -- the job binary loads at LS 0, so [NULL+off]
+      * returns its own instruction words. Report each distinct low address once,
+@@ -542,13 +545,13 @@ static __attribute__((noinline, cold)) void spu_ls_read_probe(const spu_context*
+                     off >> 6, (off >> 2) & 0xF, off);
+         }
+     }
+-}
+-
+-static inline u128 spu_ls_read128(const spu_context* ctx, uint32_t lsa)
+-{
+-    u128 v;
+-    if (__builtin_expect(g_spu_ls_probe != 0, 0) || (ctx->image_id == 2 && ctx->policy_mode))
+-        spu_ls_read_probe(ctx, lsa);
++}
++
++static inline u128 spu_ls_read128(const spu_context* ctx, uint32_t lsa)
++{
++    u128 v;
++    if (__builtin_expect(g_spu_ls_probe != 0, 0) || (ctx->image_id == 2 && ctx->policy_mode))
++        spu_ls_read_probe(ctx, lsa);
+     lsa &= SPU_LS_MASK & ~0xFu;
+     const uint8_t* p = &ctx->ls[lsa];
+     spu_ls_watch_hit2(lsa, 0, p, (uint32_t)ctx->pc & SPU_LS_MASK,
+@@ -570,7 +573,7 @@ static inline u128 spu_ls_read128(const spu_context* ctx, uint32_t lsa)
+     return v;
+ }
+ 
+-static __attribute__((noinline, cold)) void spu_ls_write_probe_pre(spu_context* ctx, uint32_t lsa, u128 val)
++static __attribute__((noinline, cold)) void spu_ls_write_probe_pre(spu_context* ctx, uint32_t lsa, u128 val)
+ {
+     if (lsa == 0x1320 && ctx->image_id == 2 && ctx->policy_mode) {
+         extern int g_wws_code_probe;   /* defined in spu_channels.c, capped */
+@@ -598,12 +601,12 @@ static __attribute__((noinline, cold)) void spu_ls_write_probe_pre(spu_context*
+             #undef _RD32
+         }
+     }
+-}
+-/* SPU_SMC_WATCH, out of line: g_spu_smc_watch is -1 until read, then 0/1. */
+-extern int g_spu_smc_watch;
+-static __attribute__((noinline, cold)) void spu_ls_write_probe_smc(spu_context* ctx, uint32_t lsa, const uint8_t* p)
+-{
+-    if (g_spu_smc_watch < 0) g_spu_smc_watch = getenv("SPU_SMC_WATCH") ? 1 : 0;
++}
++/* SPU_SMC_WATCH, out of line: g_spu_smc_watch is -1 until read, then 0/1. */
++extern int g_spu_smc_watch;
++static __attribute__((noinline, cold)) void spu_ls_write_probe_smc(spu_context* ctx, uint32_t lsa, const uint8_t* p)
++{
++    if (g_spu_smc_watch < 0) g_spu_smc_watch = getenv("SPU_SMC_WATCH") ? 1 : 0;
+     /* SPU_SMC_WATCH=<img>: self-modification detector. Log any store whose
+      * target LS line falls inside that image's CODE segment (the segment
+      * bounds come from SPU_SMC_LO/HI, default the pm_wwsjob range 0xA00..
+@@ -623,38 +626,38 @@ static __attribute__((noinline, cold)) void spu_ls_write_probe_smc(spu_context*
+       } }
+ }
+ 
+-static inline void spu_ls_write128(spu_context* ctx, uint32_t lsa, u128 val)
+-{
+-    lsa &= SPU_LS_MASK & ~0xFu;
+-    uint8_t* p = &ctx->ls[lsa];
+-    /* WWS code-buffer probe: LBP's ChangeLoadToRunJob dispatches to LS[0x1320]
+-     * (= lsaJobCodeBuffer in LBP's layout) + entryOffset. When TecRunJob writes
+-     * that code-buffer LS address, dump the RunJob decision inputs so we can see
+-     * why it resolves to an empty buffer: the resolved address, the whole
+-     * bufferSetArray (0xDF0), and the live loadCommands (0xC00) whose RunJob
+-     * command (commandNum==5) names the code buffer set. */
+-    if (lsa == 0x1320 && ctx->image_id == 2 && ctx->policy_mode)
+-        spu_ls_write_probe_pre(ctx, lsa, val);
+-#if SPU_LS_FAST
+-    uint32_t w0 = SPU_BSWAP32(val._u32[0]), w1 = SPU_BSWAP32(val._u32[1]);
+-    uint32_t w2 = SPU_BSWAP32(val._u32[2]), w3 = SPU_BSWAP32(val._u32[3]);
+-    memcpy(p,      &w0, 4); memcpy(p + 4,  &w1, 4);
+-    memcpy(p + 8,  &w2, 4); memcpy(p + 12, &w3, 4);
+-#else
+-    for (int i = 0; i < 4; i++) {
+-        uint32_t w = val._u32[i];
+-        p[i*4]     = (uint8_t)(w >> 24);
+-        p[i*4 + 1] = (uint8_t)(w >> 16);
+-        p[i*4 + 2] = (uint8_t)(w >>  8);
+-        p[i*4 + 3] = (uint8_t)w;
+-    }
+-#endif
+-    spu_ls_watch_hit2(lsa, 1, p, (uint32_t)ctx->pc & SPU_LS_MASK,
+-                      ctx->gpr[0]._u32[0] & SPU_LS_MASK);
+-    if (__builtin_expect(g_spu_smc_watch != 0, 0))
+-        spu_ls_write_probe_smc(ctx, lsa, p);
+-}
+-
++static inline void spu_ls_write128(spu_context* ctx, uint32_t lsa, u128 val)
++{
++    lsa &= SPU_LS_MASK & ~0xFu;
++    uint8_t* p = &ctx->ls[lsa];
++    /* WWS code-buffer probe: LBP's ChangeLoadToRunJob dispatches to LS[0x1320]
++     * (= lsaJobCodeBuffer in LBP's layout) + entryOffset. When TecRunJob writes
++     * that code-buffer LS address, dump the RunJob decision inputs so we can see
++     * why it resolves to an empty buffer: the resolved address, the whole
++     * bufferSetArray (0xDF0), and the live loadCommands (0xC00) whose RunJob
++     * command (commandNum==5) names the code buffer set. */
++    if (lsa == 0x1320 && ctx->image_id == 2 && ctx->policy_mode)
++        spu_ls_write_probe_pre(ctx, lsa, val);
++#if SPU_LS_FAST
++    uint32_t w0 = SPU_BSWAP32(val._u32[0]), w1 = SPU_BSWAP32(val._u32[1]);
++    uint32_t w2 = SPU_BSWAP32(val._u32[2]), w3 = SPU_BSWAP32(val._u32[3]);
++    memcpy(p,      &w0, 4); memcpy(p + 4,  &w1, 4);
++    memcpy(p + 8,  &w2, 4); memcpy(p + 12, &w3, 4);
++#else
++    for (int i = 0; i < 4; i++) {
++        uint32_t w = val._u32[i];
++        p[i*4]     = (uint8_t)(w >> 24);
++        p[i*4 + 1] = (uint8_t)(w >> 16);
++        p[i*4 + 2] = (uint8_t)(w >>  8);
++        p[i*4 + 3] = (uint8_t)w;
++    }
++#endif
++    spu_ls_watch_hit2(lsa, 1, p, (uint32_t)ctx->pc & SPU_LS_MASK,
++                      ctx->gpr[0]._u32[0] & SPU_LS_MASK);
++    if (__builtin_expect(g_spu_smc_watch != 0, 0))
++        spu_ls_write_probe_smc(ctx, lsa, p);
++}
++
+ /* ---------------------------------------------------------------------------
+  * Preferred slot extraction
+  *
+diff --git a/tools/lift_spu_pic.py b/tools/lift_spu_pic.py
+index 335430f..2b9db7e 100644
+--- a/tools/lift_spu_pic.py
++++ b/tools/lift_spu_pic.py
+@@ -12,7 +12,10 @@ spu_overlay_register_pic(): the MFC GET of the fragment marks it resident at
+ whatever LS address it landed at, and dispatch runs the lift with
+ ctx->pic_delta = (that address) - lift base.
+ 
+-Input (--fragments): JSON list of {"ea": "0x71ab60", "span": "0x7c0"}. The span
++Input (--fragments): JSON list of {"ea": "0x71ab60", "span": "0x7c0"}, with an
++optional "entries": ["0x71ab88", ...] of further entry EAs inside it (a job that
++copies a long stretch of the executable can enter a function in the middle of
++it; the fragment then starts at the quadword before). The span
+ may be an upper bound (fragments are packed back to back in the executable and
+ their sizes are only known from the jobs' DMA lists): the runtime takes the
+ real extent from the GET. Its first instruction is the entry.
+@@ -81,8 +84,10 @@ def main():
+         prefix = name + "_"
+         with open(tmp_elf, "wb") as f:
+             f.write(wrap(raw, base=base, entry=base))
++        extra = [base] + [base + int(e, 0) - ea for e in fr.get("entries", [])
++                          if ea <= int(e, 0) < ea + span]
+         cmd = [sys.executable, LIFTER, "--auto-functions", tmp_elf, "--base", hex(base),
+-               "--pic", "--return-entries", "--extra-funcs", hex(base),
++               "--pic", "--return-entries", "--extra-funcs", ",".join(hex(x) for x in extra),
+                "--symbol-prefix", prefix, "-o", os.path.join(args.out, name),
+                "--source-name", "spu_recomp.c", "--header-name", "spu_recomp.h"]
+         r = subprocess.run(cmd, capture_output=True, text=True)
+-- 
+2.55.0.windows.5
+

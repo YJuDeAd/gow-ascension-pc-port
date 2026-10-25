@@ -1,0 +1,141 @@
+From bb12b31e9b7fa4e502fad115b94a7303c8361b26 Mon Sep 17 00:00:00 2001
+From: Arnaldo Lima <arnaldolimaof@gmail.com>
+Date: Fri, 16 Oct 2026 08:03:06 -0300
+Subject: [PATCH 09/14] Diagnostics: SPURS_KICKLOG, SPURS_WLDUMP(_EA),
+ SPU_PCWATCH
+
+from gow-ascension-pc@676eefe
+
+- SPURS_KICKLOG=<n>: every kernel dispatch with work waiting (ready count
+  or signal), with the workload's data EA; the POKE log stops at four.
+- SPURS_WLDUMP=<seconds>: periodically dump the first 0x100 bytes of each
+  workload's data (a Wws job list header and its progress rows), plus
+  SPURS_WLDUMP_EA=<hex,...> for any other EAs.
+- SPU_PCWATCH=<hex,...>: log when interpreted or microstepped SPU code
+  reaches an LS address, with the word at LS 0x4000 naming the job module.
+  Runtime-loaded job code has no lifted symbol to break on.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ libs/spurs/cellSpurs.c     | 41 ++++++++++++++++++++++++++++++++++++++
+ runtime/spu/spu_channels.c |  2 ++
+ runtime/spu/spu_interp.c   | 23 +++++++++++++++++++++
+ 3 files changed, 66 insertions(+)
+
+diff --git a/libs/spurs/cellSpurs.c b/libs/spurs/cellSpurs.c
+index 38ca139..e4bbb5d 100644
+--- a/libs/spurs/cellSpurs.c
++++ b/libs/spurs/cellSpurs.c
+@@ -1840,6 +1840,36 @@ static DWORD WINAPI spurs_kernel_thread(LPVOID p)
+         AcquireSRWLockExclusive(&s_workload_registry_lock);
+         si->pass_no++;
+         u32 enabled = vm_read32(ea + SPURS_WKL_ENABLED);
++        /* SPURS_WLDUMP=<seconds>: every so often, the first 0x100 bytes of
++         * each workload's data (for a Wws workload, its job list header and
++         * the per-SPU progress rows), to compare a list that completes with
++         * one that stalls. */
++        { static long s_wd = -2; static unsigned long long s_next = 0;
++          if (s_wd == -2) { const char* e = getenv("SPURS_WLDUMP"); s_wd = e ? atol(e) : -1; }
++          const unsigned long long now = GetTickCount64();
++          if (s_wd > 0 && now >= s_next) {
++              s_next = now + (unsigned long long)s_wd * 1000ull;
++              for (u32 w = 0; w < (si->is2 ? SPURS_MAX_WID : 16u); w++) {
++                  if (!s_workloads[w].in_use || s_workloads[w].spurs_ea != ea) continue;
++                  const u32 d = (u32)vm_read64(ea + wkl_info_off(w) + 8);
++                  if (!d || d >= 0xF0000000u) continue;
++                  fprintf(stderr, "[wl-dump] t=%llu wid=%u data=0x%08X\n", now, w, d);
++                  for (u32 o = 0; o < 0x100; o += 16)
++                      fprintf(stderr, "[wl-dump]   +%03X %08X %08X %08X %08X\n", o,
++                              vm_read32(d + o), vm_read32(d + o + 4), vm_read32(d + o + 8), vm_read32(d + o + 12));
++              }
++              /* SPURS_WLDUMP_EA=<hex>,<hex>,...: extra EAs dumped alongside. */
++              { const char* e = getenv("SPURS_WLDUMP_EA");
++                while (e && *e) {
++                    char* end; const u32 d = (u32)strtoul(e, &end, 16);
++                    fprintf(stderr, "[wl-dump] t=%llu ea=0x%08X\n", now, d);
++                    for (u32 o = 0; o < 0x80; o += 16)
++                        fprintf(stderr, "[wl-dump]   +%03X %08X %08X %08X %08X\n", o,
++                                vm_read32(d + o), vm_read32(d + o + 4), vm_read32(d + o + 8), vm_read32(d + o + 12));
++                    e = (*end == ',') ? end + 1 : NULL;
++                } }
++              fflush(stderr);
++          } }
+         for (u32 sn = 0; sn < si->nspus; sn++) {
+             struct SpursPmSlot* slot = &si->slots[sn];
+             if (slot->busy) continue;
+@@ -1859,6 +1889,17 @@ static DWORD WINAPI spurs_kernel_thread(LPVOID p)
+                 if (!pm) continue;
+                 u32 ready = vm_read8(ea + wkl_ready_off(wid));
+                 int kicked = ready || wkl_signalled(ea, wid);
++                /* SPURS_KICKLOG=<n>: every admission that has work waiting
++                 * (ready count or signal), up to n lines. */
++                { static long s_kl = -2;
++                  if (s_kl == -2) { const char* e = getenv("SPURS_KICKLOG"); s_kl = e ? atol(e) : -1; }
++                  if (s_kl > 0 && kicked) {
++                      s_kl--;
++                      fprintf(stderr, "[spurs-kick] t=%llu wid=%u spu=%u ready=%u sig=%d data=0x%llX\n",
++                              (unsigned long long)GetTickCount64(), wid, sn, ready,
++                              wkl_signalled(ea, wid),
++                              (unsigned long long)vm_read64(ea + wkl_info_off(wid) + 8));
++                  } }
+                 if (kicked) si->idle[wid] = 0;
+                 if (!kicked && (si->pass_no & ((1u << si->idle[wid]) - 1)))
+                     continue;
+diff --git a/runtime/spu/spu_channels.c b/runtime/spu/spu_channels.c
+index 506da3f..84787f9 100644
+--- a/runtime/spu/spu_channels.c
++++ b/runtime/spu/spu_channels.c
+@@ -1894,7 +1894,9 @@ void spu_spurs_taskset_syscall(spu_context* ctx)   /* non-static: also called by
+ static int spu_smc_microstep(spu_context* ctx)
+ {
+     uint32_t pc = ctx->pc & SPU_LS_MASK & ~3u;
++    extern void spu_pcwatch(spu_context*, uint32_t);
+     for (int steps = 0; steps < 4096; steps++) {
++        spu_pcwatch(ctx, pc);
+         uint32_t w = ((uint32_t)ctx->ls[pc] << 24) | ((uint32_t)ctx->ls[pc+1] << 16) |
+                      ((uint32_t)ctx->ls[pc+2] << 8) | ctx->ls[pc+3];
+         uint32_t op11 = w >> 21, op9 = w >> 23, op8 = w >> 24, op7 = w >> 25;
+diff --git a/runtime/spu/spu_interp.c b/runtime/spu/spu_interp.c
+index d66ecd6..3f8aa7f 100644
+--- a/runtime/spu/spu_interp.c
++++ b/runtime/spu/spu_interp.c
+@@ -364,6 +364,28 @@ static int spu_step(spu_context* ctx) {
+ }
+ 
+ uint32_t g_spu_interp_last_pc = 0;
++
++/* SPU_PCWATCH=<hex>,<hex>,... : log when interpreted or microstepped code
++ * reaches one of these LS addresses (runtime-loaded job code has no lifted
++ * symbol to break on), with the first word at LS 0x4000 to tell job modules
++ * apart. */
++void spu_pcwatch(spu_context* ctx, uint32_t pc)
++{
++    static int s_pw_n = -1; static uint32_t s_pw[8];
++    if (s_pw_n < 0) { int n = 0; const char* e = getenv("SPU_PCWATCH");
++        while (e && *e && n < 8) { char* end; s_pw[n++] = (uint32_t)strtoul(e, &end, 16);
++            e = (*end == ',') ? end + 1 : NULL; }
++        s_pw_n = n; }
++    for (int k = 0; k < s_pw_n; k++) if (pc == s_pw[k]) {
++        static long s_pw_lines = 0;
++        if (s_pw_lines++ < 400)
++            fprintf(stderr, "[pcwatch] pc=0x%05X img=%d ls4000=%02X%02X%02X%02X r3=%08X r4=%08X r5=%08X r12=%08X r81=%08X\n",
++                    pc, ctx->image_id, ctx->ls[0x4000], ctx->ls[0x4001], ctx->ls[0x4002], ctx->ls[0x4003],
++                    ctx->gpr[3]._u32[0], ctx->gpr[4]._u32[0], ctx->gpr[5]._u32[0],
++                    ctx->gpr[12]._u32[0], ctx->gpr[81]._u32[0]);
++        return;
++    }
++}
+ uint64_t g_spu_interp_steps   = 0;
+ 
+ /* Call-trace ring buffer for diagnosing SPU asserts (env SPU_CALLTRACE). */
+@@ -428,6 +450,7 @@ uint32_t spu_interp_run_until(spu_context* ctx, uint32_t start_lsa, uint32_t sto
+         /* ponytail: pc-only match; a recursive call through the same site would stop early -- compare r1 too if one shows up. */
+         if (ctx->image_id >= 0 && ((stop_lsa && ctx->pc == stop_lsa) || spu_lifted_lookup(ctx, ctx->pc))) { g_spu_interp_steps = steps; g_spu_interp_last_pc = ctx->pc; return ctx->pc; }  /* rejoin fast path */
+         g_spu_interp_last_pc = ctx->pc;
++        spu_pcwatch(ctx, ctx->pc);
+         if (_g1>0) {
+             int inr = (ctx->pc >= 0x26E80u && ctx->pc < 0x26F14u);
+             if (inr) { _g1in = 1; }
+-- 
+2.50.1 (Apple Git-155)
+

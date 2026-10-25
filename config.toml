@@ -14,7 +14,7 @@ width = 1280
 height = 720
 
 # VSync Mode: "on", "off", "adaptive"
-vsync = "on"
+vsync = "off"
 
 # Resolution Scaling Factor: 1 = native (1x), 2 = 2x, 3 = 3x
 scale_factor = 1

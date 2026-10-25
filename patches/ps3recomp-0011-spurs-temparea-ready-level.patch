@@ -1,0 +1,405 @@
+From 37dfb318037b90961ebba39b656727f9caf55fd5 Mon Sep 17 00:00:00 2001
+From: Arnaldo Lima <arnaldolimaof@gmail.com>
+Date: Fri, 16 Oct 2026 11:59:31 -0300
+Subject: [PATCH 11/14] SPURS kernel tempArea; SPURS_READY_LEVEL; Wws
+ diagnostics
+
+from gow-ascension-pc@676eefe
+
+- SpursKernelContext.tempArea (LS 0x100..0x17F) now holds the first 128
+  bytes of the CellSpurs instance on every policy-module entry and every
+  cellSpursModulePoll, as the real kernel (and RPCS3) copies it at each
+  workload selection. God of War: Ascension's Wws barrier job module
+  reads flags1 there (LS 0x174) before it looks a wid >= 16 up; with the
+  area never filled, SF1_32_WORKLOADS read as clear unless some guest DMA
+  had happened to land there, the lookup took its error path and the job
+  spun on a GETLLAR of EA 0. The frame's EDGE list then never finished,
+  at a different frame from run to run.
+
+- SPURS_READY_LEVEL=1 (off by default): readyCount as a level, the way
+  the real kernel reads it. A workload is selected while readyCount
+  exceeds the SPUs it holds and selection does not consume the count;
+  cellSpursModulePoll answers with a real selection (the caller while it
+  is still eligible, else another ready workload, else 0x20); and the
+  coordinator gives each SPU the first pick in turn, since a Wws job
+  manager keeps its pipeline in the local store of the SPU it ran on.
+  The poll answer outside the option stays 0, as before.
+
+- Diagnostics: SPU_LLAR0_TRAP=1 (the first GETLLAR of EA 0 per SPU, with
+  registers, stack links, the last 16 MFC commands and the kernel
+  context), SPU_PCWATCH_MOD=<job module id>, SPURS_PM_RUNLOG=<wid> (one
+  line per policy-module run with the Wws state words), and the
+  workload and SPU in SPU_ATOM_EA's lines.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ libs/spurs/cellSpurs.c     |  63 ++++++++++++++++++++--
+ runtime/spu/spu_channels.c | 104 ++++++++++++++++++++++++++++++++++++-
+ runtime/spu/spu_dma.h      |   3 ++
+ runtime/spu/spu_interp.c   |  18 +++++--
+ runtime/spu/spurs_policy.c |  45 ++++++++++++++++
+ 5 files changed, 225 insertions(+), 8 deletions(-)
+
+diff --git a/libs/spurs/cellSpurs.c b/libs/spurs/cellSpurs.c
+index e4bbb5d..1695aae 100644
+--- a/libs/spurs/cellSpurs.c
++++ b/libs/spurs/cellSpurs.c
+@@ -1827,6 +1827,54 @@ static DWORD WINAPI spurs_pm_worker(LPVOID p)
+     return 0;
+ }
+ 
++/* SPURS_READY_LEVEL=1: readyCount is a level, as the real kernel treats it --
++ * a workload is selected while readyCount exceeds the SPUs it already holds,
++ * and selecting it does not consume the count; the policy module lowers it
++ * itself when it runs out of work. The default instead consumes one unit per
++ * admission, which paces a title that kicks once per job. God of War:
++ * Ascension's Wws job manager needs the level: it runs one pipeline step per
++ * entry and zeroes its own readyCount only once its jobs have been stored, so
++ * consuming the count left each frame's last jobs unstored -- and their
++ * dependency decrements undone -- until the next frame's kick, and the frame
++ * after that waited on them forever. */
++int spurs_ready_level(void)
++{
++    static int s_level = -1;
++    if (s_level < 0) { const char* e = getenv("SPURS_READY_LEVEL"); s_level = e && *e != '0'; }
++    return s_level;
++}
++
++/* The kernel's answer to cellSpursModulePoll under SPURS_READY_LEVEL: the
++ * workload SPU `spu` of the instance at `ea` should run now. The caller keeps
++ * the SPU while it is still eligible -- readyCount at least the SPUs it holds
++ * (this one included), or a signal; otherwise the first other workload that is
++ * enabled, runnable, has a priority on this SPU and wants an SPU it does not
++ * have; otherwise CELL_SPURS_SYS_SERVICE_WORKLOAD_ID (0x20), "nothing", on
++ * which a module yields. The Wws job manager zeroes its readyCount before it
++ * polls and restores it after, so this is how it learns whether to go on. */
++u32 spurs_poll_select(u32 ea, u32 cur, u32 spu)
++{
++    struct SpursInst* si = spurs_inst_find(ea);
++    if (!si || spu >= CELL_SPURS_MAX_SPU) return 0x20;
++    const u32 nwid = si->is2 ? SPURS_MAX_WID : 16u;
++    const u32 enabled = vm_read32(ea + SPURS_WKL_ENABLED);
++    u32 pick = 0x20;
++    for (u32 w = 0; w < nwid; w++) {
++        if (!(enabled & (0x80000000u >> w)) || vm_read8(ea + wkl_state_off(w)) != 2 ||
++            !s_workloads[w].in_use || s_workloads[w].spurs_ea != ea ||
++            !vm_read8(ea + wkl_info_off(w) + 0x18 + spu))
++            continue;
++        const u32 ready = vm_read8(ea + wkl_ready_off(w));
++        const int sig = wkl_signalled(ea, w);
++        if (w == cur) {
++            if (sig || ready >= si->active[w]) return cur;
++        } else if (pick == 0x20 && (sig || ready > si->active[w])) {
++            pick = w;
++        }
++    }
++    return pick;
++}
++
+ static DWORD WINAPI spurs_kernel_thread(LPVOID p)
+ {
+     struct SpursInst* si = (struct SpursInst*)p;
+@@ -1870,7 +1918,15 @@ static DWORD WINAPI spurs_kernel_thread(LPVOID p)
+                 } }
+               fflush(stderr);
+           } }
+-        for (u32 sn = 0; sn < si->nspus; sn++) {
++        /* Under SPURS_READY_LEVEL every SPU gets the first pick in turn, as
++         * each real SPU runs its own kernel. A Wws job manager keeps its
++         * pipeline in the local store of the SPU it ran on, so a job it left
++         * in the store phase completes only when that SPU selects it again;
++         * scanning from SPU 0 every pass sent its re-runs to the same one or
++         * two SPUs and stranded the others' stores. */
++        const u32 sn0 = spurs_ready_level() ? si->pass_no % si->nspus : 0;
++        for (u32 k = 0; k < si->nspus; k++) {
++            const u32 sn = (sn0 + k) % si->nspus;
+             struct SpursPmSlot* slot = &si->slots[sn];
+             if (slot->busy) continue;
+             const u32 nwid = si->is2 ? SPURS_MAX_WID : 16u;
+@@ -1888,7 +1944,8 @@ static DWORD WINAPI spurs_kernel_thread(LPVOID p)
+                 WklPm* pm = spurs_resolve_pm(wid);
+                 if (!pm) continue;
+                 u32 ready = vm_read8(ea + wkl_ready_off(wid));
+-                int kicked = ready || wkl_signalled(ea, wid);
++                int kicked = (spurs_ready_level() ? ready > si->active[wid] : ready != 0)
++                             || wkl_signalled(ea, wid);
+                 /* SPURS_KICKLOG=<n>: every admission that has work waiting
+                  * (ready count or signal), up to n lines. */
+                 { static long s_kl = -2;
+@@ -1905,7 +1962,7 @@ static DWORD WINAPI spurs_kernel_thread(LPVOID p)
+                     continue;
+                 spu_lockline_lock();
+                 ready = vm_read8(ea + wkl_ready_off(wid));
+-                if (ready) vm_base[ea + wkl_ready_off(wid)] = (u8)(ready - 1);
++                if (ready && !spurs_ready_level()) vm_base[ea + wkl_ready_off(wid)] = (u8)(ready - 1);
+                 if (wkl_signalled(ea, wid)) wkl_signal_clear(ea, wid);
+                 ef_line_end(ea);
+                 slot->fn = pm->fn; slot->image_id = pm->image_id;
+diff --git a/runtime/spu/spu_channels.c b/runtime/spu/spu_channels.c
+index 84787f9..291cd5f 100644
+--- a/runtime/spu/spu_channels.c
++++ b/runtime/spu/spu_channels.c
+@@ -342,6 +342,9 @@ void spu_mfc_release(spu_context* ctx)
+ 
+ /* Exit safety net for contexts unwound off a departing thread's stack.
+  * Pointer comparisons suffice: the abandoned context need not be readable. */
++/* The MFC tag groups that have completed, for diagnostics (SPURS_PM_RUNLOG). */
++uint32_t spu_mfc_tag_completed(spu_context* ctx) { return mfc_for(ctx)->tag_completed; }
++
+ void spu_mfc_forget_range(uintptr_t lo, uintptr_t hi)
+ {
+     AcquireSRWLockExclusive(&s_mfc_claim_lock);
+@@ -395,6 +398,30 @@ volatile unsigned g_spu_putllc_sync_hit = 0;
+  * completion. Chosen above the context/descriptor we park near the top of LS. */
+ #define SPU_JOB_RETURN_LS   0x3FF00u
+ 
++/* The last 16 MFC commands of this SPU thread (mfc_submit notes each), printed
++ * by SPU_LLAR0_TRAP: what the module fetched just before it went wrong. */
++static SPU_THREAD_LOCAL struct { uint32_t cmd, lsa, size, tag, pc, ls0; uint64_t ea; } t_dmaring[16];
++static SPU_THREAD_LOCAL unsigned t_dmaring_n;
++void spu_dmaring_note(const spu_context* ctx, uint32_t cmd, uint32_t lsa, uint64_t ea,
++                      uint32_t size, uint32_t tag)
++{
++    unsigned i = t_dmaring_n++ & 15u;
++    t_dmaring[i].cmd = cmd; t_dmaring[i].lsa = lsa; t_dmaring[i].ea = ea;
++    t_dmaring[i].size = size; t_dmaring[i].tag = tag;
++    t_dmaring[i].pc = (uint32_t)ctx->pc & SPU_LS_MASK;
++    t_dmaring[i].ls0 = 0;
++}
++void spu_dmaring_dump(void)
++{
++    unsigned n = t_dmaring_n < 16u ? t_dmaring_n : 16u;
++    for (unsigned k = 0; k < n; k++) {
++        unsigned i = (t_dmaring_n - n + k) & 15u;
++        fprintf(stderr, "[llar0]   dma[-%u] cmd=0x%02X lsa=0x%05X ea=0x%09llX size=0x%X tag=%u pc=0x%05X\n",
++                n - k, t_dmaring[i].cmd & 0xFFu, t_dmaring[i].lsa, (unsigned long long)t_dmaring[i].ea,
++                t_dmaring[i].size, t_dmaring[i].tag, t_dmaring[i].pc);
++    }
++}
++
+ /* Returns 1 if `cmd` is an atomic line op and was handled here, else 0. */
+ static int spu_mfc_atomic(spu_context* ctx, uint32_t cmd)
+ {
+@@ -499,6 +526,10 @@ static int spu_mfc_atomic(spu_context* ctx, uint32_t cmd)
+                             "[atom-ea] cmd=0x%X img=%d pc=0x%05X lr=0x%05X ea=0x%08X",
+                             cmd, ctx->image_id, (uint32_t)ctx->pc & SPU_LS_MASK,
+                             ctx->gpr[0]._u32[0] & SPU_LS_MASK, (uint32_t)ea);
++              /* Under a policy module, which workload (wklCurrentId, LS 0x1DC)
++               * and SPU (spuNum, LS 0x1C8): one image serves many workloads. */
++              if (ctx->policy_mode)
++                  p += snprintf(buf + p, sizeof buf - p, " wid=%u spu=%u", ctx->ls[0x1DF], ctx->ls[0x1CB]);
+               int nb = s_af == 2 ? 128 : s_af ? 64 : 8;   /* 64 covers +0x30 pendingRecv; =2 the whole line */
+               p += snprintf(buf + p, sizeof buf - p, " RAM=");
+               for (int i = 0; i < nb && p < (int)sizeof buf - 4; i++)
+@@ -532,6 +563,46 @@ static int spu_mfc_atomic(spu_context* ctx, uint32_t cmd)
+          * peer that must WRITE the line waits for it (canersaka ticks the
+          * GETLLAR fast+slow paths for exactly this reason). */
+         yz_lockstep_tick(ctx);
++        /* SPU_LLAR0_TRAP=1: the first GETLLAR of EA 0 from each SPU, with every
++         * register's preferred word and the return addresses saved on the SPU
++         * stack. Nothing reserves EA 0; a module that does has computed its
++         * line from a field that was never filled. */
++        if (ea == 0) {
++            static int s_t = -1;
++            if (s_t < 0) s_t = getenv("SPU_LLAR0_TRAP") ? 1 : 0;
++            static SPU_THREAD_LOCAL int t_done;
++            if (s_t && !t_done) {
++                t_done = 1;
++                fprintf(stderr, "[llar0] img=%d spu%u pc=0x%05X lr=0x%05X lsa=0x%05X ls4000=%02X%02X%02X%02X\n",
++                        ctx->image_id, (unsigned)(ctx->spu_id & 7u), (unsigned)(ctx->pc & SPU_LS_MASK),
++                        ctx->gpr[0]._u32[0] & SPU_LS_MASK, lsa,
++                        ctx->ls[0x4000], ctx->ls[0x4001], ctx->ls[0x4002], ctx->ls[0x4003]);
++                for (int r = 0; r < 128; r += 8)
++                    fprintf(stderr, "[llar0]   r%-3d %08X %08X %08X %08X %08X %08X %08X %08X\n", r,
++                            ctx->gpr[r]._u32[0], ctx->gpr[r+1]._u32[0], ctx->gpr[r+2]._u32[0], ctx->gpr[r+3]._u32[0],
++                            ctx->gpr[r+4]._u32[0], ctx->gpr[r+5]._u32[0], ctx->gpr[r+6]._u32[0], ctx->gpr[r+7]._u32[0]);
++                { extern void spu_dmaring_dump(void); spu_dmaring_dump(); }
++                static const uint32_t s_ls_spans[][2] = { {0x80, 0x40}, {0x100, 0x80}, {0x1C0, 0x20} };
++                for (unsigned s = 0; s < sizeof s_ls_spans / sizeof s_ls_spans[0]; s++)
++                    for (uint32_t o = s_ls_spans[s][0]; o < s_ls_spans[s][0] + s_ls_spans[s][1]; o += 16) {
++                        const uint8_t* q = ctx->ls + o;
++                        fprintf(stderr, "[llar0]   LS %05X: %02X%02X%02X%02X %02X%02X%02X%02X %02X%02X%02X%02X %02X%02X%02X%02X\n", o,
++                                q[0],q[1],q[2],q[3], q[4],q[5],q[6],q[7], q[8],q[9],q[10],q[11], q[12],q[13],q[14],q[15]);
++                    }
++                /* SPU ABI frames: the back chain at 0($sp), the caller's link
++                 * saved at 16 bytes into the caller's frame. */
++                uint32_t sp = ctx->gpr[1]._u32[0] & SPU_LS_MASK;
++                for (int d = 0; d < 12 && sp && sp < 0x40000u - 32; d++) {
++                    uint32_t back = __builtin_bswap32(*(const uint32_t*)(ctx->ls + sp));
++                    uint32_t link = back && back < 0x40000u - 32
++                                  ? __builtin_bswap32(*(const uint32_t*)(ctx->ls + back + 16)) : 0;
++                    fprintf(stderr, "[llar0]   frame sp=0x%05X back=0x%05X link=0x%05X\n", sp, back, link);
++                    if (back <= sp) break;
++                    sp = back;
++                }
++                fflush(stderr);
++            }
++        }
+         spu_lockline_lock();
+         /* Tell the PPU store paths this line is live, so a store into it goes
+          * through the lock and raises SPU_EVENT_LR here instead of landing
+@@ -2112,7 +2183,38 @@ void spu_indirect_branch(spu_context* ctx)
+             if (n <= 4 || (n % 4096) == 0)
+                 fprintf(stderr, "[spurs-pm] poll #%u (r3=0x%08X) -> continue\n",
+                         n, ctx->gpr[3]._u32[0]);
+-            ctx->gpr[3] = spu_make_preferred_u32(0);
++            /* The kernel's selection refreshes tempArea, here as on entry. */
++            { extern void spurs_kernel_temp_area_refresh(spu_context*);
++              spurs_kernel_temp_area_refresh(ctx); }
++            /* The kernel's answer is a u64 in the preferred doubleword: the
++             * workload it selected in the high word, the poll status in the
++             * low one (RPCS3, spursKernel1SelectWorkload). cellSpursModulePoll
++             * yields when the selected workload is not wklCurrentId, so "keep
++             * running" is the module's own id, read back from LS 0x1DC. This
++             * answer 0 -- workload 0 selected -- keeps wid 0 running but
++             * tells every other policy module to yield after one poll: God of
++             * War: Ascension's Wws job managers (wid 14-18) left each run after
++             * a single pipeline step, their last jobs unstored. */
++            { const uint8_t* k = ctx->ls + 0x1DC;
++              const uint32_t cur = ((uint32_t)k[0] << 24) | ((uint32_t)k[1] << 16)
++                                 | ((uint32_t)k[2] << 8) | k[3];
++              /* Under SPURS_READY_LEVEL the answer is a real selection
++               * (cellSpurs.c). Otherwise it stays 0, as it always was: a
++               * policy module that never yields would hold its host worker
++               * forever, and the scheduler's idle re-runs count on them
++               * leaving. */
++              extern int spurs_ready_level(void);
++              extern uint32_t spurs_poll_select(uint32_t ea, uint32_t cur, uint32_t spu);
++              uint32_t sel = 0;
++              if (spurs_ready_level()) {
++                  const uint8_t* q = ctx->ls + 0x1C4;   /* spurs EA, low word */
++                  const uint8_t* n = ctx->ls + 0x1C8;   /* spuNum */
++                  sel = spurs_poll_select(((uint32_t)q[0] << 24) | ((uint32_t)q[1] << 16) | ((uint32_t)q[2] << 8) | q[3],
++                                          cur, ((uint32_t)n[0] << 24) | ((uint32_t)n[1] << 16) | ((uint32_t)n[2] << 8) | n[3]);
++              }
++              ctx->gpr[3] = spu_make_preferred_u32(0);
++              ctx->gpr[3]._u32[0] = sel;     /* selected workload */
++              ctx->gpr[3]._u32[1] = 0; }     /* poll status: nothing pending */
+             ctx->pc = ctx->gpr[0]._u32[0] & SPU_LS_MASK;
+             return;
+         }
+diff --git a/runtime/spu/spu_dma.h b/runtime/spu/spu_dma.h
+index 9820cc2..4aa108b 100644
+--- a/runtime/spu/spu_dma.h
++++ b/runtime/spu/spu_dma.h
+@@ -929,6 +929,9 @@ static inline int mfc_submit(mfc_engine* mfc, spu_context* spu, uint32_t cmd)
+     uint32_t size = spu->mfc_size;
+     uint32_t tag  = spu->mfc_tag & 0x1F;
+     int rc = 0;
++    /* The last commands this SPU issued, for SPU_LLAR0_TRAP (spu_channels.c). */
++    { extern void spu_dmaring_note(const spu_context*, uint32_t, uint32_t, uint64_t, uint32_t, uint32_t);
++      spu_dmaring_note(spu, cmd, lsa, ea, size, tag); }
+ 
+     /* SPU_WATCHEA=<hex guest addr>: report every DMA whose destination range
+      * covers one word, with the SPU id, its pc and the value the word holds
+diff --git a/runtime/spu/spu_interp.c b/runtime/spu/spu_interp.c
+index 3f8aa7f..2d0eaac 100644
+--- a/runtime/spu/spu_interp.c
++++ b/runtime/spu/spu_interp.c
+@@ -377,12 +377,22 @@ void spu_pcwatch(spu_context* ctx, uint32_t pc)
+             e = (*end == ',') ? end + 1 : NULL; }
+         s_pw_n = n; }
+     for (int k = 0; k < s_pw_n; k++) if (pc == s_pw[k]) {
++        /* SPU_PCWATCH_MOD=<hex>: only while that job module (the word at LS
++         * 0x4000) is loaded; job modules share their LS addresses. */
++        static int s_pm_set = -1; static uint32_t s_pm;
++        if (s_pm_set < 0) { const char* e = getenv("SPU_PCWATCH_MOD");
++            s_pm_set = e ? 1 : 0; s_pm = e ? (uint32_t)strtoul(e, 0, 16) : 0; }
++        const uint32_t mod = ((uint32_t)ctx->ls[0x4000] << 24) | ((uint32_t)ctx->ls[0x4001] << 16)
++                           | ((uint32_t)ctx->ls[0x4002] << 8) | ctx->ls[0x4003];
++        if (s_pm_set && mod != s_pm) return;
+         static long s_pw_lines = 0;
+         if (s_pw_lines++ < 400)
+-            fprintf(stderr, "[pcwatch] pc=0x%05X img=%d ls4000=%02X%02X%02X%02X r3=%08X r4=%08X r5=%08X r12=%08X r81=%08X\n",
+-                    pc, ctx->image_id, ctx->ls[0x4000], ctx->ls[0x4001], ctx->ls[0x4002], ctx->ls[0x4003],
+-                    ctx->gpr[3]._u32[0], ctx->gpr[4]._u32[0], ctx->gpr[5]._u32[0],
+-                    ctx->gpr[12]._u32[0], ctx->gpr[81]._u32[0]);
++            fprintf(stderr, "[pcwatch] pc=0x%05X img=%d ls4000=%08X r3=%08X r4=%08X r5=%08X r6=%08X r12=%08X"
++                            " r80=%08X r81=%08X r82=%08X r83=%08X\n",
++                    pc, ctx->image_id, mod,
++                    ctx->gpr[3]._u32[0], ctx->gpr[4]._u32[0], ctx->gpr[5]._u32[0], ctx->gpr[6]._u32[0],
++                    ctx->gpr[12]._u32[0], ctx->gpr[80]._u32[0], ctx->gpr[81]._u32[0],
++                    ctx->gpr[82]._u32[0], ctx->gpr[83]._u32[0]);
+         return;
+     }
+ }
+diff --git a/runtime/spu/spurs_policy.c b/runtime/spu/spurs_policy.c
+index 9bb5972..a349ac6 100644
+--- a/runtime/spu/spurs_policy.c
++++ b/runtime/spu/spurs_policy.c
+@@ -33,6 +33,27 @@
+ 
+ extern int spu_run_with_halt(void (*)(spu_context*), spu_context*);
+ 
++/* SpursKernelContext.tempArea (LS 0x100..0x17F) holds the first 128 bytes of
++ * the CellSpurs instance: the kernel copies them there each time it selects a
++ * workload, on entry and on every cellSpursModulePoll (RPCS3 does the same in
++ * spursKernel1/2SelectWorkload). Modules read instance fields from that copy
++ * rather than DMA them. God of War: Ascension's Wws barrier job module reads
++ * flags1 there (LS 0x174) before it looks a wid >= 16 up; with the area never
++ * filled, SF1_32_WORKLOADS read as clear whenever no guest DMA had happened to
++ * land there, the lookup took its error path and the job spun on a GETLLAR of
++ * EA 0 -- the frame's EDGE list never finished, nondeterministically. */
++void spurs_kernel_temp_area_refresh(spu_context* ctx)
++{
++    extern uint8_t* vm_base;
++    const uint8_t* k = ctx->ls + 0x1C4;   /* spurs EA, low word of the u64 */
++    const uint32_t ea = ((uint32_t)k[0] << 24) | ((uint32_t)k[1] << 16)
++                      | ((uint32_t)k[2] << 8) | k[3];
++    if (!vm_base || !ea || ea > 0xFFFFFF80u) return;
++    spu_lockline_lock();                  /* one snapshot, as the kernel's DMA is */
++    memcpy(ctx->ls + 0x100, vm_base + ea, 0x80);
++    spu_lockline_unlock();
++}
++
+ /* Counters the intercepts in spu_channels.c maintain for the CURRENT run
+  * (per worker, including the exit classification used by the caller). */
+ SPU_THREAD_LOCAL volatile unsigned g_spurs_pm_polls = 0;   /* selectWorkload calls this run */
+@@ -265,6 +286,7 @@ int spu_run_policy_module(spu_lifted_entry_fn entry, int image_id,
+     KBE32(0x1E0, SPURS_PM_EXIT_TO_KERNEL_LS);
+     KBE32(0x1E4, SPURS_PM_SELECT_WORKLOAD_LS);
+ #undef KBE32
++    spurs_kernel_temp_area_refresh(ctx);
+ 
+     /* Entry registers per cellSpursModuleEntry. */
+     ctx->gpr[0]._u32[0] = SPURS_PM_EXIT_TO_KERNEL_LS;  /* return-to-kernel link */
+@@ -530,6 +552,28 @@ int spu_run_policy_module(spu_lifted_entry_fn entry, int image_id,
+                 wid, ctx->status, ctx->pc, g_spurs_pm_polls, g_spurs_pm_exited);
+         fflush(stderr);
+     }
++    /* SPURS_PM_RUNLOG=<wid>: one line per run of that workload, with how it
++     * ended and the job manager's state words (Wws: loadJobState at LS 0x12A0,
++     * the job slots from 0x12C0), so a job left mid-pipeline between runs
++     * shows. SPURS_PM_RUNLOG_MAX caps the lines (default 2000). */
++    { static int s_rl = -2; static long s_rl_max;
++      if (s_rl == -2) { const char* e = getenv("SPURS_PM_RUNLOG"); s_rl = e ? atoi(e) : -1;
++                        const char* m = getenv("SPURS_PM_RUNLOG_MAX"); s_rl_max = m ? atol(m) : 2000; }
++      if (s_rl >= 0 && (uint32_t)s_rl == wid) {
++          extern uint32_t spu_mfc_tag_completed(spu_context*);
++          static long s_rl_n;
++          if (s_rl_n++ < s_rl_max) {
++              const uint8_t* L = ctx->ls;
++              #define RW(o) (((uint32_t)L[(o)] << 24) | ((uint32_t)L[(o)+1] << 16) | ((uint32_t)L[(o)+2] << 8) | L[(o)+3])
++              fprintf(stderr, "[pm-run] t=%llu wid=%u spu=%u first=%d polls=%u exited=%u status=0x%X pc=0x%05X"
++                              " tags=0x%08X parked=0x%X 12A0=%08X %08X %08X %08X 12C0=%08X %08X %08X %08X %08X %08X %08X %08X\n",
++                      (unsigned long long)GetTickCount64(), wid, spu_num, first, g_spurs_pm_polls, g_spurs_pm_exited,
++                      ctx->status, ctx->pc & SPU_LS_MASK, spu_mfc_tag_completed(ctx), ctx->list_stall_mask,
++                      RW(0x12A0), RW(0x12A4), RW(0x12A8), RW(0x12AC),
++                      RW(0x12C0), RW(0x12C4), RW(0x12C8), RW(0x12CC), RW(0x12D0), RW(0x12D4), RW(0x12D8), RW(0x12DC));
++              #undef RW
++          }
++      } }
+ 
+     int result = g_spurs_pm_exited ? 0 : -2;
+     policy_slot_release(resident);
+@@ -647,6 +691,7 @@ int spurs_run_taskset_policy_probe(uint32_t taskset_ea, uint32_t taskid,
+     /* taskset EA also planted at the SpursKernelContext taskset slot the policy
+      * reads for its taskset DMA (mirrors the cri-r4 injection at LS 0x27B8). */
+ #undef KBE32
++    spurs_kernel_temp_area_refresh(ctx);
+ 
+     ctx->gpr[0]._u32[0] = SPURS_PM_EXIT_TO_KERNEL_LS;
+     ctx->gpr[1]._u32[0] = 0x3FFB0;
+-- 
+2.50.1 (Apple Git-155)
+

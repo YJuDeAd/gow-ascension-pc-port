@@ -1,0 +1,153 @@
+From f8a1d91f5878a3091fc9606c93790fb13e022847 Mon Sep 17 00:00:00 2001
+From: Arnaldo Lima <arnaldolimaof@gmail.com>
+Date: Fri, 16 Oct 2026 06:29:27 -0300
+Subject: [PATCH 06/14] Edge Zlib HLE: truncated output and the element's skip
+ offset
+
+from gow-ascension-pc@676eefe
+
+edge_inflate now produces the first out_cap bytes of a stream that
+decodes to more, as the SPU decompressor does, instead of failing.
+
+The queue element carries an output skip at +0x24 (also the low half of
++0x18): God of War: Ascension streams a compressed WAD by inflating the
+same stream again and again, dropping the bytes it already has. Ignoring
+the skip returned the first chunk header forever, and the loader freed
+blocks through the wrong heap until the renderer's memory table was
+destroyed. EDGE_DUMP=1 logs small requests and their raw elements.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ libs/codec/edge_inflate.cpp | 27 +++++++++++++++++++++------
+ libs/spurs/cellSpurs.c      | 32 ++++++++++++++++++++++++++------
+ 2 files changed, 47 insertions(+), 12 deletions(-)
+
+diff --git a/libs/codec/edge_inflate.cpp b/libs/codec/edge_inflate.cpp
+index 3966f66..93a1698 100644
+--- a/libs/codec/edge_inflate.cpp
++++ b/libs/codec/edge_inflate.cpp
+@@ -96,7 +96,10 @@ const uint16_t DIST_BASE[30] = {
+ const uint8_t DIST_EXTRA[30] = {
+     0,0,0,0,1,1,2,2,3,3,4,4,5,5,6,6,7,7,8,8,9,9,10,10,11,11,12,12,13,13 };
+ 
+-/* One compressed block into `out`; returns bytes written or -1. */
++/* One compressed block into `out`; returns bytes written, -1 on a corrupt
++ * stream, or FULL once `out` holds `cap` bytes and the block wants more. */
++const int FULL = -2;
++
+ int inflate_block(Bits& b, uint8_t* out, uint32_t cap, uint32_t written,
+                   const Huff* lit, const Huff* dist)
+ {
+@@ -104,7 +107,7 @@ int inflate_block(Bits& b, uint8_t* out, uint32_t cap, uint32_t written,
+         const int sym = huff_decode(b, lit);
+         if (sym < 0 || b.bad) return -1;
+         if (sym < 256) {
+-            if (written >= cap) return -1;
++            if (written >= cap) return FULL;
+             out[written++] = (uint8_t)sym;
+         } else if (sym == 256) {
+             return (int)written;
+@@ -115,9 +118,11 @@ int inflate_block(Bits& b, uint8_t* out, uint32_t cap, uint32_t written,
+             const int ds = huff_decode(b, dist);
+             if (ds < 0 || ds >= 30) return -1;
+             const uint32_t d = DIST_BASE[ds] + b.bits(DIST_EXTRA[ds]);
+-            if (d > written || written + length > cap) return -1;
+-            for (uint32_t i = 0; i < length; i++, written++)
++            if (d > written) return -1;
++            for (uint32_t i = 0; i < length; i++, written++) {
++                if (written >= cap) return FULL;
+                 out[written] = out[written - d];
++            }
+         }
+     }
+ }
+@@ -125,7 +130,12 @@ int inflate_block(Bits& b, uint8_t* out, uint32_t cap, uint32_t written,
+ }  // namespace
+ 
+ /* Inflate a raw DEFLATE or zlib stream. Returns bytes written, or -1.
+- * A leading 0x78 (CMF with CM=8) is treated as a zlib wrapper and skipped. */
++ * A leading 0x78 (CMF with CM=8) is treated as a zlib wrapper and skipped.
++ *
++ * A stream that decodes to more than `out_cap` bytes is not an error: the
++ * first `out_cap` bytes are produced and `out_cap` returned, as the SPU
++ * decompressor does. God of War: Ascension reads 64 bytes of a compressed
++ * asset to look at its header, and an error there was retried forever. */
+ extern "C" int edge_inflate(uint8_t* out, uint32_t out_cap, const uint8_t* src, uint32_t src_len)
+ {
+     if (!out || !src || src_len < 1) return -1;
+@@ -147,7 +157,11 @@ extern "C" int edge_inflate(uint8_t* out, uint32_t out_cap, const uint8_t* src,
+             if (b.pos + 4 > b.len) return -1;
+             const uint32_t n = (uint32_t)src[b.pos] | ((uint32_t)src[b.pos + 1] << 8);
+             b.pos += 4;
+-            if (b.pos + n > b.len || written + n > out_cap) return -1;
++            if (b.pos + n > b.len) return -1;
++            if (written + n > out_cap) {
++                memcpy(out + written, src + b.pos, out_cap - written);
++                return (int)out_cap;
++            }
+             memcpy(out + written, src + b.pos, n);
+             b.pos += n;
+             written += n;
+@@ -199,6 +213,7 @@ extern "C" int edge_inflate(uint8_t* out, uint32_t out_cap, const uint8_t* src,
+                 huff_build(&dist, lengths + hlit, hdist);
+             }
+             const int n = inflate_block(b, out, out_cap, written, &lit, &dist);
++            if (n == FULL) return (int)out_cap;
+             if (n < 0) return -1;
+             written = (uint32_t)n;
+         } else {
+diff --git a/libs/spurs/cellSpurs.c b/libs/spurs/cellSpurs.c
+index cf5eed0..2be6e55 100644
+--- a/libs/spurs/cellSpurs.c
++++ b/libs/spurs/cellSpurs.c
+@@ -3512,8 +3512,15 @@ s32 _cellSpursLFQueuePushBody(u64 queue_ea, u64 data_ea, u32 isBlocking)
+      *   +0x08 compressed size   +0x0C output capacity
+      *   +0x10 the request's busy counter (+0x28), low bits used as flags
+      *   +0x14 an event flag     +0x18 its bits in the upper halfword
++     *   +0x24 output bytes to skip (also the low halfword of +0x18)
+      * The counter is what the title polls; it is decremented once the output
+-     * is in place, and the event flag set when it reaches 0. */
++     * is in place, and the event flag set when it reaches 0.
++     *
++     * The skip is how the title streams a compressed file in pieces: every
++     * request inflates from the start of the same stream, drops the first
++     * `skip` bytes and keeps the next `cap` (a WAD is read as a 64-byte chunk
++     * header, then its payload, then the next header). Ignoring it handed back
++     * the first chunk forever. */
+     { static int s_edge = -1;
+       if (s_edge < 0) s_edge = getenv("PS3_EDGE_ZLIB_HLE") ? 1 : 0;
+       if (s_edge) {
+@@ -3523,12 +3530,25 @@ s32 _cellSpursLFQueuePushBody(u64 queue_ea, u64 data_ea, u32 isBlocking)
+           const uint32_t counter = vm_read32(e + 0x10) & ~3u;
+           const uint32_t flag = vm_read32(e + 0x14);
+           const u16 bits = (u16)(vm_read32(e + 0x18) >> 16);
++          const uint32_t skip = vm_read32(e + 0x24);
+           extern int edge_inflate(uint8_t* out, uint32_t out_cap, const uint8_t* src, uint32_t src_len);
+-          if (src && dst && counter && srclen && srclen < 0x01000000u && cap && cap <= 0x01000000u) {
+-              uint8_t* tmp = (uint8_t*)malloc(cap);
+-              const int n = tmp ? edge_inflate(tmp, cap, vm_base + src, srclen) : -1;
+-              if (n >= 0) memcpy(vm_base + dst, tmp, (size_t)n);
+-              free(tmp);
++          if (src && dst && counter && srclen && srclen < 0x01000000u && cap && cap <= 0x01000000u
++              && skip < 0x01000000u) {
++              uint8_t* buf = (uint8_t*)malloc((size_t)skip + cap);
++              const int full = buf ? edge_inflate(buf, skip + cap, vm_base + src, srclen) : -1;
++              const int n = full < 0 ? -1 : full > (int)skip ? full - (int)skip : 0;
++              uint8_t* tmp = buf ? buf + skip : NULL;
++              if (n > 0) memcpy(vm_base + dst, tmp, (size_t)n);
++              { static int _h = 0;
++                if (getenv("EDGE_DUMP") && n > 0 && cap <= 64 && _h++ < 8) {
++                    printf("[edge] elem");
++                    for (int k = 0; k < 64; k += 4) printf(" %08X", vm_read32(e + (uint32_t)k));
++                    printf("\n");
++                    printf("[edge] head src=0x%08X len=%u:", src, srclen);
++                    for (int k = 0; k < n && k < 64; k++) printf("%s%02X", (k % 16) ? " " : (k ? "\n    " : " "), tmp[k]);
++                    printf("\n");
++                } }
++              free(buf);
+               const uint32_t left = vm_read32(counter);
+               if (left) vm_write32(counter, left - 1u);
+               if (left == 1u && flag && bits)
+-- 
+2.50.1 (Apple Git-155)
+

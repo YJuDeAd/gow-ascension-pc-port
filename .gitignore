@@ -7,6 +7,8 @@
 *.dec.iso
 *.PSARC
 *.psarc
+!mods/skip-intro/
+!mods/skip-intro/**
 *.wad
 *.pkg
 *.edat
@@ -32,6 +34,17 @@ src/gen/
 src/recomp/
 imports.json
 analysis/
+
+# ---- Intermediate address lists and SPU PIC dumps ----
+ppu_switches.json
+job_fragments.json
+jobmods_*.json
+spu_*.json
+tools/job_fragments.json
+tools/jobmods_*.json
+tools/spu_*.json
+*spu_pic_*
+spu_pic/
 
 # ---- Build output ----
 build/
@@ -90,6 +103,5 @@ Thumbs.db
 .claude/
 
 # ---- Dependencies cloned inside the repo (see note below) ----
-ps3recomp/
 twistedmetal/
 twistedmetal/

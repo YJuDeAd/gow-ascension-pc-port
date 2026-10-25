@@ -177,6 +177,10 @@ Pull requests and issues are welcome. A few rules keep the codebase maintainable
 - Optimizing SPU-assisted skinning and vertex buffer decompression in Edge Geometry.
 - Building a real audio output backend for CellAudio callbacks.
 
+## Acknowledgments
+
+Portions of runtime research and compatibility patches are adapted from [gow-ascension-pc](https://github.com/arnaldo-lima/gow-ascension-pc) by Arnaldo Lima & contributors under the MIT License (see [THIRD_PARTY_NOTICES.md](file:///C:/IfItWorksItWorks/Project/gowassension/THIRD_PARTY_NOTICES.md)).
+
 ## Legal
 
 This is an independent preservation and research project. It is not affiliated with or endorsed by Sony Interactive Entertainment or Santa Monica Studio.

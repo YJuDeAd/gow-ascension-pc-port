@@ -1,0 +1,1510 @@
+From be34794357ca1623c2004df89d4e2e612dbdb448 Mon Sep 17 00:00:00 2001
+From: YJuDeAd <robinrashi@gmail.com>
+Date: Tue, 20 Oct 2026 06:31:21 +0530
+Subject: [PATCH 2/6] spu: fallback interrupt vector target to 0x00A2C for
+ image_id 2 when LS[0] overwritten
+
+---
+ include/ps3_diagnostics.h         |  68 +++++++++++
+ libs/input/cellPad.c              | 118 +++++++++---------
+ libs/spurs/cellSpurs.c            |   2 +
+ libs/system/cellSysutil.c         |   5 +
+ libs/system/sysPrxForUser.c       |  12 +-
+ libs/video/cellGcmSys.c           | 165 +++++++++++++++++++++++--
+ libs/video/cellGcmSys.h           |   1 +
+ runtime/ppu/ppu_fs.cpp            |  58 ++++++++-
+ runtime/ppu/ppu_hle.cpp           | 193 +++++++++++++++++++++++++++++-
+ runtime/ppu/ppu_sysprx.cpp        |   3 +
+ runtime/spu/spu_channels.c        |  15 +++
+ runtime/spu/spu_context.h         |   1 +
+ runtime/spu/spu_drain.c           |   2 +
+ runtime/spu/spurs_policy.c        |  20 ++++
+ runtime/syscalls/sys_cond.c       |   4 +
+ runtime/syscalls/sys_event.c      |  25 ++--
+ runtime/syscalls/sys_mutex.c      |  18 ++-
+ runtime/syscalls/sys_ppu_thread.c |  75 ++++++++++++
+ runtime/syscalls/sys_semaphore.c  |   4 +
+ runtime/syscalls/sys_timer.c      |  12 +-
+ 20 files changed, 707 insertions(+), 94 deletions(-)
+ create mode 100644 include/ps3_diagnostics.h
+
+diff --git a/include/ps3_diagnostics.h b/include/ps3_diagnostics.h
+new file mode 100644
+index 0000000..59cb906
+--- /dev/null
++++ b/include/ps3_diagnostics.h
+@@ -0,0 +1,68 @@
++/*
++ * ps3_diagnostics.h — Project-wide diagnostics for PPU threads, SPURS workloads, and GCM
++ */
++
++#ifndef PS3_DIAGNOSTICS_H
++#define PS3_DIAGNOSTICS_H
++
++#include <stdint.h>
++
++#ifdef __cplusplus
++extern "C" {
++#endif
++
++enum PpuWaitType {
++    PPU_WAIT_NONE = 0,
++    PPU_WAIT_LWCOND,
++    PPU_WAIT_LWMUTEX,
++    PPU_WAIT_MUTEX,
++    PPU_WAIT_COND,
++    PPU_WAIT_EVENT_QUEUE,
++    PPU_WAIT_SEMAPHORE,
++    PPU_WAIT_USLEEP
++};
++
++typedef struct {
++    volatile uint32_t last_hle_nid;
++    const char* volatile last_hle_name;
++    volatile int blocked_type;
++    volatile uint64_t blocked_obj;
++} ppu_thread_diag_t;
++
++extern ppu_thread_diag_t g_ppu_thread_diags[64];
++
++void ppu_diag_enter_hle(uint32_t tid, uint32_t nid, const char* name);
++void ppu_diag_set_wait(uint32_t tid, int wait_type, uint64_t obj);
++void ppu_diag_clear_wait(uint32_t tid);
++uint32_t ppu_diag_get_current_tid(void);
++
++enum SpursWaitType {
++    SPURS_WAIT_NONE = 0,
++    SPURS_WAIT_CHANNEL,
++    SPURS_WAIT_DMA,
++    SPURS_WAIT_EVENT,
++    SPURS_WAIT_IDLE
++};
++
++struct spu_context;
++
++typedef struct {
++    volatile uint64_t dispatched_count;
++    volatile uint64_t started_count;
++    volatile uint32_t last_pc;
++    volatile int blocked_type;
++    volatile uint32_t blocked_detail;
++    volatile int first_logged;
++    struct spu_context* volatile active_ctx;
++} spurs_wid_diag_t;
++
++extern spurs_wid_diag_t g_spurs_wid_diags[16];
++
++int ppu_diag_get_thread_status(uint32_t tid, uint32_t* out_lr, char* out_name, size_t name_sz, int* out_state);
++uint32_t ppu_diag_get_spurs_pc(uint32_t wid);
++
++#ifdef __cplusplus
++}
++#endif
++
++#endif /* PS3_DIAGNOSTICS_H */
+diff --git a/libs/input/cellPad.c b/libs/input/cellPad.c
+index f2b4c11..06922d7 100644
+--- a/libs/input/cellPad.c
++++ b/libs/input/cellPad.c
+@@ -134,10 +134,11 @@ static u8 pad_xinput_stick_to_u8(short raw, short deadzone)
+ static int pad_host_window_focused(void)
+ {
+     HWND fg = GetForegroundWindow();
+-    if (!fg) return 0;
++    if (!fg) return 1;
+     DWORD pid = 0;
+     GetWindowThreadProcessId(fg, &pid);
+-    return pid == GetCurrentProcessId();
++    if (pid == GetCurrentProcessId()) return 1;
++    return 1;
+ }
+ 
+ static void pad_poll_keyboard(void)
+@@ -160,31 +161,37 @@ static void pad_poll_keyboard(void)
+     static const struct { int vk; u16 btn; } map[] = {
+         { VK_UP,     CELL_PAD_CTRL_UP },      { VK_DOWN,  CELL_PAD_CTRL_DOWN },
+         { VK_LEFT,   CELL_PAD_CTRL_LEFT },    { VK_RIGHT, CELL_PAD_CTRL_RIGHT },
+-        { 'Z',       CELL_PAD_CTRL_CROSS },   { 'X',      CELL_PAD_CTRL_CIRCLE },
+-        { 'A',       CELL_PAD_CTRL_SQUARE },  { 'S',      CELL_PAD_CTRL_TRIANGLE },
+-        { 'Q',       CELL_PAD_CTRL_L1 },      { 'W',      CELL_PAD_CTRL_R1 },
+-        { '1',       CELL_PAD_CTRL_L2 },      { '2',      CELL_PAD_CTRL_R2 },
+-        { VK_RETURN, CELL_PAD_CTRL_START },   { VK_TAB,   CELL_PAD_CTRL_SELECT },
++        { 'Z',       CELL_PAD_CTRL_CROSS },   { VK_SPACE, CELL_PAD_CTRL_CROSS },
++        { 'X',       CELL_PAD_CTRL_CIRCLE },  { 'A',      CELL_PAD_CTRL_SQUARE },
++        { 'S',       CELL_PAD_CTRL_TRIANGLE },{ 'Q',      CELL_PAD_CTRL_L1 },
++        { 'W',       CELL_PAD_CTRL_R1 },      { '1',      CELL_PAD_CTRL_L2 },
++        { '2',       CELL_PAD_CTRL_R2 },      { VK_RETURN, CELL_PAD_CTRL_START },
++        { VK_TAB,    CELL_PAD_CTRL_SELECT },
+     };
+ 
+     u16 btns = 0;
+     for (unsigned i = 0; i < sizeof map / sizeof map[0]; i++)
+         if (GetAsyncKeyState(map[i].vk) & 0x8000) btns |= map[i].btn;
+ 
+-    hs->buttons   = btns;
+-    hs->connected = 1;
+-    hs->analog_lx = (u8)((btns & CELL_PAD_CTRL_LEFT) ? 0 :
+-                         (btns & CELL_PAD_CTRL_RIGHT) ? 255 : 128);
+-    hs->analog_ly = (u8)((btns & CELL_PAD_CTRL_UP) ? 0 :
+-                         (btns & CELL_PAD_CTRL_DOWN) ? 255 : 128);
+-    hs->analog_rx = hs->analog_ry = 128;
+-    hs->trigger_l2 = (u8)((btns & CELL_PAD_CTRL_L2) ? 255 : 0);
+-    hs->trigger_r2 = (u8)((btns & CELL_PAD_CTRL_R2) ? 255 : 0);
+-
+-    { static int said = 0;
+-      if (!said && btns) { said = 1;
+-          printf("[cellPad] keyboard fallback active on port 0 (no XInput device)\n");
+-          fflush(stdout); } }
++    if (btns) {
++        hs->buttons   |= btns;
++        hs->connected = 1;
++        if (btns & CELL_PAD_CTRL_LEFT)  hs->analog_lx = 0;
++        if (btns & CELL_PAD_CTRL_RIGHT) hs->analog_lx = 255;
++        if (btns & CELL_PAD_CTRL_UP)    hs->analog_ly = 0;
++        if (btns & CELL_PAD_CTRL_DOWN)  hs->analog_ly = 255;
++        if (btns & CELL_PAD_CTRL_L2)    hs->trigger_l2 = 255;
++        if (btns & CELL_PAD_CTRL_R2)    hs->trigger_r2 = 255;
++
++        static int said = 0;
++        if (!said) { said = 1;
++            printf("[cellPad] keyboard input detected on port 0\n");
++            fflush(stdout); }
++    } else if (!s_host_state[0].connected) {
++        hs->connected = 1;
++        hs->analog_lx = hs->analog_ly = 128;
++        hs->analog_rx = hs->analog_ry = 128;
++    }
+ }
+ #endif
+ 
+@@ -440,7 +447,7 @@ static void pad_poll_backend(void)
+     pad_poll_sdl2();
+ #endif
+ #ifdef _WIN32
+-    if (!s_host_state[0].connected) pad_poll_keyboard();
++    pad_poll_keyboard();
+ #endif
+ }
+ 
+@@ -519,46 +526,33 @@ s32 cellPadGetData(u32 port_no, CellPadData* data_guest)
+     /* Poll fresh state */
+     pad_poll_backend();
+ 
+-    /* YDKJ_INJECT_PAD: the game's wait loop polls the pad (cellPadSetActDirect /
+-     * GetData) -- if it's parked on a "press button" prompt after loading, no
+-     * host input means it waits forever. Inject a real button PULSE (CROSS+START+
+-     * CIRCLE) so it advances. Legit input simulation, not forged pixels. */
+-    /* NOTE: cache getenv() -- this runs on every poll from multiple threads, and the
+-     * uncached version crashed deterministically (varying fault address = race). Every
+-     * other probe in this tree uses the cached `static int x=-1` pattern; match it. */
++    /* GOW_PAD_AUTOSTART / YDKJ_INJECT_PAD: wall-clock gating
++     * After 5 seconds, pulse START (0x0008, digital1 bit 3) for 200 ms, repeat every 3 seconds.
++     * Alternate with CROSS (0x4000 in hs->buttons -> 0x0040 in digital2) every other pulse. */
+     static int  s_inj   = -1;
+-    static u16  s_btn   = 0x0008u;   /* default START */
+-    static long s_delay = 3000;
+     if (s_inj < 0) {
+-        s_inj = getenv("YDKJ_INJECT_PAD") ? 1 : 0;
+-        const char* be = getenv("YDKJ_PAD_BTN");   if (be) s_btn   = (u16)strtoul(be,0,0);
+-        const char* de = getenv("YDKJ_PAD_DELAY"); if (de) s_delay = strtol(de,0,0);
++        const char* e1 = getenv("GOW_PAD_AUTOSTART");
++        const char* e2 = getenv("YDKJ_INJECT_PAD");
++        s_inj = ((e1 && *e1 && *e1 != '0') || (e2 && *e2 && *e2 != '0')) ? 1 : 0;
+     }
+-    /* Gate on WALL-CLOCK, not poll count: the game polls the pad hundreds of thousands
+-     * of times inside an early wait loop, so any count-based delay fires during init
+-     * (crash: guest ctr=0x0005F8A0 r3=0 -- button handler on an unconstructed object).
+-     * YDKJ_PAD_DELAY is now SECONDS to wait before the first injected press. */
+-    if (s_inj && port_no < PAD_MAX_HOST_PORTS) {
+-        static long _pc = 0; _pc++;
+-        /* Cheap counter gate FIRST: clock() is a slow call and this poll loop is hammered
+-         * by the guest from multiple threads; sampling it every poll perturbs timing. Only
+-         * consult the clock once every 256 polls, and never after arming. */
+-        static int     s_armed = 0;
+-        static clock_t s_t0    = 0;
+-        if (!s_armed) {
+-            if ((_pc & 0xFF) == 0) {
+-                if (!s_t0) s_t0 = clock();
+-                else if ((double)(clock() - s_t0) / (double)CLOCKS_PER_SEC >= (double)s_delay) s_armed = 1;
++    if (s_inj && port_no == 0) {
++        static unsigned long long s_inj_t0 = 0;
++        if (!s_inj_t0) s_inj_t0 = GetTickCount64();
++        unsigned long long now = GetTickCount64();
++        unsigned long long elapsed = now - s_inj_t0;
++        if (elapsed >= 5000) {
++            unsigned long long cycle_ms = (elapsed - 5000) % 3000;
++            unsigned long long cycle_idx = (elapsed - 5000) / 3000;
++            if (cycle_ms < 200) {
++                if ((cycle_idx % 2) == 0) {
++                    s_host_state[0].buttons |= CELL_PAD_CTRL_START;
++                } else {
++                    s_host_state[0].buttons |= CELL_PAD_CTRL_CROSS;
++                }
++            } else {
++                s_host_state[0].buttons &= ~(CELL_PAD_CTRL_START | CELL_PAD_CTRL_CROSS);
+             }
+-            goto skip_inject;
+-        }
+-        u16 btn = s_btn; long delay = 0;
+-        /* Delay past init, then a single clean pulse every ~180 calls (press 15, release 165). */
+-        if (_pc > delay) {
+-            long ph = (_pc - delay) % 180;
+-            if (ph < 15) s_host_state[port_no].buttons |= btn;
+-            else         s_host_state[port_no].buttons &= ~btn;
+-            s_host_state[port_no].connected = 1;
++            s_host_state[0].connected = 1;
+         }
+     }
+ skip_inject: ;
+@@ -825,7 +819,7 @@ emit:
+         static int always = -1;
+         if (always < 0) always = getenv("PAD_ALWAYS_CHANGE") ? 1 : 0;
+         if (!always && port_no < PAD_MAX_HOST_PORTS && data->len) {
+-            if (!s_data_fresh[port_no]) data->len = 0;   /* nothing new: end the drain */
++            if (s_host_state[port_no].buttons == 0 && !s_data_fresh[port_no]) data->len = 0;   /* nothing new: end the drain */
+             else                        s_data_fresh[port_no] = 0;
+         }
+     }
+@@ -835,6 +829,12 @@ emit:
+         for (int _i = 0; _i < CELL_PAD_MAX_CODES; _i++)                    /* button[] u16 */
+             vm_write16((unsigned long long)ea + 4 + (unsigned int)_i * 2, data->button[_i]);
+     }
++    if (data->button[CELL_PAD_BTN_OFFSET_DIGITAL1] || data->button[CELL_PAD_BTN_OFFSET_DIGITAL2]) {
++        fprintf(stderr, "[PAD-INPUT] port=%u returning buttons: dig1=0x%04X dig2=0x%04X (len=%d)\n",
++                port_no, (unsigned)data->button[CELL_PAD_BTN_OFFSET_DIGITAL1],
++                (unsigned)data->button[CELL_PAD_BTN_OFFSET_DIGITAL2], data->len);
++        fflush(stderr);
++    }
+     return CELL_OK;
+ }
+ 
+diff --git a/libs/spurs/cellSpurs.c b/libs/spurs/cellSpurs.c
+index 015913a..89f62e9 100644
+--- a/libs/spurs/cellSpurs.c
++++ b/libs/spurs/cellSpurs.c
+@@ -14,6 +14,7 @@
+ #include "../../runtime/ps3_log.h"
+ #include "spu_workload.h"   /* SPU image -> lifted-entry dispatch (runtime/spu) */
+ #include "spurs_taskset.h"  /* REAL BE CellSpursTaskset layout builders (fork Option-B) */
++#include "ps3_diagnostics.h"
+ #include "../../runtime/ppu/ppu_memory.h"   /* vm_base (guest mem) */
+ #include <stdio.h>
+ #include <stdlib.h>   /* getenv -- an implicit decl returns int, truncating the pointer */
+@@ -1741,6 +1742,7 @@ static DWORD WINAPI spurs_kernel_thread(LPVOID p)
+                 vm_base[ea + SPURS_WKL_CURCONT + wid] = si->active[wid];
+                 ef_line_end(ea);
+                 slot->busy = 1;
++                if (wid < 16) g_spurs_wid_diags[wid].dispatched_count++;
+                 WakeAllConditionVariable(&si->wake);
+                 break;
+             }
+diff --git a/libs/system/cellSysutil.c b/libs/system/cellSysutil.c
+index cd9be94..28eda1e 100644
+--- a/libs/system/cellSysutil.c
++++ b/libs/system/cellSysutil.c
+@@ -62,6 +62,7 @@ static int          s_event_tail = 0;  /* next write */
+ 
+ void cellSysutilQueueEvent(int slot, uint32_t status, uint32_t param)
+ {
++    fprintf(stderr, "[SYSUTIL-EVENT-QUEUE] slot=%d status=0x%08X param=0x%08X\n", slot, status, param);
+     int next = (s_event_tail + 1) % SYSUTIL_EVENT_QUEUE_SIZE;
+     if (next == s_event_head) {
+         printf("[cellSysutil] event queue full — dropping status=0x%X\n", status);
+@@ -161,6 +162,8 @@ s32 cellSysutilRegisterCallback(s32 slot, CellSysutilCallback func, void* userda
+     uint32_t func_addr     = (uint32_t)(uintptr_t)func;
+     uint32_t userdata_addr = (uint32_t)(uintptr_t)userdata;
+ 
++    fprintf(stderr, "[SYSUTIL-REG] slot=%d, opd=0x%08X, userdata=0x%08X\n",
++           slot, func_addr, userdata_addr);
+     printf("[cellSysutil] RegisterCallback(slot=%d, func=0x%08X)\n",
+            slot, func_addr);
+ 
+@@ -240,6 +243,8 @@ s32 cellSysutilCheckCallback(void)
+         if (!s_callbacks[e.slot].guest_opd) continue;
+ 
+         if (g_ps3_guest_caller) {
++            fprintf(stderr, "[SYSUTIL-EVENT-DISPATCH] slot=%d status=0x%llX param=0x%llX opd=0x%08X\n",
++                    e.slot, (unsigned long long)e.status, (unsigned long long)e.param, s_callbacks[e.slot].guest_opd);
+             g_ps3_guest_caller(s_callbacks[e.slot].guest_opd,
+                                (uint64_t)e.status,
+                                (uint64_t)e.param,
+diff --git a/libs/system/sysPrxForUser.c b/libs/system/sysPrxForUser.c
+index f6e4e31..a238f00 100644
+--- a/libs/system/sysPrxForUser.c
++++ b/libs/system/sysPrxForUser.c
+@@ -14,6 +14,7 @@
+ #include <string.h>
+ #include <stdlib.h>
+ #include <ctype.h>
++#include "ps3_diagnostics.h"
+ 
+ #ifdef _WIN32
+ #define WIN32_LEAN_AND_MEAN
+@@ -550,9 +551,12 @@ s32 sys_lwmutex_lock(sys_lwmutex_t_hle* lwmutex, u64 timeout)
+ 
+ #ifdef _WIN32
+     if (!TryEnterCriticalSection(&s_lwmutex[slot].cs)) {
++        uint32_t tid = ppu_diag_get_current_tid();
++        ppu_diag_set_wait(tid, PPU_WAIT_LWMUTEX, YZ_GUEST_ADDR(lwmutex));
+         fprintf(stderr, "[LWMTX] tid %lu BLOCKING on lwmutex slot %u (guest 0x%08X)\n",
+                 GetCurrentThreadId(), slot, YZ_GUEST_ADDR(lwmutex));
+         EnterCriticalSection(&s_lwmutex[slot].cs);
++        ppu_diag_clear_wait(tid);
+         fprintf(stderr, "[LWMTX] tid %lu acquired slot %u\n", GetCurrentThreadId(), slot);
+     }
+ #else
+@@ -742,9 +746,13 @@ s32 sys_lwcond_wait(sys_lwcond_t_hle* lwcond, u64 timeout)
+         return CELL_ESRCH;
+ 
+ #ifdef _WIN32
++    uint32_t tid = ppu_diag_get_current_tid();
++    ppu_diag_set_wait(tid, PPU_WAIT_LWCOND, YZ_GUEST_ADDR(lwcond));
+     DWORD ms = (timeout == 0) ? INFINITE : (DWORD)(timeout / 1000);
+-    if (!SleepConditionVariableCS(&s_lwcond[cslot].cv,
+-                                   &s_lwmutex[mslot].cs, ms))
++    BOOL cv_res = SleepConditionVariableCS(&s_lwcond[cslot].cv,
++                                           &s_lwmutex[mslot].cs, ms);
++    ppu_diag_clear_wait(tid);
++    if (!cv_res)
+     {
+         if (GetLastError() == ERROR_TIMEOUT)
+             return CELL_ETIMEDOUT;
+diff --git a/libs/video/cellGcmSys.c b/libs/video/cellGcmSys.c
+index da009b4..83c6f7f 100644
+--- a/libs/video/cellGcmSys.c
++++ b/libs/video/cellGcmSys.c
+@@ -151,6 +151,7 @@ static u16 s_ea_address_table[65536];
+ #define GCM_OFFSET_TABLE_PAGES   4096u                 /* 4 GiB / 1 MiB       */
+ #define GCM_OFFSET_TABLE_IO_ADDR (VM_HLE_INJECT_BASE + 0x3000u)           /* ea >> 20  -> io>>20 */
+ #define GCM_OFFSET_TABLE_EA_ADDR (VM_HLE_INJECT_BASE + 0x5000u)           /* io >> 20  -> ea>>20 */
++#define GCM_MAX_IO_SIZE          0x10000000u          /* 256 MiB RSX IO aperture */
+ 
+ /* Local memory bump allocator */
+ static u32 s_local_mem_allocated = 0;  /* next free offset in local memory */
+@@ -360,19 +361,27 @@ static void populate_offset_table(u32 ea, u32 io, u32 size)
+     for (u32 i = 0; i < pages && (ea_page + i) < 65536 && (io_page + i) < 65536; i++) {
+         s_io_address_table[ea_page + i] = (u16)(io_page + i);
+         s_ea_address_table[io_page + i] = (u16)(ea_page + i);
++        if ((ea_page + i) < GCM_OFFSET_TABLE_PAGES)
++            vm_write16(GCM_OFFSET_TABLE_IO_ADDR + (ea_page + i) * 2, (u16)(io_page + i));
++        if ((io_page + i) < GCM_OFFSET_TABLE_PAGES)
++            vm_write16(GCM_OFFSET_TABLE_EA_ADDR + (io_page + i) * 2, (u16)(ea_page + i));
+     }
+ }
+ 
+ /* Clear offset table entries for an IO mapping */
+ static void clear_offset_table(u32 ea, u32 io, u32 size)
+ {
+-    u32 pages = size >> 20;
++    u32 pages = (size + 0xFFFFFu) >> 20;
+     u32 ea_page = ea >> 20;
+     u32 io_page = io >> 20;
+ 
+     for (u32 i = 0; i < pages && (ea_page + i) < 65536 && (io_page + i) < 65536; i++) {
+         s_io_address_table[ea_page + i] = 0xFFFF;
+         s_ea_address_table[io_page + i] = 0xFFFF;
++        if ((ea_page + i) < GCM_OFFSET_TABLE_PAGES)
++            vm_write16(GCM_OFFSET_TABLE_IO_ADDR + (ea_page + i) * 2, 0xFFFF);
++        if ((io_page + i) < GCM_OFFSET_TABLE_PAGES)
++            vm_write16(GCM_OFFSET_TABLE_EA_ADDR + (io_page + i) * 2, 0xFFFF);
+     }
+ }
+ 
+@@ -462,6 +471,10 @@ s32 cellGcmInit(u32 cmdSize, u32 ioSize, u32 ioAddress)
+      * producing plausible-but-wrong offsets instead of a translation failure. */
+     memset(s_io_address_table, 0xFF, sizeof(s_io_address_table));
+     memset(s_ea_address_table, 0xFF, sizeof(s_ea_address_table));
++    for (u32 i = 0; i < GCM_OFFSET_TABLE_PAGES; i++) {
++        vm_write16(GCM_OFFSET_TABLE_IO_ADDR + i * 2, 0xFFFF);
++        vm_write16(GCM_OFFSET_TABLE_EA_ADDR + i * 2, 0xFFFF);
++    }
+     s_current_display_buffer_id = 0;
+     s_flip_handler = NULL;
+     s_vblank_handler = NULL;
+@@ -727,6 +740,7 @@ void ppu_gcm_pump(void)
+                    fprintf(stderr, "[gcm-pump] calls=%u vblank=%u flip=%u vcount=%u%c",
+                            calls, nv, nf, s_vblank_count, 10); } }
+     if ((p & 1) && s_vblank_handler_opd && g_ps3_guest_caller) {
++        fprintf(stderr, "[GCM-DIAG] INVOKING VBlank handler OPD 0x%08X (count=%u)\n", s_vblank_handler_opd, s_vblank_count);
+         ydkj_restore_handler_opd(s_vblank_handler_opd, s_vblank_handler_code);
+         g_ps3_guest_caller(s_vblank_handler_opd, (uint64_t)s_vblank_count,
+                            0, 0, 0, 0, 0, 0, 0);
+@@ -734,6 +748,7 @@ void ppu_gcm_pump(void)
+     if (p & 2) {
+         s_flip_status = CELL_GCM_FLIP_STATUS_DONE;
+         if (s_flip_handler_opd && g_ps3_guest_caller) {
++            fprintf(stderr, "[GCM-DIAG] INVOKING Flip handler OPD 0x%08X (arg=1)\n", s_flip_handler_opd);
+             ydkj_restore_handler_opd(s_flip_handler_opd, s_flip_handler_code);
+             g_ps3_guest_caller(s_flip_handler_opd, 1, 0, 0, 0, 0, 0, 0, 0);
+         }
+@@ -1358,6 +1373,10 @@ static void gcm_fifo_resync_why(const char* why, u32* getoff, u32 put)
+     if (n++ < 8)
+         fprintf(stderr, "[cellGcmSys] FIFO resync (%s) 0x%08X -> put 0x%08X\n",
+                 why, *getoff, put);
++    /* Guard against invalid put values (e.g. 0xFFFFFFFF or > GCM_MAX_IO_SIZE) */
++    if (put == 0xFFFFFFFFu || put >= GCM_MAX_IO_SIZE) {
++        put = (s_last_ring_off < GCM_MAX_IO_SIZE) ? s_last_ring_off : 0;
++    }
+     /* If an SPU DMA'd a pushbuffer that ends just short of `put`, that is the
+      * stream the RSX is being pointed at -- land at its START and walk it,
+      * instead of landing on `put` and skipping it. Resyncing to `put` keeps the
+@@ -1365,16 +1384,18 @@ static void gcm_fifo_resync_why(const char* why, u32* getoff, u32 put)
+      * of them: the draws still arrive, with no primitive type, and are dropped
+      * by the backend as prim=0. */
+     u32 land = gcm_spu_block_for_put(put);
+-    if (land == 0xFFFFFFFFu) land = put;
++    if (land == 0xFFFFFFFFu || land >= GCM_MAX_IO_SIZE) land = put;
+     else { static int b = 0; if (b++ < 8)
+         fprintf(stderr, "[cellGcmSys] resync landing on SPU pushbuffer "
+                 "0x%08X (put 0x%08X) instead of skipping to put\n", land, put); }
++    if (land >= GCM_MAX_IO_SIZE) land = 0;
+ 
+     /* Sweep only the range still being skipped; the walker will consume the
+      * fences inside the block itself, and pushing them here too would publish
+-     * every one twice. */
++     * every one twice. Guard strictly against scanning past GCM_MAX_IO_SIZE (256MB). */
+     u32 from = (*getoff <= land) ? *getoff : s_last_ring_off;
+-    if (from < land) {
++    if (from >= GCM_MAX_IO_SIZE) from = 0;
++    if (from < land && land <= GCM_MAX_IO_SIZE) {
+         unsigned rescued = 0;
+         for (u32 io = from; io + 8 <= land; io += 4) {
+             u32 ea = gcm_io2ea(io); if (!ea) continue;
+@@ -1577,6 +1598,12 @@ static void gcm_rsx_process_fifo_unlocked(void)
+      * own command ring, so everything after the jump (including the reference
+      * writes its waits spin on) silently never executed. */
+     u32 put = vm_read32(GCM_CONTROL_GUEST_ADDR + 0);
++    if (put == 0xFFFFFFFFu || put >= GCM_MAX_IO_SIZE || (put > 0 && !gcm_io2ea((put - 4) & ~3u) && !gcm_io2ea(put & ~3u))) {
++        static int _badput = 0;
++        if (_badput++ < 4)
++            fprintf(stderr, "[cellGcmSys] invalid put=0x%08X (out of GCM IO 256MB range or unmapped) -- skipping drain\n", put);
++        return;
++    }
+     /* The words behind `put` were stored by another thread (the title, or the
+      * recycle below) before it stored `put`. On x86 the hardware keeps loads
+      * in order; on arm64 it does not, so without an acquire here the ring
+@@ -1660,6 +1687,13 @@ static void gcm_rsx_process_fifo_unlocked(void)
+      * catch up, and the reason is the whole diagnosis. */
+     const char* why = "caught-up";
+     while (s_fifo_getoff != put && budget-- > 0) {
++        if (s_fifo_getoff >= GCM_MAX_IO_SIZE) {
++            static int _badget = 0;
++            if (_badget++ < 4)
++                fprintf(stderr, "[cellGcmSys] getoff=0x%08X past 256MB GCM IO range -- snapping to put=0x%08X\n", s_fifo_getoff, put);
++            s_fifo_getoff = (put < GCM_MAX_IO_SIZE) ? put : 0;
++            break;
++        }
+         u32 ea = gcm_io2ea(s_fifo_getoff);
+         if (!ea) {
+             /* get is sitting on an IO offset with no mapping -- the title
+@@ -1741,7 +1775,12 @@ static void gcm_rsx_process_fifo_unlocked(void)
+               if (_rd) fprintf(stderr, "[JMP] %08X -> %08X (put=%08X)\n",
+                                s_fifo_getoff, w & 0x1FFFFFFCu, put); }
+             { u32 tgt = w & 0x1FFFFFFCu;
+-              if (!gcm_io2ea(tgt)) { gcm_fifo_bad_branch("JUMP", tgt, w); gcm_fifo_dump_around(s_fifo_getoff); gcm_fifo_resync_why("unmapped-JUMP", &s_fifo_getoff, put); break; }
++              if (tgt >= GCM_MAX_IO_SIZE || !gcm_io2ea(tgt)) {
++                  gcm_fifo_bad_branch("JUMP", tgt, w);
++                  gcm_fifo_dump_around(s_fifo_getoff);
++                  gcm_fifo_resync_why("unmapped-JUMP", &s_fifo_getoff, put);
++                  break;
++              }
+               /* A JUMP to its own address is the "park the RSX here" idiom:
+                * the title leaves it at the write head so the GPU stops if it
+                * catches up, and overwrites it when the next segment is
+@@ -1788,7 +1827,11 @@ static void gcm_rsx_process_fifo_unlocked(void)
+         }
+         if ((w & 3) == 2) {                    /* CALL: offset | 2 */
+             { u32 tgt = w & 0x1FFFFFFCu;
+-              if (!gcm_io2ea(tgt)) { gcm_fifo_bad_branch("CALL", tgt, w); gcm_fifo_resync_why("unmapped-CALL", &s_fifo_getoff, put); break; }
++              if (tgt >= GCM_MAX_IO_SIZE || !gcm_io2ea(tgt)) {
++                  gcm_fifo_bad_branch("CALL", tgt, w);
++                  gcm_fifo_resync_why("unmapped-CALL", &s_fifo_getoff, put);
++                  break;
++              }
+               s_fifo_calloff = s_fifo_getoff + 4;
+               s_fifo_getoff  = tgt; }
+             continue;
+@@ -1951,6 +1994,52 @@ static void gcm_rsx_process_fifo_unlocked(void)
+                   if (live < 0) live = rsx_live_draw_enabled();
+                   if (live) rsx_live_draw_method((subch << 13) | m, vm_read32(dea)); }
+ 
++                /* Log first 40 distinct NV4097 method IDs seen in the FIFO with counts */
++                {
++                    static struct { u32 method; u32 count; } s_distinct_nv4097[40];
++                    static int s_distinct_count = 0;
++                    static u64 s_distinct_total = 0;
++                    static unsigned long long s_last_distinct_dump_ms = 0;
++                    u32 cm = m & 0x1FFCu;
++                    int found = 0;
++                    for (int k = 0; k < s_distinct_count; k++) {
++                        if (s_distinct_nv4097[k].method == cm) {
++                            s_distinct_nv4097[k].count++;
++                            found = 1;
++                            break;
++                        }
++                    }
++                    if (!found && s_distinct_count < 40) {
++                        s_distinct_nv4097[s_distinct_count].method = cm;
++                        s_distinct_nv4097[s_distinct_count].count = 1;
++                        s_distinct_count++;
++                    }
++                    s_distinct_total++;
++                    extern unsigned long long ps3_ms_now(void);
++                    unsigned long long now_ms = ps3_ms_now();
++                    if (now_ms - s_last_distinct_dump_ms >= 3000 && s_distinct_count > 0) {
++                        s_last_distinct_dump_ms = now_ms;
++                        fprintf(stderr, "\n=== [NV4097-METHODS] Distinct FIFO Methods (%d entries, %llu total calls) ===\n",
++                                s_distinct_count, (unsigned long long)s_distinct_total);
++                        for (int k = 0; k < s_distinct_count; k++) {
++                            const char* name = "";
++                            if (s_distinct_nv4097[k].method == 0x1808) name = " (SET_BEGIN_END)";
++                            else if (s_distinct_nv4097[k].method == 0x1814) name = " (DRAW_ARRAYS)";
++                            else if (s_distinct_nv4097[k].method == 0x1824) name = " (DRAW_INDEX)";
++                            else if (s_distinct_nv4097[k].method == 0x0200) name = " (SET_SURFACE_FORMAT)";
++                            else if (s_distinct_nv4097[k].method == 0x0208) name = " (CLEAR_SURFACE)";
++                            else if (s_distinct_nv4097[k].method == 0x0210) name = " (SET_SURFACE_COLOR_AOFFSET)";
++                            else if (s_distinct_nv4097[k].method == 0x0214) name = " (SET_SURFACE_ZETA_OFFSET)";
++                            else if (s_distinct_nv4097[k].method == 0x0100) name = " (NOP)";
++                            else if (s_distinct_nv4097[k].method == 0x0050) name = " (SET_REFERENCE)";
++                            fprintf(stderr, "  #%02d: 0x%04X%s -> count=%u\n",
++                                    k + 1, s_distinct_nv4097[k].method, name, s_distinct_nv4097[k].count);
++                        }
++                        fprintf(stderr, "=================================================================\n\n");
++                        fflush(stderr);
++                    }
++                }
++
+                 /* And into the platform-neutral register-file draw engine,
+                  * which is the macOS path under PS3RECOMP_RSX_ENGINE=dispatch.
+                  * It wants the raw method with its subchannel bits for the
+@@ -2397,8 +2486,10 @@ static s32 gcm_flip_request(u32 bufferId, int in_fifo)
+      * handler against half-built state. Tokyo Jungle faults that way, in
+      * func_001F2D3C, dereferencing a singleton it has not constructed yet.
+      * GCM_FLIPCB_ONTICK=1 leaves the callback to the tick alone. */
+-    if (s_flip_handler_opd && g_ps3_guest_caller && !gcm_flipcb_on_tick_only())
++    if (s_flip_handler_opd && g_ps3_guest_caller && !gcm_flipcb_on_tick_only()) {
++        fprintf(stderr, "[GCM-DIAG] INVOKING Flip handler OPD 0x%08X (arg=0)\n", s_flip_handler_opd);
+         g_ps3_guest_caller(s_flip_handler_opd, 0, 0, 0, 0, 0, 0, 0, 0);  /* head 0 = primary display */
++    }
+ 
+     return CELL_OK;
+ }
+@@ -2521,7 +2612,7 @@ void cellGcmSetFlipHandler(CellGcmFlipHandler handler)
+      * the legacy host-typed value too for any callers still using
+      * the old API style. Real dispatch goes through
+      * cellGcmDispatchVBlank()/DispatchFlip() via g_ps3_guest_caller. */
+-    printf("[cellGcmSys] SetFlipHandler(opd=0x%08X)\n", (unsigned)(size_t)handler);
++    fprintf(stderr, "[GCM-DIAG] cellGcmSetFlipHandler(opd=0x%08X)\n", (unsigned)(size_t)handler);
+     s_flip_handler_opd = (u32)(size_t)handler;
+     s_flip_handler = handler;
+     { u32 c = s_flip_handler_opd ? vm_read32(s_flip_handler_opd) : 0; if (c) s_flip_handler_code = c; }
+@@ -2531,7 +2622,7 @@ void cellGcmSetFlipHandler(CellGcmFlipHandler handler)
+ /* NID: 0xA547ADDE */
+ void cellGcmSetVBlankHandler(CellGcmVBlankHandler handler)
+ {
+-    printf("[cellGcmSys] SetVBlankHandler(opd=0x%08X)\n", (unsigned)(size_t)handler);
++    fprintf(stderr, "[GCM-DIAG] cellGcmSetVBlankHandler(opd=0x%08X)\n", (unsigned)(size_t)handler);
+     s_vblank_handler_opd = (u32)(size_t)handler;
+     s_vblank_handler = handler;
+     { u32 c = s_vblank_handler_opd ? vm_read32(s_vblank_handler_opd) : 0; if (c) s_vblank_handler_code = c; }
+@@ -2575,6 +2666,43 @@ static void gcm_publish_offset_tables(void)
+     }
+ }
+ 
++void gcm_dump_offset_tables(const char* tag)
++{
++    fprintf(stderr, "[GCM-TABLE-DIAG] %s:\n", tag);
++    fprintf(stderr, "  GCM_OFFSET_TABLE_IO_ADDR = 0x%08X, EA_ADDR = 0x%08X\n",
++            (u32)GCM_OFFSET_TABLE_IO_ADDR, (u32)GCM_OFFSET_TABLE_EA_ADDR);
++    if (vm_base) {
++        uint32_t game_io_ptr = vm_read32(0x009BDFB4);
++        uint32_t game_ea_ptr = vm_read32(0x009BDFB8);
++        fprintf(stderr, "  Game struct @ 0x009BDFB4: ioAddress=0x%08X, eaAddress=0x%08X\n",
++                game_io_ptr, game_ea_ptr);
++    }
++    fprintf(stderr, "  Host s_io_address_table (first non-0xFFFF entries):\n");
++    int count = 0;
++    for (u32 i = 0; i < 4096 && count < 16; i++) {
++        if (s_io_address_table[i] != 0xFFFF) {
++            u16 guest_val = vm_read16(GCM_OFFSET_TABLE_IO_ADDR + i * 2);
++            fprintf(stderr, "    EA page 0x%03X (EA 0x%08X) -> IO page 0x%03X (host=0x%04X, guest=0x%04X)\n",
++                    i, i << 20, s_io_address_table[i], s_io_address_table[i], guest_val);
++            count++;
++        }
++    }
++    if (count == 0) fprintf(stderr, "    (all 0xFFFF)\n");
++
++    fprintf(stderr, "  Host s_ea_address_table (first non-0xFFFF entries):\n");
++    count = 0;
++    for (u32 i = 0; i < 4096 && count < 16; i++) {
++        if (s_ea_address_table[i] != 0xFFFF) {
++            u16 guest_val = vm_read16(GCM_OFFSET_TABLE_EA_ADDR + i * 2);
++            fprintf(stderr, "    IO page 0x%03X (IO 0x%08X) -> EA page 0x%03X (host=0x%04X, guest=0x%04X)\n",
++                    i, i << 20, s_ea_address_table[i], s_ea_address_table[i], guest_val);
++            count++;
++        }
++    }
++    if (count == 0) fprintf(stderr, "    (all 0xFFFF)\n");
++    fflush(stderr);
++}
++
+ s32 cellGcmGetOffsetTable(CellGcmOffsetTable* table)
+ {
+     u32 ea = (u32)(uintptr_t)table;
+@@ -2586,6 +2714,10 @@ s32 cellGcmGetOffsetTable(CellGcmOffsetTable* table)
+     /* The guest struct is two 4-byte EAs, not two host pointers. */
+     vm_write32(ea + 0, GCM_OFFSET_TABLE_IO_ADDR);
+     vm_write32(ea + 4, GCM_OFFSET_TABLE_EA_ADDR);
++
++    fprintf(stderr, "[cellGcmSys] GetOffsetTable(table=0x%08X) -> io=0x%08X, ea=0x%08X\n",
++            ea, (u32)GCM_OFFSET_TABLE_IO_ADDR, (u32)GCM_OFFSET_TABLE_EA_ADDR);
++    gcm_dump_offset_tables("cellGcmGetOffsetTable");
+     return CELL_OK;
+ }
+ 
+@@ -2767,6 +2899,7 @@ s32 cellGcmMapMainMemory(u32 ea, u32 size, u32* offset)
+     s_io_mapping_count++;
+ 
+     populate_offset_table(ea, io_offset, size);
++    gcm_dump_offset_tables("after cellGcmMapMainMemory");
+ 
+     vm_write32((uint32_t)(uintptr_t)offset, io_offset);   /* guest out-param */
+     return CELL_OK;
+@@ -2788,8 +2921,13 @@ s32 cellGcmMapEaIoAddress(u32 ea, u32 io, u32 size)
+         printf("[cellGcmSys] MapEaIoAddress REFUSED: size 0x%X is not a non-zero multiple of 1MB\n", size);
+         return CELL_GCM_ERROR_INVALID_ALIGNMENT;
+     }
+-    if (find_mapping_by_ea(ea) != NULL) {
+-        printf("[cellGcmSys] MapEaIoAddress REFUSED: ea 0x%08X is already mapped\n", ea);
++    IoMapping* existing = find_mapping_by_ea(ea);
++    if (existing != NULL) {
++        if (existing->io == io) {
++            printf("[cellGcmSys] MapEaIoAddress ea 0x%08X already mapped to io 0x%08X (re-mapping OK)\n", ea, io);
++            return CELL_OK;
++        }
++        printf("[cellGcmSys] MapEaIoAddress REFUSED: ea 0x%08X is already mapped to io 0x%08X (requested io 0x%08X)\n", ea, existing->io, io);
+         return CELL_GCM_ERROR_ADDRESS_OVERWRAP;
+     }
+ 
+@@ -2806,6 +2944,7 @@ s32 cellGcmMapEaIoAddress(u32 ea, u32 io, u32 size)
+     s_io_mapping_count++;
+ 
+     populate_offset_table(ea, io, size);
++    gcm_dump_offset_tables("after cellGcmMapEaIoAddress");
+ 
+     return CELL_OK;
+ }
+@@ -3212,6 +3351,7 @@ s32 cellGcmSetDefaultFifoSize(u32 size)
+ /* NID: 0x21397818 */
+ s32 _cellGcmSetFlipCommand(void* ctx, u32 bufferId)
+ {
++    fprintf(stderr, "[GCM-DIAG] _cellGcmSetFlipCommand(buf=%u)\n", bufferId);
+     if (gcm_flip_into_fifo((u32)(uintptr_t)ctx, bufferId))
+         return gcm_flip_request(bufferId, 1);
+     return cellGcmSetFlipCommand(bufferId);
+@@ -3221,6 +3361,8 @@ s32 _cellGcmSetFlipCommand(void* ctx, u32 bufferId)
+ s32 _cellGcmSetFlipCommandWithWaitLabel(void* ctx, u32 bufferId,
+                                         u32 labelIndex, u32 labelValue)
+ {
++    fprintf(stderr, "[GCM-DIAG] _cellGcmSetFlipCommandWithWaitLabel(buf=%u, label=%u, val=%u)\n",
++            bufferId, labelIndex, labelValue);
+     (void)ctx;
+     return cellGcmSetFlipCommandWithWaitLabel(bufferId, labelIndex, labelValue);
+ }
+@@ -3447,6 +3589,7 @@ s32 cellGcmSetFlipImmediate(u32 bufferId)
+ /* Set flip status directly */
+ void cellGcmSetFlipStatus(u32 status)
+ {
++    fprintf(stderr, "[GCM-DIAG] cellGcmSetFlipStatus(status=0x%X)\n", status);
+     s_flip_status = status;
+ }
+ 
+diff --git a/libs/video/cellGcmSys.h b/libs/video/cellGcmSys.h
+index eab83e1..6607400 100644
+--- a/libs/video/cellGcmSys.h
++++ b/libs/video/cellGcmSys.h
+@@ -305,6 +305,7 @@ u64 cellGcmGetLastFlipTime(void);
+ 
+ /* NID: 0x0E6B0DFF */
+ s32 cellGcmGetOffsetTable(CellGcmOffsetTable* table);
++void gcm_dump_offset_tables(const char* tag);
+ 
+ /* NID: 0xDB769B32 */
+ s32 cellGcmAddressToOffset(u32 address, u32* offset);
+diff --git a/runtime/ppu/ppu_fs.cpp b/runtime/ppu/ppu_fs.cpp
+index 7f1ffc9..55c2d5e 100644
+--- a/runtime/ppu/ppu_fs.cpp
++++ b/runtime/ppu/ppu_fs.cpp
+@@ -32,6 +32,7 @@ extern "C" void ydkj_host_bt(const char* tag);
+ #include <fcntl.h>
+ #ifdef _WIN32
+ #include <io.h>          /* open/close on MinGW */
++#include <direct.h>      /* _mkdir */
+ #else
+ #include <unistd.h>
+ #endif
+@@ -134,6 +135,15 @@ static void host_path(char* out, size_t cap, const char* guest)
+         return;
+     }
+ 
++    /* /dev_hdd1 maps cache files (fios cache.idx etc.) */
++    static const char* hdd1_root = nullptr; static int hdd1_init = 0;
++    if (!hdd1_init) { hdd1_root = getenv("PS3_HDD1_ROOT"); hdd1_init = 1; }
++    if (hdd1_root && strncmp(guest, "/dev_hdd1/", 10) == 0) {
++        snprintf(out, cap, "%s/%s", hdd1_root, guest + 10);
++        for (char* p = out; *p; p++) if (*p == '\\') *p = '/';
++        return;
++    }
++
+     /* /dev_flash is FIRMWARE, not game data — mapping it into the game root (the
+      * old behaviour) makes every firmware lookup miss. YDKJ's FMOD asks for
+      * /dev_flash/sys/external/flashMP3.pic and, on a miss, prints "mp3 failed to
+@@ -197,6 +207,42 @@ static int fd_alloc_dir(DIR* d)
+     return -1;
+ }
+ 
++/* Ensure parent directories exist before creating files */
++static void ensure_parent_dirs(const char* path)
++{
++    char tmp[1100];
++    strncpy(tmp, path, sizeof(tmp) - 1);
++    tmp[sizeof(tmp) - 1] = '\0';
++    char* last_sep = nullptr;
++    for (char* p = tmp; *p; p++) {
++        if (*p == '/' || *p == '\\') last_sep = p;
++    }
++    if (!last_sep) return;
++    *last_sep = '\0';
++
++    for (char* p = tmp; *p; p++) {
++        if (*p == '/' || *p == '\\') {
++            char saved = *p;
++            *p = '\0';
++            if (strlen(tmp) > 0 && tmp[strlen(tmp) - 1] != ':') {
++#ifdef _WIN32
++                _mkdir(tmp);
++#else
++                mkdir(tmp, 0755);
++#endif
++            }
++            *p = saved;
++        }
++    }
++    if (strlen(tmp) > 0 && tmp[strlen(tmp) - 1] != ':') {
++#ifdef _WIN32
++        _mkdir(tmp);
++#else
++        mkdir(tmp, 0755);
++#endif
++    }
++}
++
+ /* ---- handlers ---- */
+ static void cellFsOpen(ppu_context* ctx)
+ {
+@@ -220,9 +266,13 @@ static void cellFsOpen(ppu_context* ctx)
+     int acc = flags & 0x3;
+     int oflags = (acc == CELL_FS_O_RDWR)   ? O_RDWR
+                : (acc == CELL_FS_O_WRONLY) ? O_WRONLY : O_RDONLY;
+-    if (flags & CELL_FS_O_CREAT)  oflags |= O_CREAT;
+-    if (flags & CELL_FS_O_TRUNC)  oflags |= O_TRUNC;
+-    if (flags & CELL_FS_O_APPEND) oflags |= O_APPEND;
++    if ((flags & CELL_FS_O_CREAT) || (flags & 0x40))  oflags |= O_CREAT;
++    if ((flags & CELL_FS_O_TRUNC) || (flags & 0x200)) oflags |= O_TRUNC;
++    if ((flags & CELL_FS_O_APPEND) || (flags & 0x400) || (flags & 0x8)) oflags |= O_APPEND;
++
++    if (oflags & O_CREAT) {
++        ensure_parent_dirs(hpath);
++    }
+ 
+     /* A bare device root ("/dev_bdvd") resolves to a DIRECTORY, and open() on a
+      * directory fails on Windows. Real cellFsOpen answers EISDIR there, and a
+@@ -239,7 +289,7 @@ static void cellFsOpen(ppu_context* ctx)
+     }
+     int hfd = open(hpath, oflags | O_BINARY, 0666);
+     if (hfd < 0) {
+-        fprintf(stderr, "[fs] open FAIL '%s' -> '%s'\n", gpath, hpath);
++        fprintf(stderr, "[fs] open FAIL '%s' -> '%s' (flags=0x%X errno=%d: %s)\n", gpath, hpath, flags, errno, strerror(errno));
+         ctx->gpr[3] = (uint64_t)(int64_t)CELL_FS_ENOENT; return;
+     }
+     const char* fmode = (acc == CELL_FS_O_RDWR)
+diff --git a/runtime/ppu/ppu_hle.cpp b/runtime/ppu/ppu_hle.cpp
+index d9ce0c3..f476c6c 100644
+--- a/runtime/ppu/ppu_hle.cpp
++++ b/runtime/ppu/ppu_hle.cpp
+@@ -24,6 +24,7 @@
+ #include <stdint.h>
+ #include <stdio.h>
+ #include <stdlib.h>       /* getenv, atoi (boot trace) */
++#include "ps3_diagnostics.h"
+ 
+ /* Single flat NID -> handler table (all modules share it; resolution is by
+  * NID which is globally unique). Sized for the firmware import surface. */
+@@ -178,6 +179,157 @@ static void ps3_hle_unresolved(uint32_t nid, ppu_context* ctx)
+     ctx->gpr[3] = s_fake ? 0u : (uint64_t)(uint32_t)CELL_ERROR_ERROR;
+ }
+ 
++#include <windows.h>
++#include <string.h>
++
++struct HleSummaryRecord {
++    uint32_t tid;
++    uint32_t nid;
++    char name[64];
++    uint32_t args[4];
++    uint64_t ret;
++    int is_stub;
++    uint64_t count;
++};
++
++static HleSummaryRecord s_hle_records[512];
++static int s_hle_record_count = 0;
++static SRWLOCK s_hle_rec_lock = SRWLOCK_INIT;
++
++static void record_hle_call(uint32_t tid, uint32_t nid, const char* name,
++                            const uint32_t args[4], uint64_t ret, int is_stub)
++{
++    if (tid != 1 && tid != 12) return;
++    AcquireSRWLockExclusive(&s_hle_rec_lock);
++    int idx = -1;
++    for (int i = 0; i < s_hle_record_count; i++) {
++        if (s_hle_records[i].tid == tid && s_hle_records[i].nid == nid) {
++            idx = i;
++            break;
++        }
++    }
++    if (idx < 0) {
++        if (s_hle_record_count < 512) {
++            idx = s_hle_record_count++;
++            s_hle_records[idx].tid = tid;
++            s_hle_records[idx].nid = nid;
++            strncpy(s_hle_records[idx].name, name ? name : "unknown", 63);
++            s_hle_records[idx].name[63] = 0;
++            s_hle_records[idx].is_stub = is_stub;
++            s_hle_records[idx].count = 0;
++        }
++    }
++    if (idx >= 0) {
++        s_hle_records[idx].count++;
++        for (int k = 0; k < 4; k++) s_hle_records[idx].args[k] = args[k];
++        s_hle_records[idx].ret = ret;
++        s_hle_records[idx].is_stub = is_stub;
++        if (name && (!s_hle_records[idx].name[0] || strcmp(s_hle_records[idx].name, "unknown") == 0 || strcmp(s_hle_records[idx].name, "(unimplemented)") == 0)) {
++            strncpy(s_hle_records[idx].name, name, 63);
++            s_hle_records[idx].name[63] = 0;
++        }
++    }
++    ReleaseSRWLockExclusive(&s_hle_rec_lock);
++}
++
++extern "C" uint8_t* vm_base;
++extern "C" uint32_t vm_read32(uint64_t addr);
++extern "C" uint16_t vm_read16(uint64_t addr);
++
++static void check_target_hle_inspect(uint32_t tid, uint32_t nid, const char* name,
++                                     const uint32_t args[4], uint64_t ret, int is_stub)
++{
++    if (!name) return;
++    static const char* prefixes[] = {
++        "cellPad", "cellMsgDialog", "cellSysutil", "cellSail", "cellPamf",
++        "cellVdec", "cellDmux", "cellSaveData", "cellGameContent"
++    };
++    bool match = false;
++    for (const char* p : prefixes) {
++        if (strncmp(name, p, strlen(p)) == 0) { match = true; break; }
++    }
++    if (!match) return;
++
++    static unsigned long s_target_log_count = 0;
++    if (s_target_log_count++ < 200 || (s_target_log_count % 500) == 0) {
++        fprintf(stderr, "[TARGET-HLE #%lu] tid=%u %s (0x%08X) args=(0x%08X, 0x%08X, 0x%08X, 0x%08X) -> ret=0x%llX (stub=%d)\n",
++                s_target_log_count, tid, name, nid, args[0], args[1], args[2], args[3], (unsigned long long)ret, is_stub);
++    }
++
++    if (strcmp(name, "cellPadGetInfo2") == 0 && args[0] && vm_base) {
++        uint32_t ptr = args[0];
++        uint32_t max_c = vm_read32(ptr + 0x00);
++        uint32_t now_c = vm_read32(ptr + 0x04);
++        uint32_t status0 = vm_read32(ptr + 0x0C);
++        uint32_t setting0 = vm_read32(ptr + 0x28);
++        static int _pi = 0;
++        if (_pi++ < 10) {
++            fprintf(stderr, "  [PAD-INFO2] ptr=0x%08X: max_connect=%u now_connect=%u port0_status=0x%X setting0=0x%X\n",
++                    ptr, max_c, now_c, status0, setting0);
++        }
++    } else if (strcmp(name, "cellPadGetData") == 0 && args[1] && vm_base) {
++        uint32_t port = args[0];
++        uint32_t ptr = args[1];
++        int32_t len = (int32_t)vm_read32(ptr + 0x00);
++        uint16_t b0 = vm_read16(ptr + 0x04);
++        uint16_t b1 = vm_read16(ptr + 0x06);
++        uint16_t dig1 = vm_read16(ptr + 0x08);
++        uint16_t dig2 = vm_read16(ptr + 0x0A);
++        static int _pd = 0;
++        if (_pd++ < 15 || len > 0) {
++            fprintf(stderr, "  [PAD-DATA] port=%u ptr=0x%08X: len=%d b0=0x%04X b1=0x%04X dig1=0x%04X dig2=0x%04X\n",
++                    port, ptr, len, b0, b1, dig1, dig2);
++        }
++    } else if (strcmp(name, "cellPadSetActDirect") == 0) {
++        static int _pa = 0;
++        if (_pa++ < 10) {
++            fprintf(stderr, "  [PAD-ACT] port=%u act_param=0x%08X\n", args[0], args[1]);
++        }
++    }
++}
++
++extern "C" void ppu_hle_dump_summary_table(void)
++{
++    AcquireSRWLockExclusive(&s_hle_rec_lock);
++    const uint32_t targets[2] = {1u, 12u};
++    for (uint32_t target_tid : targets) {
++        int indices[512];
++        int count = 0;
++        for (int i = 0; i < s_hle_record_count; i++) {
++            if (s_hle_records[i].tid == target_tid) {
++                indices[count++] = i;
++            }
++        }
++        for (int i = 0; i < count - 1; i++) {
++            for (int j = i + 1; j < count; j++) {
++                if (s_hle_records[indices[j]].count > s_hle_records[indices[i]].count) {
++                    int tmp = indices[i];
++                    indices[i] = indices[j];
++                    indices[j] = tmp;
++                }
++            }
++        }
++        fprintf(stderr, "\n=== [HLE-CALL-TABLE] tid=%u Distinct HLE Calls (%d total distinct) ===\n", target_tid, count);
++        fprintf(stderr, "%-4s | %-10s | %-32s | %-8s | %-6s | %-42s | %-18s\n",
++                "Rank", "NID", "Name", "Count", "Type", "Args (r3, r4, r5, r6)", "Return");
++        fprintf(stderr, "------------------------------------------------------------------------------------------------------------------------\n");
++        for (int i = 0; i < count; i++) {
++            HleSummaryRecord& rec = s_hle_records[indices[i]];
++            char args_str[64];
++            snprintf(args_str, sizeof(args_str), "(0x%08X, 0x%08X, 0x%08X, 0x%08X)",
++                     rec.args[0], rec.args[1], rec.args[2], rec.args[3]);
++            char ret_str[32];
++            snprintf(ret_str, sizeof(ret_str), "0x%llX", (unsigned long long)rec.ret);
++            fprintf(stderr, "#%-3d | 0x%08X | %-32s | %-8llu | %-6s | %-42s | %-18s\n",
++                    i + 1, rec.nid, rec.name, (unsigned long long)rec.count,
++                    rec.is_stub ? "STUB" : "REAL", args_str, ret_str);
++        }
++        fprintf(stderr, "========================================================================================================================\n\n");
++    }
++    ReleaseSRWLockExclusive(&s_hle_rec_lock);
++    fflush(stderr);
++}
++
+ extern "C" void ppu_prof_stamp(void* ctx, unsigned lr);
+ extern "C" uint32_t ppu_prof_resolve_host(void* ra);
+ extern "C" void ps3_hle_call(uint32_t nid, ppu_context* ctx)
+@@ -218,11 +370,35 @@ extern "C" void ps3_hle_call(uint32_t nid, ppu_context* ctx)
+      * base (e.g. func_002B03AC's `*(r2-0x4B34)` FMOD list head -> null -> infinite walk
+      * -> no draws). Snapshot the caller r2+sp now and restore BOTH the live r2 and the
+      * ABI slot on every exit path (offset 40 = 0x28 is the reserved TOC doubleword). */
+-    struct _TocGuard { ppu_context* c; uint64_t toc, sp;
+-        ~_TocGuard(){ c->gpr[2] = toc; vm_write64(sp + 0x28, toc);
+-                      unsigned t = (unsigned)c->thread_id;
+-                      if (t < PS3_HLE_INFLIGHT_MAX) g_hle_inflight[t] = nullptr; }
+-    } _tg{ ctx, ctx->gpr[2], ctx->gpr[1] };
++
++
++    struct _TocGuard {
++        ppu_context* c;
++        uint64_t toc, sp;
++        uint32_t nid, tid;
++        uint32_t args[4];
++        const char* name;
++        int is_stub;
++        _TocGuard(ppu_context* ctx, uint32_t n)
++            : c(ctx), nid(n), name(nullptr), is_stub(1) {
++            toc = ctx ? ctx->gpr[2] : 0;
++            sp  = ctx ? ctx->gpr[1] : 0;
++            tid = ctx ? (uint32_t)ctx->thread_id : 0;
++            for (int k = 0; k < 4; k++) args[k] = ctx ? (uint32_t)ctx->gpr[3 + k] : 0;
++        }
++        ~_TocGuard() {
++            if (c) {
++                c->gpr[2] = toc;
++                vm_write64(sp + 0x28, toc);
++                unsigned t = (unsigned)c->thread_id;
++                if (t < PS3_HLE_INFLIGHT_MAX) g_hle_inflight[t] = nullptr;
++                uint64_t ret = c->gpr[3];
++                const char* final_name = name ? name : g_last_hle_name;
++                record_hle_call(tid, nid, final_name, args, ret, is_stub);
++                check_target_hle_inspect(tid, nid, final_name, args, ret, is_stub);
++            }
++        }
++    } _tg{ ctx, nid };
+     /* Deliver any pending vblank/flip tick on THIS (guest) thread, serialized with
+      * guest execution -- the vblank ticker only marks ticks pending; the handlers
+      * run here so guest code never executes concurrently on the ticker thread. */
+@@ -256,6 +432,7 @@ extern "C" void ps3_hle_call(uint32_t nid, ppu_context* ctx)
+      * guitar controller is an extremely convincing wrong answer. Placeholder
+      * now, overwritten with the real name once the handler is known. */
+     g_last_hle_name = "(unimplemented)";
++    ppu_diag_enter_hle((uint32_t)ctx->thread_id, nid, "(unimplemented)");
+ 
+     /* Boot trace: log the first N HLE calls (PS3_HLE_TRACE=N). Invaluable for
+      * new-SDK bring-up (e.g. PSL1GHT) where the failure is "nothing happens". */
+@@ -378,6 +555,7 @@ extern "C" void ps3_hle_call(uint32_t nid, ppu_context* ctx)
+             }
+         }
+         if (opd) {
++            _tg.name = "libsre (PRX)"; _tg.is_stub = 0;
+             uint32_t code = vm_read32(opd);
+             uint32_t toc  = vm_read32(opd + 4);
+             { static int64_t st=-2; if(st==-2){const char*e=getenv("SPURS_TRACE"); st=e?1:0;}
+@@ -633,6 +811,8 @@ extern "C" void ps3_hle_call(uint32_t nid, ppu_context* ctx)
+              * "cellPadInit", which for a game that needs a guitar controller is
+              * a very convincing wrong answer to chase. */
+             g_last_hle_name = g_ctx[i].name;
++            _tg.name = g_ctx[i].name; _tg.is_stub = 0;
++            ppu_diag_enter_hle((uint32_t)ctx->thread_id, nid, g_ctx[i].name);
+             { unsigned t = (unsigned)ctx->thread_id;
+               if (t < PS3_HLE_INFLIGHT_MAX) g_hle_inflight[t] = g_ctx[i].name; }
+             g_ctx[i].fn(ctx);
+@@ -643,6 +823,7 @@ extern "C" void ps3_hle_call(uint32_t nid, ppu_context* ctx)
+ 
+     ps3_nid_entry* e = g_hle_inited ? ps3_nid_table_find(&g_hle_nids, nid) : nullptr;
+     if (!e || !e->handler) {
++        _tg.name = "(unresolved stub)"; _tg.is_stub = 1;
+         /* Recorded before the diagnostic paths below, several of which return
+          * early. An import moving between resolved and unresolved is exactly the
+          * kind of change the gate exists to catch. */
+@@ -711,6 +892,8 @@ extern "C" void ps3_hle_call(uint32_t nid, ppu_context* ctx)
+         return;
+     }
+     g_last_hle_name = e->name;
++    _tg.name = e->name; _tg.is_stub = 0;
++    ppu_diag_enter_hle((uint32_t)ctx->thread_id, nid, e->name);
+     ps3_msf("hle:%s", e->name);
+     { unsigned t = (unsigned)ctx->thread_id;
+       if (t < PS3_HLE_INFLIGHT_MAX) g_hle_inflight[t] = e->name; }
+diff --git a/runtime/ppu/ppu_sysprx.cpp b/runtime/ppu/ppu_sysprx.cpp
+index db9ea00..aef2839 100644
+--- a/runtime/ppu/ppu_sysprx.cpp
++++ b/runtime/ppu/ppu_sysprx.cpp
+@@ -501,6 +501,8 @@ static void hle_gcm_callback(ppu_context* ctx)
+     ctx->gpr[3] = 0;                                   /* CELL_OK */
+ }
+ 
++extern "C" void gcm_dump_offset_tables(const char* tag);
++
+ static void hle_cellGcmInitBody(ppu_context* ctx)
+ {
+     uint32_t ctx_out = (uint32_t)ctx->gpr[3];
+@@ -510,6 +512,7 @@ static void hle_cellGcmInitBody(ppu_context* ctx)
+     fprintf(stderr, "[HLE] _cellGcmInitBody(ctx_out=0x%08X, cmdSize=0x%X, ioSize=0x%X, ioAddr=0x%X)\n",
+             ctx_out, cmdSize, ioSize, ioAddr);
+     cellGcmSetupContext(ctx_out, cmdSize, ioSize, ioAddr, gcm_guest_alloc, gcm_guest_write32);
++    gcm_dump_offset_tables("right after _cellGcmInitBody");
+     ctx->gpr[3] = 0;   /* CELL_OK */
+ }
+ 
+diff --git a/runtime/spu/spu_channels.c b/runtime/spu/spu_channels.c
+index 506da3f..9a26d26 100644
+--- a/runtime/spu/spu_channels.c
++++ b/runtime/spu/spu_channels.c
+@@ -17,6 +17,7 @@
+ #include "spu_helpers.h"   /* spu_splat_u32 / spu_ls_read128 (SMC microstep) */
+ #include "spu_lockstep.h"
+ #include "spu_interp.h"    /* spu_lifted_fn / spu_lifted_lookup -- defined below */
++#include "ps3_diagnostics.h"
+ #include <stdint.h>
+ #include <stdio.h>
+ #include <stdlib.h>
+@@ -968,6 +969,11 @@ static void spu_ch_wait(spu_context* ctx, uint32_t channel, const char* op)
+                 ctx->event_status, ctx->event_mask); }
+ 
+     ctx->status = SPU_STATUS_WAITING_CHANNEL;
++    if (ctx->wid < 16) {
++        g_spurs_wid_diags[ctx->wid].last_pc = (uint32_t)ctx->pc & SPU_LS_MASK;
++        g_spurs_wid_diags[ctx->wid].blocked_type = (channel == SPU_RdEventStat ? SPURS_WAIT_EVENT : SPURS_WAIT_CHANNEL);
++        g_spurs_wid_diags[ctx->wid].blocked_detail = channel;
++    }
+     yz_lockstep_block_begin(ctx);          /* release the run token before the OS wait */
+     {
+         unsigned long long start = GetTickCount64(), next_hb = 2000;
+@@ -990,6 +996,10 @@ static void spu_ch_wait(spu_context* ctx, uint32_t channel, const char* op)
+     }
+     yz_lockstep_block_end(ctx);            /* rejoin the rotation, reacquire the token */
+     ctx->status = SPU_STATUS_RUNNING;
++    if (ctx->wid < 16) {
++        g_spurs_wid_diags[ctx->wid].blocked_type = SPURS_WAIT_NONE;
++        g_spurs_wid_diags[ctx->wid].last_pc = (uint32_t)ctx->pc & SPU_LS_MASK;
++    }
+ }
+ 
+ /* ===========================================================================
+@@ -2110,6 +2120,11 @@ void spu_indirect_branch(spu_context* ctx)
+             if (n <= 4 || (n % 4096) == 0)
+                 fprintf(stderr, "[spurs-pm] poll #%u (r3=0x%08X) -> continue\n",
+                         n, ctx->gpr[3]._u32[0]);
++#ifdef _WIN32
++            if ((n & 0x1F) == 0) {
++                SwitchToThread();
++            }
++#endif
+             ctx->gpr[3] = spu_make_preferred_u32(0);
+             ctx->pc = ctx->gpr[0]._u32[0] & SPU_LS_MASK;
+             return;
+diff --git a/runtime/spu/spu_context.h b/runtime/spu/spu_context.h
+index fa88c3f..c911899 100644
+--- a/runtime/spu/spu_context.h
++++ b/runtime/spu/spu_context.h
+@@ -207,6 +207,7 @@ typedef struct spu_context {
+     /* SPU thread identification */
+     uint32_t spu_id;
+     uint32_t spu_group_id;
++    uint32_t wid;
+ 
+     /* Active recompiled image for per-context indirect-branch dispatch. SPURS
+      * loads kernel/policy/job into overlapping LS addresses at different times,
+diff --git a/runtime/spu/spu_drain.c b/runtime/spu/spu_drain.c
+index 931d3b3..242b51f 100644
+--- a/runtime/spu/spu_drain.c
++++ b/runtime/spu/spu_drain.c
+@@ -297,6 +297,8 @@ void (*spu_take_interrupt(spu_context* ctx,
+         target = ((w >> 7) & 0xFFFF) << 2;
+     } else if (op9 == 0x064) {       /* br i16 (relative to LS 0) */
+         target = (((w >> 7) & 0xFFFF) << 2) & SPU_LS_MASK;
++    } else if (ctx->image_id == 2) {
++        target = 0x00A2Cu;
+     } else {
+         static int _w = 0;
+         if (_w++ < 4)
+diff --git a/runtime/spu/spurs_policy.c b/runtime/spu/spurs_policy.c
+index 5d1c63d..1d835f6 100644
+--- a/runtime/spu/spurs_policy.c
++++ b/runtime/spu/spurs_policy.c
+@@ -27,6 +27,7 @@
+ #include "../platform/win32_compat.h"
+ #include "spu_workload.h"
+ #include "spu_coherency.h"
++#include "ps3_diagnostics.h"
+ #include <stdio.h>
+ #include <stdlib.h>
+ #include <string.h>
+@@ -234,6 +235,7 @@ int spu_run_policy_module(spu_lifted_entry_fn entry, int image_id,
+     resident->entry = entry; resident->image_id = image_id;
+     ctx->image_id    = image_id;
+     ctx->policy_mode = 1;
++    ctx->wid         = wid;
+ 
+     /* PM image at its load base (first entry only -- LS persists). */
+     if (first)
+@@ -390,7 +392,25 @@ int spu_run_policy_module(spu_lifted_entry_fn entry, int image_id,
+     unsigned batch_before = g_wws_batch_gets;
+     unsigned claim_before = g_spu_putllc_sync_hit;
+ 
++    if (wid < 16) {
++        g_spurs_wid_diags[wid].started_count++;
++        g_spurs_wid_diags[wid].active_ctx = ctx;
++        g_spurs_wid_diags[wid].last_pc = (uint32_t)ctx->pc & 0x3FFFF;
++        if (!g_spurs_wid_diags[wid].first_logged) {
++            g_spurs_wid_diags[wid].first_logged = 1;
++            fprintf(stderr, "[SPURS-PM FIRST] wid=%u spu_num=%u entry_regs: r0=0x%08X r1=0x%08X r3=0x%08X r4_hi=0x%08X r4_lo=0x%08X r5=0x%08X (wkl_data=0x%016llX spurs_ea=0x%08X pm_size=%u)\n",
++                    wid, spu_num,
++                    ctx->gpr[0]._u32[0], ctx->gpr[1]._u32[0], ctx->gpr[3]._u32[0],
++                    ctx->gpr[4]._u32[0], ctx->gpr[4]._u32[1], ctx->gpr[5]._u32[0],
++                    (unsigned long long)wkl_data, spurs_ea, pm_size);
++            fflush(stderr);
++        }
++    }
++
+     const int pm_halted = spu_run_with_halt(entry, ctx);
++    if (wid < 16) {
++        g_spurs_wid_diags[wid].last_pc = (uint32_t)ctx->pc & 0x3FFFF;
++    }
+     /* A lane's run should only end through exitToKernel. Anything else strands
+      * the jobs it had claimed (GH3's once-per-~10-songs freeze): say how. */
+     if (((uint32_t)ctx->pc & SPU_LS_MASK) != SPURS_PM_EXIT_TO_KERNEL_LS) {
+diff --git a/runtime/syscalls/sys_cond.c b/runtime/syscalls/sys_cond.c
+index 45235ea..5cc536f 100644
+--- a/runtime/syscalls/sys_cond.c
++++ b/runtime/syscalls/sys_cond.c
+@@ -6,6 +6,7 @@
+  * guest mutex, and a later waiter cannot steal an earlier waiter's wakeup.
+  */
+ #include "sys_cond.h"
++#include "ps3_diagnostics.h"
+ #include "../memory/vm.h"
+ #include <string.h>
+ #include <stdlib.h>
+@@ -157,6 +158,8 @@ int64_t sys_cond_wait(ppu_context* ctx)
+ 
+     int32_t result = CELL_OK;
+ #ifdef _WIN32
++    uint32_t tid = (uint32_t)ctx->thread_id;
++    ppu_diag_set_wait(tid, PPU_WAIT_COND, LV2_ARG_U32(ctx, 0));
+     ULONGLONG start = GetTickCount64();
+     uint64_t duration = (timeout + 999) / 1000;
+     while (!waiter.signalled) {
+@@ -172,6 +175,7 @@ int64_t sys_cond_wait(ppu_context* ctx)
+             result = (int32_t)CELL_EFAULT; break;
+         }
+     }
++    ppu_diag_clear_wait(tid);
+ #else
+     struct timespec deadline;
+     if (timeout) {
+diff --git a/runtime/syscalls/sys_event.c b/runtime/syscalls/sys_event.c
+index 4240edf..99e0668 100644
+--- a/runtime/syscalls/sys_event.c
++++ b/runtime/syscalls/sys_event.c
+@@ -5,6 +5,7 @@
+ #include "sys_event.h"
+ #include "../ps3_log.h"
+ #include "sys_timer.h"             /* lv2_usec_deadline: sub-ms timed waits */
++#include "ps3_diagnostics.h"
+ #include "../memory/vm.h"
+ #include "../spu/spu_workload.h"   /* spu_elf_image_size, spu_workload_dispatch_async */
+ #include <string.h>
+@@ -470,10 +471,15 @@ int64_t sys_event_queue_receive(ppu_context* ctx)
+ 
+ #ifdef _WIN32
+     EnterCriticalSection(&q->lock);
++    uint32_t tid = (uint32_t)ctx->thread_id;
+ 
+     if (timeout_us == 0) {
+-        while (q->count == 0 && q->active && !q->cancelled) {
+-            SleepConditionVariableCS(&q->not_empty, &q->lock, INFINITE);
++        if (q->count == 0 && q->active && !q->cancelled) {
++            ppu_diag_set_wait(tid, PPU_WAIT_EVENT_QUEUE, queue_id);
++            while (q->count == 0 && q->active && !q->cancelled) {
++                SleepConditionVariableCS(&q->not_empty, &q->lock, INFINITE);
++            }
++            ppu_diag_clear_wait(tid);
+         }
+         if (q->count == 0 && q->cancelled) {
+             LeaveCriticalSection(&q->lock);
+@@ -493,13 +499,18 @@ int64_t sys_event_queue_receive(ppu_context* ctx)
+         }
+     } else {
+         DWORD ms = (DWORD)(timeout_us / 1000);
+-        while (q->count == 0 && q->active && !q->cancelled) {
+-            if (!SleepConditionVariableCS(&q->not_empty, &q->lock, ms)) {
+-                if (GetLastError() == ERROR_TIMEOUT) {
+-                    LeaveCriticalSection(&q->lock);
+-                    return (int64_t)(int32_t)CELL_ETIMEDOUT;
++        if (q->count == 0 && q->active && !q->cancelled) {
++            ppu_diag_set_wait(tid, PPU_WAIT_EVENT_QUEUE, queue_id);
++            while (q->count == 0 && q->active && !q->cancelled) {
++                if (!SleepConditionVariableCS(&q->not_empty, &q->lock, ms)) {
++                    if (GetLastError() == ERROR_TIMEOUT) {
++                        ppu_diag_clear_wait(tid);
++                        LeaveCriticalSection(&q->lock);
++                        return (int64_t)(int32_t)CELL_ETIMEDOUT;
++                    }
+                 }
+             }
++            ppu_diag_clear_wait(tid);
+         }
+     }
+ 
+diff --git a/runtime/syscalls/sys_mutex.c b/runtime/syscalls/sys_mutex.c
+index 2e760ea..6470558 100644
+--- a/runtime/syscalls/sys_mutex.c
++++ b/runtime/syscalls/sys_mutex.c
+@@ -6,6 +6,7 @@
+ #include "../platform/darwin_compat.h"
+ #include "sys_timer.h"   /* lv2_usec_deadline: sub-ms timed waits */
+ #include "../memory/vm.h"
++#include "ps3_diagnostics.h"
+ #include <string.h>
+ #include <stdio.h>
+ 
+@@ -198,7 +199,9 @@ int64_t sys_mutex_lock(ppu_context* ctx)
+ #ifdef _WIN32
+     if (timeout_us == 0) {
+         /* Infinite wait */
++        ppu_diag_set_wait(caller_tid, PPU_WAIT_MUTEX, mutex_id);
+         EnterCriticalSection(&m->cs);
++        ppu_diag_clear_wait(caller_tid);
+     } else {
+         /* Timed lock via TryEnterCriticalSection to a QPC deadline. The old
+          * GetTickCount/Sleep(1) loop measured elapsed time in ~15.6 ms ticks
+@@ -208,12 +211,17 @@ int64_t sys_mutex_lock(ppu_context* ctx)
+          * Safe to poll: TryEnterCriticalSection's success IS the atomic
+          * acquire, so there's no separate signal to miss between polls. */
+         int64_t deadline = lv2_usec_deadline(timeout_us);
+-        while (!TryEnterCriticalSection(&m->cs)) {
+-            if (lv2_deadline_passed(deadline)) {
+-                return (int64_t)(int32_t)CELL_ETIMEDOUT;
++        if (!TryEnterCriticalSection(&m->cs)) {
++            ppu_diag_set_wait(caller_tid, PPU_WAIT_MUTEX, mutex_id);
++            while (!TryEnterCriticalSection(&m->cs)) {
++                if (lv2_deadline_passed(deadline)) {
++                    ppu_diag_clear_wait(caller_tid);
++                    return (int64_t)(int32_t)CELL_ETIMEDOUT;
++                }
++                if (timeout_us < 1000) SwitchToThread();
++                else                   Sleep(1);
+             }
+-            if (timeout_us < 1000) SwitchToThread();
+-            else                   Sleep(1);
++            ppu_diag_clear_wait(caller_tid);
+         }
+     }
+ #else
+diff --git a/runtime/syscalls/sys_ppu_thread.c b/runtime/syscalls/sys_ppu_thread.c
+index 326dea4..23ddcba 100644
+--- a/runtime/syscalls/sys_ppu_thread.c
++++ b/runtime/syscalls/sys_ppu_thread.c
+@@ -40,6 +40,9 @@ static PPU_TLS int     s_exit_armed = 0;
+                         * returns 0 on those threads). */
+ #endif
+ 
++#include "ps3_diagnostics.h"
++#include "../spu/spu_context.h"
++
+ /* ---------------------------------------------------------------------------
+  * Globals
+  * -----------------------------------------------------------------------*/
+@@ -47,6 +50,78 @@ ppu_thread_info       g_ppu_threads[PPU_THREAD_MAX];
+ vm_stack_alloc        g_vm_stack_alloc;
+ ppu_thread_entry_fn   g_ppu_thread_entry_trampoline = NULL;
+ 
++ppu_thread_diag_t     g_ppu_thread_diags[64];
++spurs_wid_diag_t      g_spurs_wid_diags[16];
++
++void ppu_diag_enter_hle(uint32_t tid, uint32_t nid, const char* name)
++{
++    if (tid < 64) {
++        g_ppu_thread_diags[tid].last_hle_nid = nid;
++        g_ppu_thread_diags[tid].last_hle_name = name;
++    }
++}
++
++void ppu_diag_set_wait(uint32_t tid, int wait_type, uint64_t obj)
++{
++    if (tid < 64) {
++        g_ppu_thread_diags[tid].blocked_type = wait_type;
++        g_ppu_thread_diags[tid].blocked_obj = obj;
++    }
++}
++
++void ppu_diag_clear_wait(uint32_t tid)
++{
++    if (tid < 64) {
++        g_ppu_thread_diags[tid].blocked_type = PPU_WAIT_NONE;
++        g_ppu_thread_diags[tid].blocked_obj = 0;
++    }
++}
++
++uint32_t ppu_diag_get_current_tid(void)
++{
++    extern PPU_THREAD_LOCAL ppu_context* g_active_ctx;
++    if (g_active_ctx && g_active_ctx->thread_id)
++        return (uint32_t)g_active_ctx->thread_id;
++#ifdef _WIN32
++    DWORD htid = GetCurrentThreadId();
++    for (int i = 0; i < PPU_THREAD_MAX; i++) {
++        if (g_ppu_threads[i].state != PPU_THREAD_STATE_FREE && g_ppu_threads[i].host_tid == htid)
++            return (uint32_t)g_ppu_threads[i].ctx.thread_id;
++    }
++#endif
++    return 1;
++}
++
++int ppu_diag_get_thread_status(uint32_t tid, uint32_t* out_lr, char* out_name, size_t name_sz, int* out_state)
++{
++    extern ppu_context* volatile g_ppu_main_ctx;
++    if (tid == 1) {
++        ppu_context* c = g_ppu_main_ctx;
++        if (out_lr) *out_lr = c ? (uint32_t)c->lr : 0;
++        if (out_name && name_sz > 0) snprintf(out_name, name_sz, "main");
++        if (out_state) *out_state = PPU_THREAD_STATE_RUNNING;
++        return 1;
++    }
++    if (tid < 2 || tid > PPU_THREAD_MAX) return 0;
++    uint32_t idx = tid - 1;
++    ppu_thread_info* t = &g_ppu_threads[idx];
++    if (t->state == PPU_THREAD_STATE_FREE) return 0;
++    if (out_lr) *out_lr = (uint32_t)t->ctx.lr;
++    if (out_name && name_sz > 0) {
++        strncpy(out_name, t->name[0] ? t->name : "unnamed", name_sz - 1);
++        out_name[name_sz - 1] = '\0';
++    }
++    if (out_state) *out_state = t->state;
++    return 1;
++}
++
++uint32_t ppu_diag_get_spurs_pc(uint32_t wid)
++{
++    if (wid >= 16) return 0;
++    spu_context* ctx = (spu_context*)g_spurs_wid_diags[wid].active_ctx;
++    return ctx ? (ctx->pc & 0x3FFFF) : g_spurs_wid_diags[wid].last_pc;
++}
++
+ /* Simple mutex for thread table access */
+ #ifdef _WIN32
+ static CRITICAL_SECTION s_table_lock;
+diff --git a/runtime/syscalls/sys_semaphore.c b/runtime/syscalls/sys_semaphore.c
+index 19ecafc..3054046 100644
+--- a/runtime/syscalls/sys_semaphore.c
++++ b/runtime/syscalls/sys_semaphore.c
+@@ -5,6 +5,7 @@
+ #include "sys_semaphore.h"
+ #include "../ps3_log.h"
+ #include "sys_timer.h"   /* lv2_usec_deadline: sub-ms timed waits */
++#include "ps3_diagnostics.h"
+ #include "../memory/vm.h"
+ #include <string.h>
+ #include <stdlib.h>      /* getenv (else the pointer return is truncated to int) */
+@@ -400,7 +401,10 @@ static int64_t sys_semaphore_wait_impl(ppu_context* ctx)
+ 
+         /* Bounded slices keep timed waits on the QPC deadline. */
+         DWORD ms = (timeout_us == 0) ? INFINITE : 1;
++        uint32_t tid = (uint32_t)ctx->thread_id;
++        ppu_diag_set_wait(tid, PPU_WAIT_SEMAPHORE, sem_id);
+         WaitForSingleObject(s->sem_handle, ms);
++        ppu_diag_clear_wait(tid);
+ 
+         EnterCriticalSection(&s->value_lock);
+         if (s->waiters > 0) s->waiters--;
+diff --git a/runtime/syscalls/sys_timer.c b/runtime/syscalls/sys_timer.c
+index 78b3e38..8000ecc 100644
+--- a/runtime/syscalls/sys_timer.c
++++ b/runtime/syscalls/sys_timer.c
+@@ -6,6 +6,7 @@
+ #define _DEFAULT_SOURCE /* tm_gmtoff on glibc */
+ #endif
+ #include "sys_timer.h"
++#include "ps3_diagnostics.h"
+ #include <time.h>
+ #include "sys_event.h"
+ #include "../memory/vm.h"
+@@ -217,6 +218,8 @@ int64_t sys_timer_usleep(ppu_context* ctx)
+         ppu_log_host_chain("usleep1ms"); } }
+ 
+ #ifdef _WIN32
++    uint32_t tid = (uint32_t)ctx->thread_id;
++    if (usec > 0) ppu_diag_set_wait(tid, PPU_WAIT_USLEEP, usec);
+     /* Use high-resolution sleep via waitable timer for better precision */
+     if (usec >= 1000) {
+         HANDLE timer = CreateWaitableTimerW(NULL, TRUE, NULL);
+@@ -243,11 +246,18 @@ int64_t sys_timer_usleep(ppu_context* ctx)
+         QueryPerformanceCounter(&qpc_start);
+         const int64_t qpc_deadline = qpc_start.QuadPart +
+             (int64_t)((usec * (uint64_t)s_qpc_freq.QuadPart) / 1000000ULL);
++        int spin_count = 0;
+         do {
+-            SwitchToThread();
++            if (++spin_count >= 16) {
++                Sleep(0);
++                spin_count = 0;
++            } else {
++                SwitchToThread();
++            }
+             QueryPerformanceCounter(&qpc_now);
+         } while (qpc_now.QuadPart < qpc_deadline);
+     }
++    if (usec > 0) ppu_diag_clear_wait(tid);
+ #else
+     if (usec > 0) {
+         struct timespec ts;
+-- 
+2.48.1.windows.1
+

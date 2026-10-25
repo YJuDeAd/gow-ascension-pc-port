@@ -1,0 +1,72 @@
+diff --git a/runtime/ppu/ppu_fs.cpp b/runtime/ppu/ppu_fs.cpp
+index 4d54b72..3ce5b6d 100644
+--- a/runtime/ppu/ppu_fs.cpp
++++ b/runtime/ppu/ppu_fs.cpp
+@@ -210,6 +210,33 @@ static char    g_fd_path[FS_MAX][192];   /* guest path per fd (diagnostics) */
+ static DIR*  g_dirs[FS_MAX];
+ static char  g_dir_path[FS_MAX][1024];   /* host path per open dir (for readdir stat) */
+ 
++extern "C" {
++struct FsLastOpInfo {
++    int fd;
++    char path[192];
++    int64_t offset;
++    uint64_t size;
++    int64_t result;
++    char op[16];
++};
++static FsLastOpInfo s_fs_last_op = {-1, "", 0, 0, 0, ""};
++void gow_get_last_fs_op(int* out_fd, char* out_path, size_t path_sz, int64_t* out_off, uint64_t* out_sz, int64_t* out_res, char* out_op, size_t op_sz) {
++    if (out_fd) *out_fd = s_fs_last_op.fd;
++    if (out_path && path_sz > 0) {
++        strncpy(out_path, s_fs_last_op.path, path_sz - 1);
++        out_path[path_sz - 1] = 0;
++    }
++    if (out_off) *out_off = s_fs_last_op.offset;
++    if (out_sz) *out_sz = s_fs_last_op.size;
++    if (out_res) *out_res = s_fs_last_op.result;
++    if (out_op && op_sz > 0) {
++        strncpy(out_op, s_fs_last_op.op, op_sz - 1);
++        out_op[op_sz - 1] = 0;
++    }
++}
++}
++
++
+ static int fd_alloc_file(FILE* f)
+ {
+     for (int i = 3; i < FS_MAX; i++) if (!g_files[i] && !g_dirs[i]) { g_files[i] = f; return i; }
+@@ -438,6 +465,16 @@ static void cellFsRead(ppu_context* ctx)
+     if (ppu_vm_size && (uint64_t)buf + nbytes > ppu_vm_size) nbytes = ppu_vm_size - buf;
+     fs_prefault(buf, nbytes);
+     size_t n = fread(vm_base + buf, 1, (size_t)nbytes, g_files[fd]);   /* raw bytes, no swap */
++    s_fs_last_op.fd = fd;
++    if (fd >= 0 && fd < FS_MAX) {
++        strncpy(s_fs_last_op.path, g_fd_path[fd], sizeof(s_fs_last_op.path) - 1);
++        s_fs_last_op.path[sizeof(s_fs_last_op.path) - 1] = 0;
++    }
++    s_fs_last_op.offset = fpos_before;
++    s_fs_last_op.size = (uint64_t)nbytes;
++    s_fs_last_op.result = (int64_t)n;
++    strncpy(s_fs_last_op.op, "read", sizeof(s_fs_last_op.op) - 1);
++
+     /* PS3_FSLOG_EOF=<fd>,<bytes>: report end-of-file past <bytes> on one descriptor.
+      * The intro cinematic is 28 seconds and this port renders it at a few frames
+      * a second, so it cannot be watched to its end -- truncating the stream makes
+@@ -588,6 +625,16 @@ static void cellFsLseek(ppu_context* ctx)
+     int worigin = (wh == CELL_FS_SEEK_END) ? SEEK_END : (wh == CELL_FS_SEEK_CUR) ? SEEK_CUR : SEEK_SET;
+     FS_SEEK64(g_files[fd], off, worigin);
+     int64_t p = FS_TELL64(g_files[fd]);
++    s_fs_last_op.fd = fd;
++    if (fd >= 0 && fd < FS_MAX) {
++        strncpy(s_fs_last_op.path, g_fd_path[fd], sizeof(s_fs_last_op.path) - 1);
++        s_fs_last_op.path[sizeof(s_fs_last_op.path) - 1] = 0;
++    }
++    s_fs_last_op.offset = off;
++    s_fs_last_op.size = 0;
++    s_fs_last_op.result = p;
++    strncpy(s_fs_last_op.op, "lseek", sizeof(s_fs_last_op.op) - 1);
++
+     if (pos_ptr) vm_write64(pos_ptr, (uint64_t)p);
+     ctx->gpr[3] = CELL_OK;
+ }

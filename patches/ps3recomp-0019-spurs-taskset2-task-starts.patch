@@ -1,0 +1,227 @@
+From c81108407ebc038a3f38dcfed0beb99b9dd2a4f3 Mon Sep 17 00:00:00 2001
+From: Arnaldo Lima <arnaldolimaof@gmail.com>
+Date: Fri, 16 Oct 2026 20:05:39 -0300
+Subject: [PATCH 1/2] SPURS tasksets: one start per task, Taskset2 size and
+ event flags, SPU-made tasks start
+
+from gow-ascension-pc@676eefe
+
+Three gaps that kept God of War: Ascension on its loading screen. The PPU
+creates five particle tasks that each claim an item with an atomic add on
+a shared word; the one that sees the count creates the next phase's tasks
+in a sibling taskset from the SPU, and the PPU waits for those to finish.
+
+- A task the PPU created counted as running only once its host thread ran,
+  so a sibling exiting in between found it enabled and idle and started it
+  again: three tasks ran twice and the count overshot. cellSpursCreateTask
+  now marks the task running before it enables it, takes the mark back if
+  the dispatch does not happen, and sets the dispatch's task globals right
+  before the dispatch (the scheduler thread sets them too).
+- cellSpursCreateTaskset2 made a first-generation taskset (size 0x1900, no
+  event flags). The SPU task library refuses to create a task in a taskset
+  that is not 0x2900 bytes or has no event flags
+  (CELL_SPURS_TASK_ERROR_PERM, 0x80410909). Taskset2 is now 0x2900 bytes
+  with two lv2 event flags, ids at +0x1898/+0x189C, made through a new
+  sys_event_flag_create_host.
+- The minimal taskset scheduler only looked at the exiting task's own
+  taskset, so tasks an SPU created in another one never started. Tasksets
+  are tracked from creation and every tracked one is scanned on a task
+  exit.
+
+With the three, the next phase runs and the game reaches its first-use
+dialog (a save-data prompt), writes BCES01741-SYSDATA, and goes on.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ libs/spurs/cellSpurs.c       | 42 ++++++++++++++++++++++---
+ runtime/spu/spu_workload.c   | 59 ++++++++++++++++++++++++++++++------
+ runtime/syscalls/sys_event.c | 15 +++++++++
+ 3 files changed, 102 insertions(+), 14 deletions(-)
+
+diff --git a/libs/spurs/cellSpurs.c b/libs/spurs/cellSpurs.c
+index b5c5639..7052813 100644
+--- a/libs/spurs/cellSpurs.c
++++ b/libs/spurs/cellSpurs.c
+@@ -942,6 +942,18 @@ static s32 spurs_create_taskset(CellSpurs* spurs, CellSpursTaskset* taskset,
+      * little-endian = garbage to the SPU). Overwrites 0x00-0x80 with BE fields. */
+     spurs_taskset_init(taskset_ea, spurs_ea, args, /*wid*/0,
+                        taskset_size, /*evf1*/0, /*evf2*/0);
++    /* A CellSpursTaskset2 carries two lv2 event flags, one bit per task, for
++     * task exit (cellSpursJoinTask2). The SPU task library will not create a
++     * task in a taskset whose flags are both 0 (CELL_SPURS_TASK_ERROR_PERM):
++     * make them, ids straight into the taskset. */
++    if (taskset_size == 0x2900u) {
++        extern int64_t sys_event_flag_create_host(uint32_t, uint64_t);
++        sys_event_flag_create_host(taskset_ea + CSTS_EVENT_FLAG_ID1, 0);
++        sys_event_flag_create_host(taskset_ea + CSTS_EVENT_FLAG_ID2, 0);
++    }
++    /* Known to the taskset scheduler from the start: an SPU may create its
++     * first tasks (spu_taskset_track). */
++    { extern void spu_taskset_track(uint32_t); spu_taskset_track(taskset_ea); }
+     g_ydkj_real_taskset_ea = taskset_ea;
+ 
+     g_ydkj_real_spurs_ea = spurs_ea;   /* capture for the taskset-policy handoff (LS[0x1C0]) */
+@@ -982,8 +994,15 @@ s32 cellSpursCreateTaskset2(CellSpurs* spurs, CellSpursTaskset* taskset,
+         const u8* a = GUEST_PTR(attr, const u8*);
+         for (int i = 0; i < 8; i++) args = (args << 8) | a[0x08 + i];
+     }
+-    printf("[cellSpurs] CreateTaskset2 -> CreateTaskset (arg=0x%016llX)\n", (unsigned long long)args);
+-    return cellSpursCreateTaskset(spurs, taskset, args, NULL, 0);
++    printf("[cellSpurs] CreateTaskset2 (arg=0x%016llX, size 0x2900)\n", (unsigned long long)args);
++    /* A CellSpursTaskset2 is 0x2900 bytes, and its size field (+0x1890)
++     * says so: the SPU task library checks it before it creates a task in
++     * the taskset from an SPU (taskset size > 0x28FF, or
++     * CELL_SPURS_TASK_ERROR_PERM, 0x80410909). Made as a first-generation
++     * taskset, it read 0x1900, so God of War: Ascension's particle tasks
++     * could not start their next phase and the loading screen waited on
++     * it for good. */
++    return spurs_create_taskset(spurs, taskset, args, NULL, 0, 0x2900u);
+ }
+ 
+ s32 cellSpursDestroyTaskset(CellSpursTaskset* taskset)
+@@ -1120,6 +1139,11 @@ s32 cellSpursCreateTask(CellSpursTaskset* taskset, CellSpursTaskId* taskId,
+             if (taskId) vm_write32((u32)(uintptr_t)taskId, i);
+             (void)taskId_h;
+ 
++            /* Running before it is enabled: this call dispatches the task
++             * itself below, and a sibling exiting meanwhile must not find it
++             * enabled and idle and start it again (spu_taskset_set_running). */
++            extern void spu_taskset_set_running(uint32_t, uint32_t, int);
++            if (elf) spu_taskset_set_running(taskset_ea, i, 1);
+             /* Register the task in the REAL BE taskset: writes task_info[slot]
+              * (args/elf/context/ls_pattern) + sets enabled+ready bits so the PM's
+              * SELECT_TASK picks it. Slot index i = the SPURS taskId (bitset bit). */
+@@ -1201,11 +1225,19 @@ s32 cellSpursCreateTask(CellSpursTaskset* taskset, CellSpursTaskId* taskId,
+                  * as the guest EA (the SPU job's DMA uses guest EAs / r3). */
+                 const uint8_t* host_elf = GUEST_PTR(elf, const uint8_t*);
+                 size_t sz = spu_elf_image_size(host_elf, 2u * 1024 * 1024);
+-                if (sz)
++                int started = 0;
++                if (sz) {
++                    /* The dispatch reads the task from these globals, and the
++                     * taskset scheduler (another thread) sets them for its own
++                     * starts: set them again right before. */
++                    g_ydkj_real_taskset_ea = taskset_ea;
++                    g_ydkj_real_taskid     = i;
+                     /* Async: SPURS tasks are persistent workers — running them
+                      * inline would block this PPU thread forever (deadlock). */
+-                    spu_workload_dispatch_async(host_elf, (uint32_t)sz,
+-                                                (uint32_t)(uintptr_t)context);
++                    started = spu_workload_dispatch_async(host_elf, (uint32_t)sz,
++                                                          (uint32_t)(uintptr_t)context);
++                }
++                if (!started) spu_taskset_set_running(taskset_ea, i, 0);
+             }
+             return CELL_OK;
+         }
+diff --git a/runtime/spu/spu_workload.c b/runtime/spu/spu_workload.c
+index 9c8d632..f9e6695 100644
+--- a/runtime/spu/spu_workload.c
++++ b/runtime/spu/spu_workload.c
+@@ -391,20 +391,28 @@ static void spu_taskset_mark(uint32_t taskset_ea, uint32_t t, int on)
+     ts_unlock();
+ }
+ 
+-static void spu_taskset_task_exited(uint32_t taskset_ea, uint32_t done_task)
++/* A task the PPU creates counts as running from the moment it is dispatched,
++ * not from when its host thread first runs: cellSpursCreateTask enables it
++ * and spawns the thread, and a sibling exiting in between used to find it
++ * enabled, pending and "not running" and start it a second time. God of War:
++ * Ascension creates five tasks that each claim one item with an atomic add
++ * and the one that sees the count runs the final step; three ran twice, the
++ * count overshot, and the PPU waited for that step for good (the loading
++ * screen froze). The scheduler below marks its own starts under the lock.
++ * on=0 takes the mark back when the dispatch did not happen. */
++void spu_taskset_set_running(uint32_t taskset_ea, uint32_t t, int on)
++{
++    spu_taskset_mark(taskset_ea, t, on);
++}
++
++/* Start every enabled task of one taskset that is ready or pending and not
++ * running here. Called under ts_lock. */
++static void ts_start_ready(uint32_t taskset_ea, uint32_t done_task)
+ {
+     extern uint8_t* vm_base;
+     extern uint32_t g_ydkj_real_taskset_ea, g_ydkj_real_taskid;
+-    ts_lock();
+     uint8_t* ts = vm_base + taskset_ea;
+     uint8_t* run = ts_running(taskset_ea);
+-    if (done_task < 128) {
+-        uint8_t m = (uint8_t)(0x80u >> (done_task & 7));
+-        ts[0x10 + done_task / 8] &= (uint8_t)~m;
+-        ts[0x20 + done_task / 8] &= (uint8_t)~m;
+-        ts[0x30 + done_task / 8] &= (uint8_t)~m;
+-        if (run) run[done_task / 8] &= (uint8_t)~m;
+-    }
+     for (uint32_t t = 0; t < 128 && run; t++) {
+         uint8_t m = (uint8_t)(0x80u >> (t & 7));
+         if (!(ts[0x30 + t / 8] & m) || (run[t / 8] & m)) continue;
+@@ -427,6 +435,39 @@ static void spu_taskset_task_exited(uint32_t taskset_ea, uint32_t done_task)
+         g_ydkj_real_taskset_ea = taskset_ea; g_ydkj_real_taskid = t;
+         spu_workload_dispatch_async(vm_base + elf, (uint32_t)sz, ctx);
+     }
++}
++
++/* Track a taskset from its creation, so a task an SPU creates in it is
++ * started even if no task of that taskset has run yet (below). */
++void spu_taskset_track(uint32_t taskset_ea)
++{
++    if (!taskset_ea) return;
++    ts_lock();
++    (void)ts_running(taskset_ea);
++    ts_unlock();
++}
++
++static void spu_taskset_task_exited(uint32_t taskset_ea, uint32_t done_task)
++{
++    extern uint8_t* vm_base;
++    ts_lock();
++    uint8_t* ts = vm_base + taskset_ea;
++    uint8_t* run = ts_running(taskset_ea);
++    if (done_task < 128) {
++        uint8_t m = (uint8_t)(0x80u >> (done_task & 7));
++        ts[0x10 + done_task / 8] &= (uint8_t)~m;
++        ts[0x20 + done_task / 8] &= (uint8_t)~m;
++        ts[0x30 + done_task / 8] &= (uint8_t)~m;
++        if (run) run[done_task / 8] &= (uint8_t)~m;
++    }
++    ts_start_ready(taskset_ea, done_task);
++    /* A task can create tasks in ANOTHER taskset before it exits (God of
++     * War: Ascension's particle tasks start their next phase in a sibling
++     * taskset whose tasks have never run), and nothing else would look at
++     * that one: scan every tracked taskset. */
++    for (int i = 0; i < TS_TRACK; i++)
++        if (s_ts_run[i].ea && s_ts_run[i].ea != taskset_ea)
++            ts_start_ready(s_ts_run[i].ea, done_task);
+     ts_unlock();
+ }
+ 
+diff --git a/runtime/syscalls/sys_event.c b/runtime/syscalls/sys_event.c
+index 4240edf..d2a3819 100644
+--- a/runtime/syscalls/sys_event.c
++++ b/runtime/syscalls/sys_event.c
+@@ -1070,6 +1070,21 @@ int64_t sys_event_flag_create(ppu_context* ctx)
+     return CELL_OK;
+ }
+ 
++/* An event flag made by the runtime itself (no guest attribute), its id
++ * written big-endian to id_out_ea: libspurs makes two for every
++ * CellSpursTaskset2 (cellSpursCreateTaskset2). */
++int64_t sys_event_flag_create_host(uint32_t id_out_ea, uint64_t init_pattern)
++{
++    ppu_context* c = (ppu_context*)calloc(1, sizeof(ppu_context));
++    if (!c) return (int64_t)(int32_t)CELL_ENOMEM;
++    c->gpr[3] = id_out_ea;
++    c->gpr[4] = 0;
++    c->gpr[5] = init_pattern;
++    int64_t rc = sys_event_flag_create(c);
++    free(c);
++    return rc;
++}
++
+ int64_t sys_event_flag_destroy(ppu_context* ctx)
+ {
+     uint32_t flag_id = LV2_ARG_U32(ctx, 0);
+-- 
+2.55.0.windows.5
+

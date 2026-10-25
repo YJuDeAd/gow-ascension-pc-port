@@ -1,0 +1,267 @@
+From 3ca3df892a8dfd89c735802aef94860bf37d58e5 Mon Sep 17 00:00:00 2001
+From: Arnaldo Lima <arnaldolimaof@gmail.com>
+Date: Fri, 16 Oct 2026 17:02:38 -0300
+Subject: [PATCH] GCM: a blocked ACQUIRE is not stuck; flip pacing;
+ post-process diagnostics
+
+from gow-ascension-pc@676eefe
+
+With GCM_SEMA_ACQUIRE=1 the walker's stuck-get rule resynced past a
+SEMAPHORE_ACQUIRE after eight passes. God of War: Ascension's FIFO waits
+there, after each frame's reports, for the label its SPU post-process
+tasks write when they are done with the frame; following put dropped the
+frame mid-wait. A blocked ACQUIRE now stops the pass as "sema-acquire",
+exempt like a park.
+
+GCM_FLIP_PACE_MS=<ms> (off by default): a flip in the command stream waits
+that long after the previous one, as a vsync flip holds a real RSX.
+
+Diagnostics: GCM_SEMALOG (releases, and acquires with the label's value),
+GCM_REPORTFF (GET_REPORT words still 0xFFFFFFFF, and the memory they would
+overwrite), SPU_MFCLOG_IMG / SPU_MFCLOG_EA (plain GET/PUTs of an image or
+of up to eight lines, with data and the SPURS task), SPU_WAITSIG_EXITLOG,
+SPU_ITRACE_MOD / _WID / _MAX / _LO / _HI / _ARM (interpreter trace of a job
+module, from the n-th GET_REPORT), and the scheduler's slots and per-
+workload state in SPURS_WLDUMP.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ libs/spurs/cellSpurs.c     | 10 +++++++
+ libs/video/cellGcmSys.c    | 59 ++++++++++++++++++++++++++++++++++++--
+ runtime/spu/spu_channels.c | 24 ++++++++++++++++
+ runtime/spu/spu_interp.c   | 30 +++++++++++++++++++
+ runtime/spu/spu_workload.c |  9 ++++++
+ 5 files changed, 129 insertions(+), 3 deletions(-)
+
+diff --git a/libs/spurs/cellSpurs.c b/libs/spurs/cellSpurs.c
+index 1695aae..b5c5639 100644
+--- a/libs/spurs/cellSpurs.c
++++ b/libs/spurs/cellSpurs.c
+@@ -1897,6 +1897,16 @@ static DWORD WINAPI spurs_kernel_thread(LPVOID p)
+           const unsigned long long now = GetTickCount64();
+           if (s_wd > 0 && now >= s_next) {
+               s_next = now + (unsigned long long)s_wd * 1000ull;
++              /* The scheduler's own view: each SPU slot, and per workload the
++               * SPUs it holds, its readyCount, signal and idle back-off. */
++              for (u32 k = 0; k < si->nspus; k++)
++                  fprintf(stderr, "[wl-dump] t=%llu slot %u busy=%d wid=%u\n", now, k,
++                          si->slots[k].busy, si->slots[k].wid);
++              for (u32 w = 0; w < (si->is2 ? SPURS_MAX_WID : 16u); w++)
++                  if (s_workloads[w].in_use && s_workloads[w].spurs_ea == ea)
++                      fprintf(stderr, "[wl-dump] t=%llu wid=%u state=%u active=%u ready=%u sig=%d idle=%u enabled=%d\n",
++                              now, w, vm_read8(ea + wkl_state_off(w)), si->active[w], vm_read8(ea + wkl_ready_off(w)),
++                              wkl_signalled(ea, w), si->idle[w], (enabled & (0x80000000u >> w)) != 0);
+               for (u32 w = 0; w < (si->is2 ? SPURS_MAX_WID : 16u); w++) {
+                   if (!s_workloads[w].in_use || s_workloads[w].spurs_ea != ea) continue;
+                   const u32 d = (u32)vm_read64(ea + wkl_info_off(w) + 8);
+diff --git a/libs/video/cellGcmSys.c b/libs/video/cellGcmSys.c
+index 7ca5570..e3cb656 100644
+--- a/libs/video/cellGcmSys.c
++++ b/libs/video/cellGcmSys.c
+@@ -1874,6 +1874,16 @@ static void gcm_rsx_process_fifo_unlocked(void)
+                     u32 la = GCM_LABEL_GUEST_BASE + (s_sema_offset & 0xFFFFu);
+                     { static int sn = 0; if (getenv("GCM_RECDBG") && sn++ < 12)
+                         fprintf(stderr, "[SEMA] m=0x%02X v=0x%08X off=0x%X\n", m, v, s_sema_offset); }
++                    /* GCM_SEMALOG=1: every RELEASE, and each ACQUIRE once per (offset, value)
++                     * with what the label holds then. */
++                    { static int sl = -1; static u32 last_off = ~0u, last_v = ~0u;
++                      if (sl < 0) sl = getenv("GCM_SEMALOG") ? 1 : 0;
++                      if (sl && m == 0x6Cu)
++                          printf("[sema] t=%llu RELEASE off=0x%X <- 0x%08X get=0x%X%c", (unsigned long long)ps3_ms_now(), s_sema_offset, v, s_fifo_getoff, 10);
++                      if (sl && m == 0x68u && (s_sema_offset != last_off || v != last_v)) {
++                          last_off = s_sema_offset; last_v = v;
++                          printf("[sema] t=%llu ACQUIRE off=0x%X want 0x%08X has 0x%08X get=0x%X%c", (unsigned long long)ps3_ms_now(),
++                                 s_sema_offset, v, vm_read32(la), s_fifo_getoff, 10); } }
+                     if (m == 0x64u)      s_sema_offset = v;
+                     else if (m == 0x6Cu) vm_write32(la, v);
+                     else if (m == 0x68u && vm_read32(la) != v) {
+@@ -1886,10 +1896,28 @@ static void gcm_rsx_process_fifo_unlocked(void)
+             if (blk) { sem_blocked = 1; break; }
+         }
+                 }
+-                if (sem_blocked) break;
++                if (sem_blocked) { why = "sema-acquire"; break; }
+                 s_fifo_getoff += 4 + count * 4;
+                 continue;
+             }
++            /* GCM_FLIP_PACE_MS=<ms>: a flip in the command stream waits until that
++             * long after the previous one, the way a vsync flip holds a real RSX
++             * (the pass stops here without consuming the method, as a blocked
++             * ACQUIRE does). Off by default. Recompiled, the RSX side runs far
++             * faster than the SPU work it is meant to overlap: God of War:
++             * Ascension's frame 2 reports used to land while its SPU post-process
++             * tasks were still on frame 1, and RsxSync's signal for the next
++             * round was eaten by their barrier waits. */
++            if ((((subch << 13) | method) == 0xE920u || ((subch << 13) | method) == 0xE924u)) {
++                static long pace = -1; static unsigned long long last_flip;
++                if (pace < 0) { const char* e = getenv("GCM_FLIP_PACE_MS"); pace = e ? atol(e) : 0; }
++                if (pace > 0) {
++                    extern unsigned long long ps3_ms_now(void);
++                    const unsigned long long now = ps3_ms_now();
++                    if (last_flip && now - last_flip < (unsigned long long)pace) { why = "flip-pace"; break; }
++                    last_flip = now;
++                }
++            }
+             for (u32 i = 0; i < count; i++) {
+                 u32 dea = gcm_io2ea(s_fifo_getoff + 4 + i * 4);
+                 if (!dea) break;
+@@ -2030,12 +2058,33 @@ static void gcm_rsx_process_fifo_unlocked(void)
+                         const u32 v = vm_read32(dea), off = v & 0xFFFFFFu, idx = off / 16u;
+                         const u32 val = (v >> 24) == 1u ? 0xFFFFu : 0u;
+                         const u64 ts = gcm_report_timestamp();
++                        { extern volatile long g_gcm_report_count; g_gcm_report_count++; }
+                         const int main_mem = s_report_dma == 0xFEED0001u || s_report_dma == 0xBAD68000u;
+                         { /* GCM_REPORTLOG=<n>: the first n reports (default 6), with the time. */
+                           static long rn = 0, rmax = -1;
+                           if (rmax < 0) { const char* e = getenv("GCM_REPORTLOG"); rmax = e ? atol(e) : 6; }
+                           if (rn++ < rmax) printf("[GET_REPORT] t=%llu type=%u off=0x%X dma=0x%08X%c",
+-                                                  (unsigned long long)ps3_ms_now(), v >> 24, off, s_report_dma, 10); }
++                                                  (unsigned long long)ps3_ms_now(), v >> 24, off, s_report_dma, 10);
++                          /* GCM_REPORTFF=1: a GET_REPORT word still 0xFFFFFFFF (a placeholder
++                           * not patched yet): where it is, its neighbours, and what the same
++                           * word holds when the next reports go by. */
++                          static int ff = -1; static u32 ff_ea[8]; static int ff_n;
++                          if (ff < 0) ff = getenv("GCM_REPORTFF") ? 1 : 0;
++                          if (ff) {
++                              for (int k = 0; k < ff_n; k++)
++                                  printf("[reportff] later ea=0x%08X now 0x%08X%c", ff_ea[k], vm_read32(ff_ea[k]), 10);
++                              ff_n = 0;
++                              if (v == 0xFFFFFFFFu) {
++                                  printf("[reportff] get=0x%X ea=0x%08X:", s_fifo_getoff, dea);
++                                  for (int k = -8; k <= 8; k++) printf(" %08X", vm_read32(dea + 4u * (u32)k));
++                                  printf("%c", 10);
++                                  if (ff_n < 8) ff_ea[ff_n++] = dea;
++                                  const u32 tea = gcm_io2ea(off);
++                                  printf("[reportff] target ea=0x%08X before:", tea);
++                                  for (int k = -4; k < 8; k++) printf(" %08X", tea ? vm_read32((tea & ~3u) + 4u * (u32)k) : 0u);
++                                  printf("%c", 10);
++                              }
++                          } }
+                         if (main_mem) {
+                             /* CellGcmReportData, big-endian: u64 timer, u32 value, u32 padding. */
+                             const u32 rea = gcm_io2ea(off);
+@@ -2109,8 +2158,12 @@ static void gcm_rsx_process_fifo_unlocked(void)
+      * patches the park afterwards; resyncing to put dropped those segments,
+      * the GPU reports in them were never written, the RsxSync workload's
+      * barrier never passed, and the frames stopped after the fifth. */
++    /* A blocked semaphore ACQUIRE (GCM_SEMA_ACQUIRE=1) is not stuck either: the
++     * GPU waits there by design until the label is released. Ascension's
++     * frame waits on a label its SPU post-process tasks write when they are
++     * done with the frame; following put dropped the frame mid-wait. */
+     { static u32 last = 0xFFFFFFFFu; static int stuck = 0;
+-      if (why && strcmp(why, "parked") == 0) { stuck = 0; last = s_fifo_getoff; }
++      if (why && (strcmp(why, "parked") == 0 || strcmp(why, "sema-acquire") == 0 || strcmp(why, "flip-pace") == 0)) { stuck = 0; last = s_fifo_getoff; }
+       else if (s_fifo_getoff == last && s_fifo_getoff != put) {
+           if (++stuck >= 8) { gcm_fifo_dump_around(s_fifo_getoff);
+                              gcm_fifo_resync_why("stuck-get", &s_fifo_getoff, put); stuck = 0; }
+diff --git a/runtime/spu/spu_channels.c b/runtime/spu/spu_channels.c
+index b9c5b96..86e23d0 100644
+--- a/runtime/spu/spu_channels.c
++++ b/runtime/spu/spu_channels.c
+@@ -909,6 +909,30 @@ void spu_wrch(spu_context* ctx, uint32_t channel, u128 value)
+         if (channel == MFC_Cmd && spu_mfc_atomic(ctx, v))
+             return;
+         mfc_channel_write(mfc_for(ctx), ctx, channel, v);
++        /* SPU_MFCLOG_IMG=<image> [SPU_MFCLOG_MAX=<n>]: every plain GET/PUT that
++         * image issues (cmd, LS, EA, size and up to 64 bytes, read after the
++         * transfer), for lifted code the interpreter hooks never see. */
++        if (channel == MFC_Cmd) {
++            static int s_mi = -2, s_nea; static long s_mn, s_mmax; static uint32_t s_mea[8];
++            if (s_mi == -2) { const char* e = getenv("SPU_MFCLOG_IMG"); s_mi = e ? atoi(e) : -1;
++                              const char* m = getenv("SPU_MFCLOG_MAX"); s_mmax = m ? atol(m) : 20000;
++                              const char* a = getenv("SPU_MFCLOG_EA");
++                              while (a && *a && s_nea < 8) { char* end; s_mea[s_nea++] = (uint32_t)strtoul(a, &end, 16) & ~127u;
++                                                            a = (*end == ',') ? end + 1 : NULL; } }
++            /* SPU_MFCLOG_EA=<hex>[,<hex>...]: any image's GET/PUT that touches one of those 128-byte lines. */
++            int hit_ea = 0;
++            for (int k = 0; k < s_nea; k++)
++                if ((ctx->mfc_eal & ~127u) == s_mea[k] || ((ctx->mfc_eal + ctx->mfc_size - 1u) & ~127u) == s_mea[k]) hit_ea = 1;
++            if (((s_mi >= 0 && ctx->image_id == s_mi) || hit_ea) && s_mn++ < s_mmax) {
++                const uint32_t lsa = ctx->mfc_lsa & SPU_LS_MASK, n = ctx->mfc_size < 64u ? ctx->mfc_size : 64u;
++                extern int spu_workload_current_task(void);
++                char line[320]; int o = snprintf(line, sizeof line, "[mfclog] img=%d task=%d spu=%u cmd=%02X lsa=%05X ea=%08X size=%X tag=%u:",
++                                                  ctx->image_id, spu_workload_current_task(), ctx->spu_id, v & 0xFFu, lsa, ctx->mfc_eal, ctx->mfc_size, ctx->mfc_tag);
++                for (uint32_t k = 0; k < n && lsa + k < SPU_LS_SIZE; k++)
++                    o += snprintf(line + o, sizeof line - (size_t)o, (k & 3) ? "%02X" : " %02X", ctx->ls[lsa + k]);
++                fprintf(stderr, "%s\n", line);
++            }
++        }
+         /* SPU_EVLOG=1: MFC_WrTagMask / MFC_WrTagUpdate writes under a policy
+          * module, with the event mask they meet (first 400). */
+         if (channel == MFC_WrTagUpdate || channel == MFC_WrTagMask || channel == MFC_WrListStallAck)
+diff --git a/runtime/spu/spu_interp.c b/runtime/spu/spu_interp.c
+index 710bd22..18c22da 100644
+--- a/runtime/spu/spu_interp.c
++++ b/runtime/spu/spu_interp.c
+@@ -388,8 +388,38 @@ uint32_t g_spu_interp_last_pc = 0;
+  * reaches one of these LS addresses (runtime-loaded job code has no lifted
+  * symbol to break on), with the first word at LS 0x4000 to tell job modules
+  * apart. */
++/* GET_REPORTs the FIFO walker has executed (cellGcmSys counts them): lets a
++ * trace start at a given frame instead of burning its budget during boot. */
++volatile long g_gcm_report_count = 0;
+ void spu_pcwatch(spu_context* ctx, uint32_t pc)
+ {
++    /* SPU_ITRACE_MOD=<hex> [SPU_ITRACE_WID=<wid>] [SPU_ITRACE_MAX=<n>]
++     * [SPU_ITRACE_LO/HI=<hex LS range>] [SPU_ITRACE_ARM=<n GET_REPORTs first>]: every
++     * interpreted step while that job module (the word at LS 0x4000) is
++     * loaded -- pc, the instruction word, r2-r9 -- to follow runtime-loaded job
++     * code that has no lifted symbols. */
++    { static int s_it = -1; static uint32_t s_mod, s_lo, s_hi; static long s_max, s_arm; static int s_wid;
++      if (s_it < 0) { const char* e = getenv("SPU_ITRACE_MOD"); s_it = e ? 1 : 0;
++                      s_mod = e ? (uint32_t)strtoul(e, 0, 16) : 0;
++                      const char* m = getenv("SPU_ITRACE_MAX"); s_max = m ? atol(m) : 200000;
++                      const char* w = getenv("SPU_ITRACE_WID"); s_wid = w ? atoi(w) : -1;
++                      const char* lo = getenv("SPU_ITRACE_LO"); s_lo = lo ? (uint32_t)strtoul(lo, 0, 16) : 0;
++                      const char* hi = getenv("SPU_ITRACE_HI"); s_hi = hi ? (uint32_t)strtoul(hi, 0, 16) : 0x40000;
++                      const char* ar = getenv("SPU_ITRACE_ARM"); s_arm = ar ? atol(ar) : 0; }
++      if (s_it) {
++          const uint32_t mod = ((uint32_t)ctx->ls[0x4000] << 24) | ((uint32_t)ctx->ls[0x4001] << 16)
++                             | ((uint32_t)ctx->ls[0x4002] << 8) | ctx->ls[0x4003];
++          if (mod == s_mod && g_gcm_report_count >= s_arm && pc >= s_lo && pc < s_hi && (s_wid < 0 || ctx->ls[0x1DF] == (unsigned)s_wid)) {
++              static long n;
++              if (n++ < s_max) {
++                  const uint8_t* q = ctx->ls + (pc & 0x3FFFC);
++                  fprintf(stderr, "[itrace] spu=%u pc=%05X w=%02X%02X%02X%02X r2=%08X r3=%08X %08X r4=%08X r5=%08X r6=%08X r7=%08X r8=%08X r9=%08X\n",
++                          ctx->ls[0x1CB], pc, q[0], q[1], q[2], q[3],
++                          ctx->gpr[2]._u32[0], ctx->gpr[3]._u32[0], ctx->gpr[3]._u32[1], ctx->gpr[4]._u32[0],
++                          ctx->gpr[5]._u32[0], ctx->gpr[6]._u32[0], ctx->gpr[7]._u32[0], ctx->gpr[8]._u32[0], ctx->gpr[9]._u32[0]);
++              }
++          }
++      } }
+     static int s_pw_n = -1; static uint32_t s_pw[8];
+     if (s_pw_n < 0) { int n = 0; const char* e = getenv("SPU_PCWATCH");
+         while (e && *e && n < 8) { char* end; s_pw[n++] = (uint32_t)strtoul(e, &end, 16);
+diff --git a/runtime/spu/spu_workload.c b/runtime/spu/spu_workload.c
+index 3b27f96..9bade87 100644
+--- a/runtime/spu/spu_workload.c
++++ b/runtime/spu/spu_workload.c
+@@ -1093,9 +1093,15 @@ void spu_taskset_line_committed(uint32_t line)
+ /* WAIT_SIGNAL from the task side (runs ON the task's host thread, called by
+  * the 0xA70 taskset-syscall intercept). Consumes a pending signal or blocks
+  * until one is delivered. Returns 0 (the syscall's success rc). */
++/* The SPURS task this host thread runs (each task has its own), or -1: for
++ * diagnostics that want to tell the tasks of one image apart. */
++static _Thread_local int s_cur_task = -1;
++int spu_workload_current_task(void) { return s_cur_task; }
++
+ int spu_taskset_wait_signal(uint32_t taskset_ea, uint32_t taskId)
+ {
+     if (!taskset_ea || taskId >= 128) return 0;
++    s_cur_task = (int)taskId;
+     /* ran= is the wall time this task spent OUT of the wait (decode/mix work
+      * per round) -- decisive for "is the Bink decode CPU-bound". TLS: each
+      * task runs on its own host thread. */
+@@ -1183,6 +1189,9 @@ int spu_taskset_wait_signal(uint32_t taskset_ea, uint32_t taskId)
+     spu_serial_acquire();       /* resume: re-take the serial lock */
+     { extern unsigned long long ps3_ms_now(void);
+       s_wait_exit_ms = ps3_ms_now(); }   /* stamp for the next entry's ran= */
++    { static int _x = -1; if (_x < 0) _x = getenv("SPU_WAITSIG_EXITLOG") ? 1 : 0;
++      if (_x) fprintf(stderr, "[spu_workload] WAIT_SIGNAL exit task=%u taskset=0x%08X t=%llu\n",
++                      taskId, taskset_ea, (unsigned long long)s_wait_exit_ms); }
+     return 0;
+ }
+ 
+-- 
+2.50.1 (Apple Git-155)
+

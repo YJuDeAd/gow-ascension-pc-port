@@ -48,6 +48,8 @@ add_executable(gow_ascension
     "${CMAKE_CURRENT_SOURCE_DIR}/src/compat/ascension_hle.cpp"
     "${CMAKE_CURRENT_SOURCE_DIR}/src/compat/psn_stubs.cpp"
     "${CMAKE_CURRENT_SOURCE_DIR}/src/compat/gow_inflate.cpp"
+    "${CMAKE_CURRENT_SOURCE_DIR}/src/compat/upstream_compat.cpp"
+    "${CMAKE_CURRENT_SOURCE_DIR}/src/compat/ascension_defaults.cpp"
     "${PS3RECOMP_DIR}/runtime/ppu/ppu_loader.cpp"
     "${PS3RECOMP_DIR}/runtime/ppu/ppu_hle.cpp"
     "${PS3RECOMP_DIR}/runtime/ppu/ppu_sysprx.cpp"
@@ -76,7 +78,7 @@ target_link_libraries(gow_ascension PRIVATE "${PS3RECOMP_RUNTIME_LIB}")
 if(WIN32)
     target_link_libraries(gow_ascension PRIVATE
         ws2_32 bcrypt xinput ole32 d3d12 dxgi dxguid d3dcompiler
-        mfplat mfuuid winmm)
+        mfplat mfuuid winmm pdh)
 
     # 256 MB main thread stack reservation for deep PPC64 call nesting
     if(MSVC)

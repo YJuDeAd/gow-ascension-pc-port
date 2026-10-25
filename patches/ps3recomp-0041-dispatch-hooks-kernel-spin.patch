@@ -1,0 +1,130 @@
+From b7a3075def21424197a79cd7252a22f4d1ef073b Mon Sep 17 00:00:00 2001
+From: Arnaldo Lima <arnaldolimaof@gmail.com>
+Date: Sun, 18 Oct 2026 21:26:39 -0300
+Subject: [PATCH] SPU dispatch: per-thread depth-guard ring, gated
+ stack-reset/lockstep/irq/pcwatch calls; SPURS_KERNEL_SPIN
+
+from gow-ascension-pc@676eefe
+
+Every trampoline step paid out-of-line calls that do nothing in the common
+case: yz_lockstep_tick with the lockstep off, spu_check_stack_reset with no
+entry registered (g_spu_stack_reset_count), spu_irq_regs_maybe_restore with
+no saved registers, and the interpreter's spu_pcwatch per instruction with
+no watch set. spu_depth_guard's ring of recent drain sites was shared by
+every SPU thread (each drain wrote the same cache line); it is per thread.
+No behaviour change.
+
+SPURS_KERNEL_SPIN=1: the SPURS kernel thread yields and looks again instead
+of sleeping up to 1 ms between passes.
+
+Neither changed God of War: Ascension's level frame rate (16 fps): the
+frame is not bound by SPU step cost or kernel wake latency.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ libs/spurs/cellSpurs.c     |  9 ++++++++-
+ runtime/spu/spu_channels.c |  5 +++--
+ runtime/spu/spu_drain.c    | 12 ++++++++----
+ runtime/spu/spu_interp.c   |  5 ++++-
+ 4 files changed, 23 insertions(+), 8 deletions(-)
+
+diff --git a/libs/spurs/cellSpurs.c b/libs/spurs/cellSpurs.c
+index ac7528e..c034cee 100644
+--- a/libs/spurs/cellSpurs.c
++++ b/libs/spurs/cellSpurs.c
+@@ -2023,8 +2023,15 @@ static DWORD WINAPI spurs_kernel_thread(LPVOID p)
+     struct SpursInst* si = (struct SpursInst*)p;
+     int disabled = getenv("PS3_NO_SPURS_PM") != NULL;
+     AcquireSRWLockExclusive(&si->lock);
++    /* SPURS_KERNEL_SPIN=1: the kernel never sleeps between passes, it yields
++     * the CPU and looks again; workloads made ready by a plain memory write
++     * (an SPU's atomic, a PPU store) are admitted at once instead of at the
++     * next 1 ms wake. Costs a host core. */
++    static int s_spin = -1;
++    if (s_spin < 0) { const char* e = getenv("SPURS_KERNEL_SPIN"); s_spin = e && *e == '1'; }
+     while (!si->stopping) {
+-        SleepConditionVariableSRW(&si->wake, &si->lock, 1, 0);
++        if (s_spin) { ReleaseSRWLockExclusive(&si->lock); SwitchToThread(); AcquireSRWLockExclusive(&si->lock); }
++        else SleepConditionVariableSRW(&si->wake, &si->lock, 1, 0);
+         if (si->stopping) break;
+         if (disabled) continue;
+         u32 ea = si->ea;
+diff --git a/runtime/spu/spu_channels.c b/runtime/spu/spu_channels.c
+index 03ba460..59276a5 100644
+--- a/runtime/spu/spu_channels.c
++++ b/runtime/spu/spu_channels.c
+@@ -2019,7 +2019,8 @@ int spu_lifted_probe(spu_context* ctx, uint32_t lsa)
+  * Matching the resolved function, not just its LS address, avoids affecting
+  * unrelated overlays using the same address. Registration precedes execution. */
+ static struct { uint32_t entry; int image_id; } s_stack_reset[16];
+-static unsigned s_stack_reset_count;
++unsigned g_spu_stack_reset_count;   /* read by spu_task_launch_check before calling in */
++#define s_stack_reset_count g_spu_stack_reset_count
+ void spu_register_stack_reset_entry(uint32_t entry, int image_id)
+ {
+     if (s_stack_reset_count < 16) {
+@@ -2805,7 +2806,7 @@ void spu_indirect_branch(spu_context* ctx)
+      * enforce the preserve-all-registers hardware contract here -- the first
+      * interrupts-enabled dispatch at the saved srr0 is the irete. */
+     { extern int spu_irq_regs_maybe_restore(spu_context*);
+-      if (spu_irq_regs_maybe_restore(ctx)) {
++      if (ctx->irq_saved && spu_irq_regs_maybe_restore(ctx)) {
+           static int s_it = -1; if (s_it < 0) s_it = getenv("SPU_IRQTRACE") ? 1 : 0;
+           static int _r = 0;
+           if (s_it && _r++ < 200)
+diff --git a/runtime/spu/spu_drain.c b/runtime/spu/spu_drain.c
+index 26542fc..4638cb1 100644
+--- a/runtime/spu/spu_drain.c
++++ b/runtime/spu/spu_drain.c
+@@ -175,7 +175,8 @@ void spu_task_launch_check(spu_context* ctx, void* fn)
+     }
+     t_recent[t_recent_n++ & 31] = (uint32_t)ctx->pc & SPU_LS_MASK;
+     extern void spu_check_stack_reset(spu_context*, void (*)(spu_context*));
+-    spu_check_stack_reset(ctx, (void (*)(spu_context*))fn);
++    extern unsigned g_spu_stack_reset_count;   /* none registered: nothing to check */
++    if (g_spu_stack_reset_count) spu_check_stack_reset(ctx, (void (*)(spu_context*))fn);
+     /* A SPURS job returning to LS 0 is finished -- its crt tail-jumps to the
+      * resident job manager, and with the job loaded at 0 that lands on its own
+      * entry. Planting a return address in r0 catches the jobs that get there
+@@ -492,8 +493,10 @@ void spu_depth_guard(spu_context* ctx)
+      * not "where are we" but "what cycle got us here" -- one pc names a point,
+      * a ring names the loop. */
+     enum { RING = 24 };
+-    static uint32_t s_ring[RING];
+-    static uint32_t s_n;
++    /* Per host thread: shared, every drain on six SPU threads wrote the same
++     * cache line, and the ring of interleaved threads named no loop anyway. */
++    static SPU_THREAD_LOCAL uint32_t s_ring[RING];
++    static SPU_THREAD_LOCAL uint32_t s_n;
+     s_ring[s_n % RING] = ((uint32_t)ctx->pc & SPU_LS_MASK);
+     s_n++;
+ 
+@@ -572,7 +575,8 @@ static void spu_drain_loop(spu_context* ctx, uint32_t return_pc, int anyret)
+             g_spu_trampoline_fn = 0;
+             ctx->drain_ret_pc = return_pc & SPU_LS_MASK;   /* re-set: a nested drain changed it */
+             g_spu_drain_anyret = anyret ? (int)ctx->host_depth : 0;
+-            yz_lockstep_tick(ctx);
++            { extern volatile int g_yz_lockstep_on;   /* -1 (undecided) takes the call */
++              if (g_yz_lockstep_on) yz_lockstep_tick(ctx); }
+             spu_task_launch_check(ctx, (void*)fn);
+             if (ctx->int_enable && (ctx->event_status & ctx->event_mask)) {
+                 void (*vf)(spu_context*) = spu_take_interrupt(ctx, fn);
+diff --git a/runtime/spu/spu_interp.c b/runtime/spu/spu_interp.c
+index a2044bf..b3b48fb 100644
+--- a/runtime/spu/spu_interp.c
++++ b/runtime/spu/spu_interp.c
+@@ -529,7 +529,10 @@ uint32_t spu_interp_run_until(spu_context* ctx, uint32_t start_lsa, uint32_t sto
+         /* ponytail: pc-only match; a recursive call through the same site would stop early -- compare r1 too if one shows up. */
+         if (ctx->image_id >= 0 && ((stop_lsa && ctx->pc == stop_lsa) || spu_lifted_probe(ctx, ctx->pc))) { g_spu_interp_steps = steps; g_spu_interp_last_pc = ctx->pc; return ctx->pc; }  /* rejoin fast path */
+         g_spu_interp_last_pc = ctx->pc;
+-        spu_pcwatch(ctx, ctx->pc);
++        /* Both watches are off unless asked for; this runs per instruction. */
++        { static int s_pw = -1;
++          if (s_pw < 0) s_pw = (getenv("SPU_PCWATCH") || getenv("SPU_ITRACE_MOD")) ? 1 : 0;
++          if (s_pw) spu_pcwatch(ctx, ctx->pc); }
+         if (_g1>0) {
+             int inr = (ctx->pc >= 0x26E80u && ctx->pc < 0x26F14u);
+             if (inr) { _g1in = 1; }
+-- 
+2.55.0.windows.5
+

@@ -1,0 +1,1086 @@
+From d13fe6087e6cd4772c000878da23838dfaf42a65 Mon Sep 17 00:00:00 2001
+From: Arnaldo Lima <arnaldolimaof@gmail.com>
+Date: Sat, 17 Oct 2026 03:43:18 -0300
+Subject: [PATCH] cellVdec Ex, movie timing, perf overlay, job-module lifts;
+ diagnostics
+
+from gow-ascension-pc@676eefe
+
+The opening cinematic plays (God of War: Ascension's OPENINGINT6.M2V):
+- cellVdecQueryAttrEx / cellVdecOpenEx: unregistered, they faked CELL_OK
+  without writing anything; the title got cmdDepth 0 and no handle and sat
+  behind its black fade card.
+- Pictures from an AU without a timestamp get pts/dts numbered one frame
+  period apart, as the PS3 decoder (and RPCS3) does.
+- CellVdecMpeg2Info carries frame_rate_code, aspect, progressive and picture
+  structure: the title's player times its movie clock by frame_rate_code, and
+  with 0 it never asked for a second picture.
+- cellSpursJoinTask2 waits for the task's bit in the taskset to clear.
+
+Performance:
+- LD_PERF_OVERLAY=1: FPS, frame time, speed, CPU and GPU (PDH 3D engine) in
+  the top-right corner, drawn on the CPU and copied into the backbuffer.
+- Per-frame log lines (task creation/join, SPU dispatch, taskset starts,
+  DecodeAu) follow PS3_VERBOSE.
+- lift_jobmods.py --extra-funcs-json: per-module extra entries (every
+  module shares LS 0x4000, so a global list splits other modules).
+
+Diagnostics: LD_ZPROBE (one frame of a zeta: depth/stencil state, CPU
+winding and z, depth readback), LD_DEPTH_EQUAL_LEQUAL, HLE_BT_NID (guest
+stack of the first calls to one import), each distinct SPU interpreter
+entry logged once with its start PC and resident overlay, GetPicture /
+GetPicItem logs.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ libs/codec/cellVdec.c      |  78 +++++++-
+ libs/codec/cellVdec.h      |   3 +
+ libs/codec/vdec_ffmpeg.c   |  22 +++
+ libs/codec/vdec_ffmpeg.h   |   4 +
+ libs/spurs/cellSpurs.c     |  39 +++-
+ libs/spurs/cellSpurs.h     |   2 +
+ libs/video/rsx_live_draw.c | 378 ++++++++++++++++++++++++++++++++++++-
+ runtime/ppu/ppu_hle.cpp    |  18 ++
+ runtime/spu/spu_channels.c | 132 +++++++------
+ runtime/spu/spu_workload.c |  10 +-
+ tools/lift_jobmods.py      |  14 +-
+ 11 files changed, 628 insertions(+), 72 deletions(-)
+
+diff --git a/libs/codec/cellVdec.c b/libs/codec/cellVdec.c
+index a411dbd..a2d7a0f 100644
+--- a/libs/codec/cellVdec.c
++++ b/libs/codec/cellVdec.c
+@@ -17,6 +17,7 @@
+ #include "../guest_struct.h"   /* GUEST_EA, vm_read/vm_write: guest EA -> host */
+ #include "ps3emu/guest_call.h" /* g_ps3_guest_caller -- cbFunc is a GUEST OPD */
+ #include "../../runtime/memory/vm.h"     /* VM_HLE_INJECT_BASE */
++#include "../../runtime/ps3_log.h"      /* ps3_log_verbose */
+ 
+ /* ---------------------------------------------------------------------------
+  * Internal state
+@@ -32,6 +33,8 @@ typedef struct {
+     CellVdecPicItem item;
+     int pictType;       /* 1 I, 2 P, 3 B, 0 unknown */
+     int key;
++    u8  frameRateCode;  /* MPEG-2 frame_rate_code (0 unknown) */
++    u8  progressive;
+ } VdecPic;
+ 
+ typedef struct {
+@@ -52,8 +55,12 @@ typedef struct {
+     u32 qHead, qCount;
+     CellVdecAuInfo aus[VDEC_AU_RING];   /* by auCount % VDEC_AU_RING */
+     u32 newPics;        /* pictures queued by the current decode call */
++    u64 nextPts;        /* timestamp for the next picture whose AU had none */
+ } VdecSlot;
+ 
++/* CODEC_TS_INVALID: both halves of the AU's pts/dts all ones. */
++#define VDEC_TS_INVALID 0xFFFFFFFFFFFFFFFFull
++
+ static VdecSlot s_vdec[MAX_VDEC];
+ 
+ /* Deliver a vdec message to the guest callback (handle, msgType, msgData,
+@@ -100,12 +107,26 @@ static void vdec_on_picture(void* ctx, const VdecFfPicture* pic)
+     q->yuv = pic->yuv;
+     q->pictType = pic->pict_type;
+     q->key = pic->key;
++    q->frameRateCode = pic->frame_rate_code;
++    q->progressive = pic->progressive;
+     q->item.codecType = v->codecType;
+     q->item.startAddr = au->startAddr;
+     q->item.size      = au->size;
+     q->item.auNum     = pic->token;
+     q->item.pts       = au->pts;
+     q->item.dts       = au->dts;
++    /* An elementary stream (God of War: Ascension's OPENINGINT6.M2V) hands
++     * every AU over without a timestamp. The PS3 decoder then numbers the
++     * pictures itself, one frame period apart (RPCS3 does the same); left
++     * invalid, the title's player never found a picture due for display,
++     * took one and let the queue fill, and the movie stayed black. */
++    if (au->pts == VDEC_TS_INVALID) {
++        q->item.pts = v->nextPts;
++        if (au->dts == VDEC_TS_INVALID) q->item.dts = v->nextPts;
++    } else {
++        v->nextPts = au->pts;
++    }
++    v->nextPts += pic->duration_90k ? pic->duration_90k : 3003u;
+     q->item.userData  = au->userData;
+     q->item.status    = 0;
+     q->item.picFmt    = CELL_VDEC_PIC_FMT_YUV420P;
+@@ -183,6 +204,25 @@ s32 cellVdecOpen(const CellVdecType* type, const CellVdecResource* res,
+     return (s32)CELL_VDEC_ERROR_BUSY;
+ }
+ 
++/* The Ex pair takes CellVdecTypeEx { u32 codecType; u32 codecSpecificInfo }
++ * and CellVdecResourceEx; codecType is still the first word, and the rest is
++ * decoder tuning a host decoder does not need. Unregistered, both "returned"
++ * CELL_OK without writing anything: God of War: Ascension got a cmdDepth of 0
++ * and no handle, so its opening cinematic never started and the menu stayed
++ * behind its black fade card. */
++s32 cellVdecQueryAttrEx(const CellVdecType* type, void* attr)
++{
++    printf("[cellVdec] QueryAttrEx(codecType=%u)\n",
++           type ? vm_read32(GUEST_EA(type)) : 0u);
++    return cellVdecQueryAttr(type, attr);
++}
++
++s32 cellVdecOpenEx(const CellVdecType* type, const CellVdecResource* res,
++                   const CellVdecCb* cb, CellVdecHandle* handle)
++{
++    return cellVdecOpen(type, res, cb, handle);
++}
++
+ s32 cellVdecClose(CellVdecHandle handle)
+ {
+     printf("[cellVdec] Close(handle=%u)\n", handle);
+@@ -207,6 +247,7 @@ s32 cellVdecStartSeq(CellVdecHandle handle)
+         return (s32)CELL_VDEC_ERROR_ARG;
+ 
+     s_vdec[handle].seqStarted = 1;
++    s_vdec[handle].nextPts = 0;
+     if (s_vdec[handle].ff) {
+         /* A new sequence: nothing from the last one is shown. */
+         vdec_ff_reset(s_vdec[handle].ff);
+@@ -259,7 +300,7 @@ s32 cellVdecDecodeAu(CellVdecHandle handle, s32 mode, const CellVdecAuInfo* auIn
+     au.dts       = vm_read64(au_ea + (u32)offsetof(CellVdecAuInfo, dts));
+     au.userData  = vm_read64(au_ea + (u32)offsetof(CellVdecAuInfo, userData));
+ 
+-    printf("[cellVdec] DecodeAu(handle=%u, addr=0x%X, size=%u, pts=%llu)\n",
++    if (ps3_log_verbose()) printf("[cellVdec] DecodeAu(handle=%u, addr=0x%X, size=%u, pts=%llu)\n",
+            handle, au.startAddr, au.size,
+            (unsigned long long)au.pts);
+ 
+@@ -361,7 +402,24 @@ static void vdec_write_pic_type(CellVdecHandle handle, const VdecPic* q)
+         vm_write8(info + 0x05, 3);
+         vm_write8(info + 0x06, (u8)(q->key && t == 1));
+     } else if (s_vdec[handle].codecType == CELL_VDEC_CODEC_TYPE_MPEG2) {
++        /* CellVdecMpeg2Info (RPCS3's layout): +0 u16 horizontal_size,
++         * +2 u16 vertical_size, +4 u8 aspect_ratio_information,
++         * +5 u8 frame_rate_code, +6 u8 progressive_sequence, +7 u8 low_delay,
++         * +8 video_format, +9 colour_description, ... +0x12 u8
++         * picture_coding_type[2], +0x14 u8 picture_structure[2],
++         * +0x16 top_field_first, +0x17 repeat_first_field,
++         * +0x18 progressive_frame.
++         * God of War: Ascension's player takes its frame rate from
++         * frame_rate_code: left 0, its movie clock times 0 frames per second
++         * asked for no picture after the first, and the cutscene stayed black. */
++        const u32 w = q->item.width, h = q->item.height;
++        vm_write8(info + 0x04, (u8)((w && h && w * 9u == h * 16u) ? 3 : 2));
++        vm_write8(info + 0x05, q->frameRateCode ? q->frameRateCode : 4);
++        vm_write8(info + 0x06, q->progressive);
++        vm_write8(info + 0x08, 5);                     /* video_format: unspecified */
+         vm_write8(info + 0x12, (u8)(t >= 1 && t <= 3 ? t : 0));
++        vm_write8(info + 0x14, 3);                     /* picture_structure: frame */
++        vm_write8(info + 0x18, q->progressive);
+     }
+ }
+ 
+@@ -377,6 +435,12 @@ s32 cellVdecGetPicItem(CellVdecHandle handle, const CellVdecPicItem** picItem)
+         if (!v->qCount)
+             return (s32)CELL_VDEC_ERROR_EMPTY;
+         const VdecPic* q = &v->queue[v->qHead];
++        { static u32 n = 0;
++          if (n < 6 || (n % 300) == 0)
++              printf("[cellVdec] GetPicItem #%u handle=%u queued=%u au=%u pts=%llu type=%d\n",
++                     n, handle, v->qCount, q->item.auNum,
++                     (unsigned long long)q->item.pts, q->pictType);
++          n++; }
+         vdec_write_item(handle, &q->item);
+         vdec_write_pic_type(handle, q);
+         vm_write32(out, VDEC_ITEM_EA(handle));
+@@ -403,6 +467,18 @@ static s32 vdec_take_picture(VdecSlot* v, u32 dst, u32 type, u32 matrix, u8 alph
+     VdecPic* q = &v->queue[v->qHead];
+     v->qHead = (v->qHead + 1) % VDEC_QUEUE;
+     v->qCount--;
++    /* Where the title takes its pictures, and in what format: the first few,
++     * then one in 300. A movie whose audio plays over a black screen has a
++     * decoder that works and a picture that never reaches the texture. */
++    { static u32 n = 0;
++      if (n < 6 || (n % 300) == 0) {
++          const u32 w = q->item.width, h = q->item.height;
++          printf("[cellVdec] GetPicture #%u dst=0x%08X type=%u matrix=%u alpha=%u %ux%u"
++                 " Y(center)=%u au=%u pts=%llu\n", n, dst, type, matrix, alpha, w, h,
++                 (w && h && q->yuv) ? q->yuv[(size_t)(h / 2) * w + w / 2] : 0u,
++                 q->item.auNum, (unsigned long long)q->item.pts);
++      }
++      n++; }
+     if (dst)                                           /* NULL: a skip */
+         vdec_store_picture(dst, q->yuv, q->item.width, q->item.height,
+                            type, matrix, alpha);
+diff --git a/libs/codec/cellVdec.h b/libs/codec/cellVdec.h
+index 1fed514..401bb3b 100644
+--- a/libs/codec/cellVdec.h
++++ b/libs/codec/cellVdec.h
+@@ -102,6 +102,9 @@ typedef struct CellVdecCb {
+ 
+ s32 cellVdecOpen(const CellVdecType* type, const CellVdecResource* res,
+                   const CellVdecCb* cb, CellVdecHandle* handle);
++s32 cellVdecQueryAttrEx(const CellVdecType* type, void* attr);
++s32 cellVdecOpenEx(const CellVdecType* type, const CellVdecResource* res,
++                   const CellVdecCb* cb, CellVdecHandle* handle);
+ s32 cellVdecClose(CellVdecHandle handle);
+ 
+ s32 cellVdecStartSeq(CellVdecHandle handle);
+diff --git a/libs/codec/vdec_ffmpeg.c b/libs/codec/vdec_ffmpeg.c
+index d955b47..a1daff8 100644
+--- a/libs/codec/vdec_ffmpeg.c
++++ b/libs/codec/vdec_ffmpeg.c
+@@ -166,6 +166,28 @@ static int vdec_ff_receive(VdecFf* d, vdec_ff_emit_fn emit, void* cb_ctx)
+             pic.token = (u32)(f->pts != AV_NOPTS_VALUE ? f->pts : f->best_effort_timestamp);
+             pic.pict_type = (int)f->pict_type;
+             pic.key = (f->flags & AV_FRAME_FLAG_KEY) != 0;
++            {
++                const AVRational fr = d->ctx->framerate;
++                u64 dur = (fr.num > 0 && fr.den > 0)
++                    ? (u64)90000 * (u64)fr.den / (u64)fr.num : 3003u;
++                dur += dur * (u64)(f->repeat_pict > 0 ? f->repeat_pict : 0) / 2u;
++                pic.duration_90k = (u32)dur;
++                /* The MPEG-2 frame_rate_code the stream's sequence header
++                 * carries, recovered from FFmpeg's rate: the nearest of the
++                 * eight standard ones. */
++                static const double rates[9] = { 0, 24000.0 / 1001, 24, 25,
++                    30000.0 / 1001, 30, 50, 60000.0 / 1001, 60 };
++                if (fr.num > 0 && fr.den > 0) {
++                    const double r = (double)fr.num / (double)fr.den;
++                    int best = 0; double bd = 1e9;
++                    for (int k = 1; k <= 8; k++) {
++                        const double dd = r > rates[k] ? r - rates[k] : rates[k] - r;
++                        if (dd < bd) { bd = dd; best = k; }
++                    }
++                    pic.frame_rate_code = (u8)(bd < 0.5 ? best : 0);
++                }
++                pic.progressive = (f->flags & AV_FRAME_FLAG_INTERLACED) ? 0 : 1;
++            }
+             emit(cb_ctx, &pic);                        /* takes pic.yuv */
+         }
+         d->ff->av_frame_unref(f);
+diff --git a/libs/codec/vdec_ffmpeg.h b/libs/codec/vdec_ffmpeg.h
+index e634dd4..869e58e 100644
+--- a/libs/codec/vdec_ffmpeg.h
++++ b/libs/codec/vdec_ffmpeg.h
+@@ -26,6 +26,10 @@ typedef struct VdecFfPicture {
+     u32 token;        /* the token passed with the AU this picture came from */
+     int pict_type;    /* 1 I, 2 P, 3 B, 0 unknown (FFmpeg's AVPictureType) */
+     int key;          /* keyframe (IDR for H.264) */
++    u32 duration_90k; /* display time in 90 kHz ticks, from the stream's frame
++                         rate (3003, 29.97 Hz, when it declares none) */
++    u8  frame_rate_code; /* MPEG-2 frame_rate_code: 1 23.976 .. 8 60; 0 unknown */
++    u8  progressive;     /* progressive_frame */
+ } VdecFfPicture;
+ 
+ typedef void (*vdec_ff_emit_fn)(void* ctx, const VdecFfPicture* pic);
+diff --git a/libs/spurs/cellSpurs.c b/libs/spurs/cellSpurs.c
+index 7052813..42c4bee 100644
+--- a/libs/spurs/cellSpurs.c
++++ b/libs/spurs/cellSpurs.c
+@@ -1153,7 +1153,7 @@ s32 cellSpursCreateTask(CellSpursTaskset* taskset, CellSpursTaskId* taskId,
+             g_ydkj_real_taskset_ea = taskset_ea;
+             g_ydkj_real_taskid     = i;
+ 
+-            printf("[cellSpurs] CreateTask(id=%u, entry=%p, arg=%08X %08X %08X %08X"
++            if (ps3_log_verbose()) printf("[cellSpurs] CreateTask(id=%u, entry=%p, arg=%08X %08X %08X %08X"
+                    " ctx=0x%08X lsp=%08X %08X %08X %08X)\n",
+                    s_tasks[i].id, elf, task_arg[0], task_arg[1], task_arg[2], task_arg[3],
+                    context_ea, task_lsp[0], task_lsp[1], task_lsp[2], task_lsp[3]);
+@@ -1362,7 +1362,7 @@ s32 cellSpursCreateTask2(CellSpursTaskset* taskset, CellSpursTaskId* taskId,
+         ctx  = vm_read32(attr_ea + 0x0C);   /* low word of the 64-bit eaContext */
+         ls   = attr_ea + 0x10;
+     }
+-    printf("[cellSpurs] CreateTask2 elf=0x%08X arg=0x%08X ctx=0x%08X size=0x%X\n",
++    if (ps3_log_verbose()) printf("[cellSpurs] CreateTask2 elf=0x%08X arg=0x%08X ctx=0x%08X size=0x%X\n",
+            (u32)(uintptr_t)elf, argument_ea, ctx, size);
+     return cellSpursCreateTask(taskset, taskId, elf, (void*)(uintptr_t)ctx, size, ls, argument_ea);
+ }
+@@ -1452,6 +1452,41 @@ s32 cellSpursJoinTask(CellSpursTaskset* taskset, CellSpursTaskId taskId,
+     return CELL_SPURS_TASK_ERROR_SRCH;
+ }
+ 
++/* cellSpursJoinTask2(taskset, taskId, exitCode): wait for a task of a
++ * second-generation taskset to exit. A task's exit clears its bit in the
++ * taskset's enabled bitset (+0x30, task 0 = MSB; spu_taskset_task_exited),
++ * so that bit is what is waited on. Unregistered, it returned at once:
++ * God of War: Ascension joins its tasks (35 calls as the menu scene starts)
++ * and carried on while they still ran. The exit code is not tracked; 0. */
++s32 cellSpursJoinTask2(CellSpursTaskset* taskset, CellSpursTaskId taskId,
++                       s32* exitCode)
++{
++    const u32 ts = (u32)(uintptr_t)taskset;
++    const u32 ec = (u32)(uintptr_t)exitCode;
++    if (!ts) return CELL_SPURS_TASK_ERROR_NULL_POINTER;
++    if (taskId >= CELL_SPURS_MAX_TASK) return CELL_SPURS_TASK_ERROR_INVAL;
++    const u32 byte = ts + 0x30 + taskId / 8;
++    const u8 bit = (u8)(0x80u >> (taskId % 8));
++    u32 waited = 0;
++    while (vm_read8(byte) & bit) {
++        if (waited == 20000) {
++            printf("[cellSpurs] JoinTask2(taskset=0x%08X id=%u) still running after 20 s\n",
++                   ts, taskId);
++            return CELL_SPURS_TASK_ERROR_SRCH;
++        }
++#ifdef _WIN32
++        Sleep(1);
++#else
++        usleep(1000);
++#endif
++        waited++;
++    }
++    if (ec) vm_write32(ec, 0);
++    if (ps3_log_verbose())
++        printf("[cellSpurs] JoinTask2(taskset=0x%08X id=%u) after %u ms\n", ts, taskId, waited);
++    return CELL_OK;
++}
++
+ s32 cellSpursSendSignal(CellSpursTaskset* taskset, CellSpursTaskId taskId)
+ {
+     /* Capture the guest taskset EA before host translation -- the WAIT_SIGNAL
+diff --git a/libs/spurs/cellSpurs.h b/libs/spurs/cellSpurs.h
+index ef856f2..49c14d4 100644
+--- a/libs/spurs/cellSpurs.h
++++ b/libs/spurs/cellSpurs.h
+@@ -261,6 +261,8 @@ s32 cellSpursCreateTask(CellSpursTaskset* taskset, CellSpursTaskId* taskId,
+                         u32 lsPattern_ea, u32 argument_ea);
+ s32 cellSpursJoinTask(CellSpursTaskset* taskset, CellSpursTaskId taskId,
+                       s32* exitCode);
++s32 cellSpursJoinTask2(CellSpursTaskset* taskset, CellSpursTaskId taskId,
++                       s32* exitCode);
+ s32 cellSpursSendSignal(CellSpursTaskset* taskset, CellSpursTaskId taskId);
+ 
+ s32 cellSpursTaskAttributeInitialize(CellSpursTaskAttribute* attr);
+diff --git a/libs/video/rsx_live_draw.c b/libs/video/rsx_live_draw.c
+index bb2b6e7..45bfa5c 100644
+--- a/libs/video/rsx_live_draw.c
++++ b/libs/video/rsx_live_draw.c
+@@ -87,9 +87,9 @@ static volatile long g_ld_ps1_vram_ready = 0;
+ #if defined(YZ_PERF_CLEAN)
+ #define LD_DIAG_ENABLED(name) 0
+ #else
+-/* Cached per call site: several of these sit on per-draw paths. */
+-#define LD_DIAG_ENABLED(name) ({ static int _ld_diag = -1; \
+-    if (_ld_diag < 0) _ld_diag = getenv(name) != NULL; _ld_diag; })
++/* Cached per call site: several of these sit on per-draw paths. */
++#define LD_DIAG_ENABLED(name) ({ static int _ld_diag = -1; \
++    if (_ld_diag < 0) _ld_diag = getenv(name) != NULL; _ld_diag; })
+ #endif
+ #include <string.h>
+ 
+@@ -1229,6 +1229,7 @@ static const u8* guest_ptr(u32 location, u32 offset, u32 min_bytes)
+ static u64 fnv1a(const void* data, u32 n, u64 h);
+ static u64 ld_dump_surface_ppm(const char* path, const surface_t* surface);
+ static u64 live_legacy_pso_key(void);
++static void ld_perf_overlay(ID3D12Resource* bb);
+ static void ld_vertex_diag_emit(const char* reason, int dump_surface);
+ 
+ /* ---------------------------------------------------------------------------
+@@ -1389,6 +1390,12 @@ static void decode_render_state(render_state_t* rs)
+     { static int nd = -1; if (nd < 0) nd = getenv("LD_NO_DEPTH") ? 1 : 0; if (nd) rs->depth_test = 0; }
+     rs->depth_write = rsx_dsp_reg(&g.rsx, M_DEPTH_WRITE) & 1;
+     rs->depth_func  = rsx_dsp_reg(&g.rsx, M_DEPTH_FUNC);
++    /* LD_DEPTH_EQUAL_LEQUAL=1: a draw that tests EQUAL without writing depth
++     * (the colour pass after a depth prepass) tests LEQUAL instead. A probe:
++     * if the prepass depth and the colour pass disagree by any amount, EQUAL
++     * rejects the whole scene, and this shows it. */
++    { static int el = -1; if (el < 0) el = getenv("LD_DEPTH_EQUAL_LEQUAL") ? 1 : 0;
++      if (el && rs->depth_func == 0x0202 && !rs->depth_write) rs->depth_func = 0x0203; }
+     rs->cull_enable = rsx_dsp_reg(&g.rsx, M_CULL_FACE_ENABLE) & 1;
+     rs->cull_face   = rsx_dsp_reg(&g.rsx, M_CULL_FACE);
+     rs->front_face  = rsx_dsp_reg(&g.rsx, M_FRONT_FACE);
+@@ -6049,6 +6056,193 @@ static u64 live_decoded_vertex_hash(u64 attr_hash[16])
+ static FILE* s_csv_file;
+ static int   s_csv_gate_open = 1;
+ 
++/* LD_ZPROBE=<zeta offset hex>[,<from frame>]: one frame of a zeta's life.
++ *
++ * Every draw of that frame bound to the zeta prints its depth, stencil and
++ * polygon-offset state, the position stream, and the depth of vertices 0..2
++ * computed on the CPU through vp_c[264..267] (the transform these titles'
++ * prepass and colour-pass programs both use); the first EQUAL draw then reads
++ * the zeta back (min/max/histogram). A colour pass that tests EQUAL against
++ * its prepass and passes nowhere leaves the question "what is in the depth
++ * buffer?", which nothing else answers. */
++static u32 topology_vertex_index(u32 occurrence);
++
++static void ld_zprobe_readback(u32 zslot)
++{
++    zdepth_t* z = &g.zdepths[zslot - 1];
++    const u32 prior_write = z->had_write;
++    z->had_write = 1;                        /* resolve whatever it holds now */
++    const int ok = zdepth_snapshot(zslot);
++    z->had_write = prior_write;
++    if (!ok || !z->snapshot) {
++        fprintf(stderr, "[zprobe] readback: no snapshot (ok=%d)\n", ok);
++        return;
++    }
++    const u32 w = z->snapshot_w, h = z->snapshot_h;
++    const u32 pitch = (w * 4u + 255u) & ~255u;
++    const UINT64 rb_size = (UINT64)pitch * h;
++    D3D12_HEAP_PROPERTIES hp = {0}; hp.Type = D3D12_HEAP_TYPE_READBACK;
++    D3D12_RESOURCE_DESC bd = {0};
++    bd.Dimension = D3D12_RESOURCE_DIMENSION_BUFFER; bd.Width = rb_size;
++    bd.Height = 1; bd.DepthOrArraySize = 1; bd.MipLevels = 1;
++    bd.Format = DXGI_FORMAT_UNKNOWN; bd.SampleDesc.Count = 1;
++    bd.Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
++    ID3D12Resource* rb = NULL;
++    if (FAILED(g.dev->lpVtbl->CreateCommittedResource(g.dev, &hp, D3D12_HEAP_FLAG_NONE, &bd,
++            D3D12_RESOURCE_STATE_COPY_DEST, NULL, &IID_ID3D12Resource, (void**)&rb)))
++        return;
++    D3D12_RESOURCE_BARRIER b = {0};
++    b.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
++    b.Transition.pResource = z->snapshot;
++    b.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
++    b.Transition.StateBefore = z->snapshot_state;
++    b.Transition.StateAfter = D3D12_RESOURCE_STATE_COPY_SOURCE;
++    g.list->lpVtbl->ResourceBarrier(g.list, 1, &b);
++    D3D12_TEXTURE_COPY_LOCATION src = {0}, dst = {0};
++    src.pResource = z->snapshot; src.Type = D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX;
++    dst.pResource = rb; dst.Type = D3D12_TEXTURE_COPY_TYPE_PLACED_FOOTPRINT;
++    dst.PlacedFootprint.Footprint.Format = DXGI_FORMAT_R32_FLOAT;
++    dst.PlacedFootprint.Footprint.Width = w;
++    dst.PlacedFootprint.Footprint.Height = h;
++    dst.PlacedFootprint.Footprint.Depth = 1;
++    dst.PlacedFootprint.Footprint.RowPitch = pitch;
++    g.list->lpVtbl->CopyTextureRegion(g.list, &dst, 0, 0, 0, &src, NULL);
++    b.Transition.StateBefore = D3D12_RESOURCE_STATE_COPY_SOURCE;
++    b.Transition.StateAfter = z->snapshot_state;
++    g.list->lpVtbl->ResourceBarrier(g.list, 1, &b);
++    ld_flush(LD_FLUSH_READBACK);
++    u8* px = NULL; D3D12_RANGE rr = {0, (SIZE_T)rb_size};
++    if (SUCCEEDED(rb->lpVtbl->Map(rb, 0, &rr, (void**)&px))) {
++        float mn = 1e30f, mx = -1e30f; u64 ones = 0, zeros = 0, hist[10] = {0};
++        for (u32 y = 0; y < h; y++) {
++            const float* row = (const float*)(px + (SIZE_T)y * pitch);
++            for (u32 x = 0; x < w; x++) {
++                const float d = row[x];
++                if (d < mn) mn = d;
++                if (d > mx) mx = d;
++                if (d == 1.0f) ones++;
++                if (d == 0.0f) zeros++;
++                int bin = (int)(d * 10.0f); if (bin < 0) bin = 0; if (bin > 9) bin = 9;
++                hist[bin]++;
++            }
++        }
++        fprintf(stderr, "[zprobe] readback %ux%u min=%.7f max=%.7f ==1:%llu ==0:%llu hist:",
++                w, h, mn, mx, (unsigned long long)ones, (unsigned long long)zeros);
++        for (int i = 0; i < 10; i++) fprintf(stderr, " %llu", (unsigned long long)hist[i]);
++        fprintf(stderr, "\n[zprobe] samples:");
++        for (u32 k = 1; k < 8; k++) {
++            const u32 sx = w * k / 8u, sy = h * k / 8u;
++            fprintf(stderr, " (%u,%u)=%.7f", sx, sy, ((const float*)(px + (SIZE_T)sy * pitch))[sx]);
++        }
++        fprintf(stderr, "\n");
++        D3D12_RANGE wr = {0, 0};
++        rb->lpVtbl->Unmap(rb, 0, &wr);
++    }
++    rb->lpVtbl->Release(rb);
++}
++
++static void ld_zprobe(u32 prim, u32 n_tri, u32 zslot, const rsx_dsp_surface* sf,
++                      const rsx_dsp_viewport* vp, u32 target)
++{
++    static int armed = -1; static u32 zoff; static long from;
++    static u32 frame = ~0u; static int done = 0, read_done = 0; static u32 n = 0;
++    if (armed < 0) {
++        const char* e = getenv("LD_ZPROBE"); unsigned a = 0; long f = 0;
++        armed = e && sscanf(e, "%x,%ld", &a, &f) >= 1;
++        zoff = a; from = f;
++    }
++    if (!armed || done || !zslot || sf->zeta_offset != zoff || (long)g_ld_frames < from)
++        return;
++    if (frame == ~0u) frame = g_ld_frames;
++    if (g_ld_frames != frame) { done = 1; fprintf(stderr, "[zprobe] end of frame %u\n", frame); return; }
++    const u32 dt = rsx_dsp_reg(&g.rsx, M_DEPTH_TEST_ENABLE) & 1u;
++    const u32 dw = rsx_dsp_reg(&g.rsx, M_DEPTH_WRITE) & 1u;
++    const u32 df = rsx_dsp_reg(&g.rsx, M_DEPTH_FUNC);
++    const zdepth_t* z = &g.zdepths[zslot - 1];
++    fprintf(stderr,
++            "[zprobe] f=%u #%u surf=0x%X ct=0x%X zfmt=%u prim=%u v=%u pso=%016llx "
++            "depth{t=%u w=%u f=0x%X} zs{had_write=%u valid=%u cleared=%u} "
++            "stencil{en=%u 2s=%u f=0x%X ref=0x%X fm=0x%X wm=0x%X ops=%X/%X/%X back f=0x%X ops=%X/%X/%X} "
++            "polyoff{fill=%u scale=%g bias=%g} clip[%g,%g] zminmax=0x%X shctl=0x%X "
++            "cmask=0x%08X vpz{s=%g t=%g}\n",
++            g_ld_frames, n++, g.surfaces[target].offset, sf->color_target, sf->depth_format,
++            prim, n_tri, (unsigned long long)live_legacy_pso_key(),
++            dt, dw, df, z->had_write, z->snapshot_valid, z->cleared,
++            rsx_dsp_reg(&g.rsx, M_STENCIL_TEST_ENABLE) & 1u,
++            rsx_dsp_reg(&g.rsx, M_TWO_SIDED_STENCIL) & 1u,
++            rsx_dsp_reg(&g.rsx, M_STENCIL_FUNC), rsx_dsp_reg(&g.rsx, M_STENCIL_FUNC_REF),
++            rsx_dsp_reg(&g.rsx, M_STENCIL_FUNC_MASK), rsx_dsp_reg(&g.rsx, M_STENCIL_MASK),
++            rsx_dsp_reg(&g.rsx, M_STENCIL_OP_FAIL), rsx_dsp_reg(&g.rsx, M_STENCIL_OP_ZFAIL),
++            rsx_dsp_reg(&g.rsx, M_STENCIL_OP_ZPASS), rsx_dsp_reg(&g.rsx, M_BACK_STENCIL_FUNC),
++            rsx_dsp_reg(&g.rsx, M_BACK_STENCIL_OP_FAIL), rsx_dsp_reg(&g.rsx, M_BACK_STENCIL_OP_ZFAIL),
++            rsx_dsp_reg(&g.rsx, M_BACK_STENCIL_OP_ZPASS),
++            rsx_dsp_reg(&g.rsx, 0x0A68) & 1u, ld_c2f(rsx_dsp_reg(&g.rsx, 0x0A78)),
++            ld_c2f(rsx_dsp_reg(&g.rsx, 0x0A7C)),
++            ld_c2f(rsx_dsp_reg(&g.rsx, 0x0394)), ld_c2f(rsx_dsp_reg(&g.rsx, 0x0398)),
++            rsx_dsp_reg(&g.rsx, 0x1D78), rsx_dsp_reg(&g.rsx, 0x1D60),
++            rsx_dsp_reg(&g.rsx, M_COLOR_MASK), vp->scale[2], vp->translate[2]);
++    {
++        rsx_dsp_vertex_attr a; rsx_dsp_get_vertex_attr(&g.rsx, 0, &a);
++        const u32 vbase = rsx_dsp_vertex_data_base_offset(&g.rsx);
++        const u32* c = &g.rsx.constants[264][0];
++        u64 ch = fnv1a(c, 16 * sizeof(u32), 1469598103934665603ull);
++        fprintf(stderr, "[zprobe]   attr0{type=%u size=%u stride=%u loc=%u off=0x%X} base=0x%X c264..267=%016llx",
++                a.type, a.size, a.stride, a.location, a.offset, vbase, (unsigned long long)ch);
++        for (u32 vi = 0; vi < 3; vi++) {
++            float p[4] = {0, 0, 0, 1};
++            if (!fetch_attr(0, vbase, vi, 0, p)) break;
++            float o[4];
++            for (u32 k = 0; k < 4; k++)
++                o[k] = p[0] * ld_c2f(g.rsx.constants[264][k]) + p[1] * ld_c2f(g.rsx.constants[265][k]) +
++                       p[2] * ld_c2f(g.rsx.constants[266][k]) + p[3] * ld_c2f(g.rsx.constants[267][k]);
++            const float zd = o[3] != 0.0f ? (o[2] * vp->scale[2] + o[3] * vp->translate[2]) / o[3] : 0.0f;
++            fprintf(stderr, " v%u(%g %g %g)->z=%.7f w=%g", vi, p[0], p[1], p[2], zd, o[3]);
++        }
++        /* Winding of the draw's triangles in RSX window coordinates (x right,
++         * y as the viewport maps it, origin upper-left): pos = signed area
++         * > 0, the sense RSX calls CCW. Front faces under each mapping differ
++         * by which of the two counts survives a BACK cull. */
++        if (prim == PRIM_TRIANGLES) {
++            const u32 count = dc.n_source_refs - dc.n_source_refs % 3u;
++            u32 pos = 0, neg = 0, behind = 0;
++            for (u32 t = 0; t + 2 < count; t += 3) {
++                float wx[3], wy[3]; int ok = 1;
++                for (u32 k = 0; k < 3; k++) {
++                    float fb[4];
++                    const float* p = dc_vertex_attr_canonical(topology_vertex_index(t + k), 0, fb);
++                    float o[4];
++                    for (u32 j = 0; j < 4; j++)
++                        o[j] = p[0] * ld_c2f(g.rsx.constants[264][j]) + p[1] * ld_c2f(g.rsx.constants[265][j]) +
++                               p[2] * ld_c2f(g.rsx.constants[266][j]) + p[3] * ld_c2f(g.rsx.constants[267][j]);
++                    if (o[3] <= 0.0f) { ok = 0; break; }
++                    wx[k] = o[0] / o[3] * vp->scale[0] + vp->translate[0];
++                    wy[k] = o[1] / o[3] * vp->scale[1] + vp->translate[1];
++                }
++                if (!ok) { behind++; continue; }
++                const float area = (wx[1] - wx[0]) * (wy[2] - wy[0]) - (wx[2] - wx[0]) * (wy[1] - wy[0]);
++                if (area > 0.0f) pos++; else if (area < 0.0f) neg++;
++            }
++            fprintf(stderr, "[zprobe]   winding pos=%u neg=%u behind=%u cull=%u face=0x%X front=0x%X\n",
++                    pos, neg, behind, rsx_dsp_reg(&g.rsx, M_CULL_FACE_ENABLE) & 1u,
++                    rsx_dsp_reg(&g.rsx, M_CULL_FACE), rsx_dsp_reg(&g.rsx, M_FRONT_FACE));
++        }
++        static u64 last_ch = 0;
++        if (ch != last_ch) {
++            last_ch = ch;
++            fprintf(stderr, "[zprobe]   c264..267:");
++            for (u32 r = 264; r < 268; r++)
++                fprintf(stderr, " [%g %g %g %g]", ld_c2f(g.rsx.constants[r][0]), ld_c2f(g.rsx.constants[r][1]),
++                        ld_c2f(g.rsx.constants[r][2]), ld_c2f(g.rsx.constants[r][3]));
++            fprintf(stderr, "\n");
++        }
++    }
++    if (!read_done && dt && df == 0x0202) {
++        read_done = 1;
++        ld_zprobe_readback(zslot);
++    }
++    fflush(stderr);
++}
++
+ static void live_draw_csv_emit(u32 prim, u32 n_tri, const char* outcome)
+ {
+ #if defined(YZ_PERF_CLEAN) && !defined(YZ_PERF_PROFILE)
+@@ -6977,6 +7171,7 @@ static void sink_end_impl(void* user, const rsx_dispatch* r)
+     const u32 current_zslot = g.depth
+         ? zdepth_get(sf.zeta_location, sf.zeta_offset, sf.clip_w, sf.clip_h)
+         : 0;
++    ld_zprobe(prim, n_tri, current_zslot, &sf, &vp, target);
+     u32 slots[SRV_TABLE_SIZE], smp_slots[SMP_TABLE_SIZE];
+     u32 surf_used[SRV_TABLE_SIZE], n_surf_used = 0;
+     u32 zdepth_used[SRV_TABLE_SIZE], n_zdepth_used = 0;
+@@ -7165,7 +7360,7 @@ static void sink_end_impl(void* user, const rsx_dispatch* r)
+                   }
+               }
+           } }
+-        if (sampled < 0 && LD_DIAG_ENABLED("LD_ALIAS_DBG")) {
++        if (sampled < 0 && LD_DIAG_ENABLED("LD_ALIAS_DBG")) {
+             static u32 n_dbg = 0;
+             if (n_dbg++ < 24) {
+                 fprintf(stderr, "[alias-miss] tex %u:0x%08X fmt=0x%02X %ux%u target=%u surf:",
+@@ -8477,6 +8672,7 @@ void rsx_live_draw_present_rgba(const uint8_t* rgba, u32 w, u32 h)
+     src.PlacedFootprint.Footprint.Depth = 1;
+     src.PlacedFootprint.Footprint.RowPitch = pitch;
+     g.list->lpVtbl->CopyTextureRegion(g.list, &dst, 0, 0, 0, &src, NULL);
++    ld_perf_overlay(bb);
+ 
+     b.Transition.StateBefore = D3D12_RESOURCE_STATE_COPY_DEST;
+     b.Transition.StateAfter = D3D12_RESOURCE_STATE_PRESENT;
+@@ -8801,6 +8997,179 @@ static void ld_vertex_diag_emit(const char* reason, int dump_surface)
+     fflush(stderr);
+ }
+ 
++/* ---------------------------------------------------------------------------
++ * LD_PERF_OVERLAY=1: frame rate, frame time, speed, CPU and GPU use in the
++ * top-right corner of the window.
++ *
++ * The text is drawn on the CPU into a small RGBA image (a 5x7 bitmap font at
++ * twice its size) and copied into the backbuffer after the frame, so it needs
++ * no pipeline of its own and never touches the guest's surfaces.
++ *   FPS  presented frames per second (half-second window)
++ *   MS   the frame time behind it
++ *   SPD  speed against the title's native 30 frames per second
++ *   CPU  this process, as a share of the whole machine
++ *   GPU  this process's 3D engine, the counter Task Manager shows
++ *        (PDH "GPU Engine(pid_<pid>_*engtype_3D)\Utilization Percentage")
++ * ponytail: LD_PERF_OVERLAY_FPS=<n> sets the native rate SPD compares with.
++ * -------------------------------------------------------------------------*/
++#include <pdh.h>
++#pragma comment(lib, "pdh.lib")
++
++#define LD_OVL_W     136
++#define LD_OVL_H     100
++#define LD_OVL_PITCH ((LD_OVL_W * 4 + 255) & ~255)
++
++static const struct { char c; u8 rows[7]; } k_ld_glyphs[] = {
++    {'0', {0x0E,0x11,0x13,0x15,0x19,0x11,0x0E}}, {'1', {0x04,0x0C,0x04,0x04,0x04,0x04,0x0E}},
++    {'2', {0x0E,0x11,0x01,0x02,0x04,0x08,0x1F}}, {'3', {0x1F,0x02,0x04,0x02,0x01,0x11,0x0E}},
++    {'4', {0x02,0x06,0x0A,0x12,0x1F,0x02,0x02}}, {'5', {0x1F,0x10,0x1E,0x01,0x01,0x11,0x0E}},
++    {'6', {0x06,0x08,0x10,0x1E,0x11,0x11,0x0E}}, {'7', {0x1F,0x01,0x02,0x04,0x08,0x08,0x08}},
++    {'8', {0x0E,0x11,0x11,0x0E,0x11,0x11,0x0E}}, {'9', {0x0E,0x11,0x11,0x0F,0x01,0x02,0x0C}},
++    {'F', {0x1F,0x10,0x10,0x1E,0x10,0x10,0x10}}, {'P', {0x1E,0x11,0x11,0x1E,0x10,0x10,0x10}},
++    {'S', {0x0F,0x10,0x10,0x0E,0x01,0x01,0x1E}}, {'C', {0x0E,0x11,0x10,0x10,0x10,0x11,0x0E}},
++    {'U', {0x11,0x11,0x11,0x11,0x11,0x11,0x0E}}, {'G', {0x0E,0x11,0x10,0x17,0x11,0x11,0x0F}},
++    {'D', {0x1C,0x12,0x11,0x11,0x11,0x12,0x1C}}, {'M', {0x11,0x1B,0x15,0x15,0x11,0x11,0x11}},
++    {'%', {0x18,0x19,0x02,0x04,0x08,0x13,0x03}}, {'.', {0x00,0x00,0x00,0x00,0x00,0x0C,0x0C}},
++    {'-', {0x00,0x00,0x00,0x1F,0x00,0x00,0x00}},
++};
++
++static void ld_ovl_text(u8* img, u32 x, u32 y, const char* s, u8 r, u8 gg, u8 b)
++{
++    for (; *s; s++, x += 12) {
++        const u8* rows = NULL;
++        for (u32 k = 0; k < sizeof k_ld_glyphs / sizeof k_ld_glyphs[0]; k++)
++            if (k_ld_glyphs[k].c == *s) { rows = k_ld_glyphs[k].rows; break; }
++        if (!rows) continue;                                   /* space, unknown */
++        for (u32 ry = 0; ry < 7; ry++)
++            for (u32 rx = 0; rx < 5; rx++) {
++                if (!((rows[ry] >> (4 - rx)) & 1)) continue;
++                for (u32 dy = 0; dy < 2; dy++)
++                    for (u32 dx = 0; dx < 2; dx++) {
++                        const u32 px = x + rx * 2 + dx, py = y + ry * 2 + dy;
++                        if (px >= LD_OVL_W || py >= LD_OVL_H) continue;
++                        u8* p = img + (size_t)py * LD_OVL_PITCH + px * 4;
++                        p[0] = r; p[1] = gg; p[2] = b; p[3] = 255;
++                    }
++            }
++    }
++}
++
++static void ld_perf_overlay(ID3D12Resource* bb)
++{
++    static int on = -1;
++    if (on < 0) {
++        const char* e = getenv("LD_PERF_OVERLAY");
++        on = (e && e[0] && e[0] != '0') ? 1 : 0;
++    }
++    if (!on || g.width < LD_OVL_W + 16 || g.height < LD_OVL_H + 16) return;
++
++    static ID3D12Resource* up;
++    static u8* mapped;
++    if (!up) {
++        D3D12_HEAP_PROPERTIES hp = {0}; hp.Type = D3D12_HEAP_TYPE_UPLOAD;
++        D3D12_RESOURCE_DESC bd = {0};
++        bd.Dimension = D3D12_RESOURCE_DIMENSION_BUFFER;
++        bd.Width = (UINT64)LD_OVL_PITCH * LD_OVL_H;
++        bd.Height = 1; bd.DepthOrArraySize = 1; bd.MipLevels = 1;
++        bd.Format = DXGI_FORMAT_UNKNOWN; bd.SampleDesc.Count = 1;
++        bd.Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
++        D3D12_RANGE none = {0, 0};
++        if (FAILED(g.dev->lpVtbl->CreateCommittedResource(g.dev, &hp, D3D12_HEAP_FLAG_NONE, &bd,
++                D3D12_RESOURCE_STATE_GENERIC_READ, NULL, &IID_ID3D12Resource, (void**)&up)) ||
++            FAILED(up->lpVtbl->Map(up, 0, &none, (void**)&mapped))) {
++            fprintf(stderr, "[perf-overlay] could not create its upload buffer\n");
++            on = 0;
++            return;
++        }
++    }
++
++    /* Measurements, refreshed every half second. */
++    static LARGE_INTEGER qpf, last_t;
++    static u32 frames, cores;
++    static ULONGLONG last_cpu;
++    static double fps, ms, cpu = -1.0, gpu = -1.0, native = 30.0;
++    static PDH_HQUERY q; static PDH_HCOUNTER gpu_counter; static int pdh_state;
++    frames++;
++    LARGE_INTEGER now; QueryPerformanceCounter(&now);
++    if (!qpf.QuadPart) {
++        QueryPerformanceFrequency(&qpf);
++        last_t = now;
++        SYSTEM_INFO si; GetSystemInfo(&si); cores = si.dwNumberOfProcessors ? si.dwNumberOfProcessors : 1;
++        const char* nf = getenv("LD_PERF_OVERLAY_FPS");
++        if (nf && atof(nf) > 0) native = atof(nf);
++        FILETIME a, b, k, u;
++        GetProcessTimes(GetCurrentProcess(), &a, &b, &k, &u);
++        last_cpu = (((ULONGLONG)k.dwHighDateTime << 32) | k.dwLowDateTime) +
++                   (((ULONGLONG)u.dwHighDateTime << 32) | u.dwLowDateTime);
++        if (PdhOpenQueryW(NULL, 0, &q) == ERROR_SUCCESS) {
++            wchar_t path[160];
++            swprintf(path, 160, L"\\GPU Engine(pid_%lu_*engtype_3D)\\Utilization Percentage",
++                     (unsigned long)GetCurrentProcessId());
++            if (PdhAddEnglishCounterW(q, path, 0, &gpu_counter) == ERROR_SUCCESS &&
++                PdhCollectQueryData(q) == ERROR_SUCCESS)
++                pdh_state = 1;
++        }
++    }
++    const double dt = (double)(now.QuadPart - last_t.QuadPart) / (double)qpf.QuadPart;
++    if (dt >= 0.5) {
++        fps = frames / dt;
++        ms = frames ? dt * 1000.0 / frames : 0.0;
++        frames = 0;
++        last_t = now;
++        FILETIME a, b, k, u;
++        GetProcessTimes(GetCurrentProcess(), &a, &b, &k, &u);
++        const ULONGLONG c = (((ULONGLONG)k.dwHighDateTime << 32) | k.dwLowDateTime) +
++                            (((ULONGLONG)u.dwHighDateTime << 32) | u.dwLowDateTime);
++        cpu = (double)(c - last_cpu) / (dt * 1e7 * cores) * 100.0;   /* 100 ns units */
++        last_cpu = c;
++        if (pdh_state && PdhCollectQueryData(q) == ERROR_SUCCESS) {
++            DWORD size = 0, count = 0;
++            PdhGetFormattedCounterArrayW(gpu_counter, PDH_FMT_DOUBLE, &size, &count, NULL);
++            static PDH_FMT_COUNTERVALUE_ITEM_W* items; static DWORD items_cap;
++            if (size > items_cap) {
++                free(items); items = (PDH_FMT_COUNTERVALUE_ITEM_W*)malloc(size);
++                items_cap = items ? size : 0;
++            }
++            if (items && PdhGetFormattedCounterArrayW(gpu_counter, PDH_FMT_DOUBLE, &size,
++                                                     &count, items) == ERROR_SUCCESS) {
++                double sum = 0.0;
++                for (DWORD i = 0; i < count; i++)
++                    if (items[i].FmtValue.CStatus == ERROR_SUCCESS)
++                        sum += items[i].FmtValue.doubleValue;
++                gpu = sum > 100.0 ? 100.0 : sum;
++            }
++        }
++    }
++
++    /* Draw: a dark box, one line per figure. */
++    for (u32 y = 0; y < LD_OVL_H; y++)
++        for (u32 x = 0; x < LD_OVL_W; x++) {
++            u8* p = mapped + (size_t)y * LD_OVL_PITCH + x * 4;
++            const int edge = x == 0 || y == 0 || x == LD_OVL_W - 1 || y == LD_OVL_H - 1;
++            p[0] = p[1] = p[2] = edge ? 90 : 12; p[3] = 255;
++        }
++    char line[32];
++    const u8 fr = fps >= native * 0.95 ? 80 : fps >= native * 0.5 ? 240 : 255;
++    const u8 fg = fps >= native * 0.95 ? 255 : fps >= native * 0.5 ? 200 : 70;
++    snprintf(line, sizeof line, "FPS %5.1f", fps);                 ld_ovl_text(mapped, 8, 6, line, fr, fg, 70);
++    snprintf(line, sizeof line, "MS  %5.1f", ms);                  ld_ovl_text(mapped, 8, 24, line, 230, 230, 230);
++    snprintf(line, sizeof line, "SPD %4.0f%%", fps / native * 100.0); ld_ovl_text(mapped, 8, 42, line, 230, 230, 230);
++    if (cpu >= 0) snprintf(line, sizeof line, "CPU %4.0f%%", cpu); else snprintf(line, sizeof line, "CPU   --");
++    ld_ovl_text(mapped, 8, 60, line, 120, 200, 255);
++    if (gpu >= 0) snprintf(line, sizeof line, "GPU %4.0f%%", gpu); else snprintf(line, sizeof line, "GPU   --");
++    ld_ovl_text(mapped, 8, 78, line, 255, 160, 90);
++
++    D3D12_TEXTURE_COPY_LOCATION src = {0}, dst = {0};
++    src.pResource = up; src.Type = D3D12_TEXTURE_COPY_TYPE_PLACED_FOOTPRINT;
++    src.PlacedFootprint.Footprint.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
++    src.PlacedFootprint.Footprint.Width = LD_OVL_W;
++    src.PlacedFootprint.Footprint.Height = LD_OVL_H;
++    src.PlacedFootprint.Footprint.Depth = 1;
++    src.PlacedFootprint.Footprint.RowPitch = LD_OVL_PITCH;
++    dst.pResource = bb; dst.Type = D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX; dst.SubresourceIndex = 0;
++    g.list->lpVtbl->CopyTextureRegion(g.list, &dst, g.width - LD_OVL_W - 8, 8, 0, &src, NULL);
++}
++
+ void rsx_live_draw_present(u32 buffer_id)
+ {
+     if (!g.ready) return;
+@@ -9019,6 +9388,7 @@ void rsx_live_draw_present(u32 buffer_id)
+     g.list->lpVtbl->ResourceBarrier(g.list, 2, bar);
+ 
+     g.list->lpVtbl->CopyResource(g.list, bb, srcimg);
++    ld_perf_overlay(bb);
+ 
+     bar[0].Transition.StateBefore = D3D12_RESOURCE_STATE_COPY_SOURCE;
+     bar[0].Transition.StateAfter = D3D12_RESOURCE_STATE_RENDER_TARGET;
+diff --git a/runtime/ppu/ppu_hle.cpp b/runtime/ppu/ppu_hle.cpp
+index d9ce0c3..d14a3c9 100644
+--- a/runtime/ppu/ppu_hle.cpp
++++ b/runtime/ppu/ppu_hle.cpp
+@@ -208,6 +208,24 @@ extern "C" void ps3_hle_call(uint32_t nid, ppu_context* ctx)
+           }
+       } }
+ 
++    /* HLE_BT_NID=<nid hex>[,<n>]: the guest stack of the first n (default 4)
++     * calls to ONE import. HLE_BT_EVERY samples every call of a thread, which
++     * buries a rare call (a movie player's one cellVdecGetPicItem) under
++     * millions of others; this names the caller of the one that matters. */
++    { static int armed = -1; static uint32_t bt_nid = 0; static long bt_left = 0;
++      if (armed < 0) {
++          const char* e = getenv("HLE_BT_NID"); unsigned v = 0; long k = 4;
++          armed = e && sscanf(e, "%x,%ld", &v, &k) >= 1;
++          bt_nid = v; bt_left = k;
++      }
++      if (armed && nid == bt_nid && ctx && bt_left-- > 0) {
++          extern void ppu_dump_guest_stack(ppu_context*, const char*);
++          char tag[64];
++          snprintf(tag, sizeof tag, "hle-nid 0x%08X tid=%llu lr=0x%08X", nid,
++                   (unsigned long long)ctx->thread_id, (uint32_t)ctx->lr);
++          ppu_dump_guest_stack(ctx, tag);
++      } }
++
+     /* Preserve the caller TOC (r2) across the HLE call. ELFv1 makes r2 caller-saved
+      * across a cross-module call: the glink stub does `std r2,40(r1)` before jumping and
+      * the caller does `ld r2,40(r1)` after. Our HLE import stubs (`ps3_hle_call(nid);
+diff --git a/runtime/spu/spu_channels.c b/runtime/spu/spu_channels.c
+index b6ca97e..02a8e97 100644
+--- a/runtime/spu/spu_channels.c
++++ b/runtime/spu/spu_channels.c
+@@ -21,9 +21,9 @@
+ #include <stdio.h>
+ #include <stdlib.h>
+ #include <setjmp.h>
+-#ifndef _WIN32
+-#include <sched.h>   /* sched_yield */
+-#endif
++#ifndef _WIN32
++#include <sched.h>   /* sched_yield */
++#endif
+ #include <time.h>
+ #include "../platform/win32_compat.h"
+ 
+@@ -65,48 +65,48 @@ static uint64_t spu_host_ns(void)
+ #else
+ #  define SPU_TLS __thread
+ #endif
+-/* Called after an SPU atomic commits a 128-byte line, with the lock-line lock
+- * released. cellSpurs sets it so a PPU blocked in cellSpursEventFlagWait wakes
+- * when a task sets the flag, instead of on its next 2 ms poll. */
+-void (*g_spu_line_commit_hook)(uint32_t line) = 0;
+-/* spu_workload.c: wakes tasks parked in WAIT_SIGNAL on that line's taskset. */
+-void spu_taskset_line_committed(uint32_t line);
+-/* SPU_LS_WATCH=0x1BE80[,0x927D80...]: watch up to 4 16-byte LS lines (reads
+- * and writes) in every SPU image. See spu_ls_watch_hit2 for the fast path. */
+-#define SPU_WATCH_MAX 4
+-int g_spu_ls_watch_n = -1;
+-static unsigned s_spu_ls_watch[SPU_WATCH_MAX];
+-unsigned* spu_ls_watch_list(int* out_n)
+-{
+-    if (g_spu_ls_watch_n < 0) {
+-        int n = 0; const char* e = getenv("SPU_LS_WATCH");
+-        while (e && *e && n < SPU_WATCH_MAX) {
+-            s_spu_ls_watch[n++] = (unsigned)strtoul(e, (char**)&e, 0) & ~0xFu;
+-            while (*e == ',' || *e == ' ') e++;
+-        }
+-        g_spu_ls_watch_n = n;
+-    }
+-    *out_n = g_spu_ls_watch_n;
+-    return s_spu_ls_watch;
+-}
+-void spu_ls_watch_slow(uint32_t lsa, int is_write, const uint8_t* p, uint32_t pc, uint32_t lr)
+-{
+-    int n; spu_ls_watch_list(&n);
+-    if (!n) return;
+-    uint32_t a = lsa & (SPU_LS_MASK & ~0xFu);
+-    for (int i = 0; i < g_spu_ls_watch_n; i++) {
+-        if (s_spu_ls_watch[i] == a) {
+-            fprintf(stderr, "[spu-watch %s 0x%05X pc=0x%05X lr=0x%05X] "
+-                "%02X%02X%02X%02X %02X%02X%02X%02X %02X%02X%02X%02X %02X%02X%02X%02X\n",
+-                is_write ? "WR" : "rd", a, pc, lr,
+-                p[0],p[1],p[2],p[3], p[4],p[5],p[6],p[7],
+-                p[8],p[9],p[10],p[11], p[12],p[13],p[14],p[15]);
+-            fflush(stderr);
+-            break;
+-        }
+-    }
+-}
+-
++/* Called after an SPU atomic commits a 128-byte line, with the lock-line lock
++ * released. cellSpurs sets it so a PPU blocked in cellSpursEventFlagWait wakes
++ * when a task sets the flag, instead of on its next 2 ms poll. */
++void (*g_spu_line_commit_hook)(uint32_t line) = 0;
++/* spu_workload.c: wakes tasks parked in WAIT_SIGNAL on that line's taskset. */
++void spu_taskset_line_committed(uint32_t line);
++/* SPU_LS_WATCH=0x1BE80[,0x927D80...]: watch up to 4 16-byte LS lines (reads
++ * and writes) in every SPU image. See spu_ls_watch_hit2 for the fast path. */
++#define SPU_WATCH_MAX 4
++int g_spu_ls_watch_n = -1;
++static unsigned s_spu_ls_watch[SPU_WATCH_MAX];
++unsigned* spu_ls_watch_list(int* out_n)
++{
++    if (g_spu_ls_watch_n < 0) {
++        int n = 0; const char* e = getenv("SPU_LS_WATCH");
++        while (e && *e && n < SPU_WATCH_MAX) {
++            s_spu_ls_watch[n++] = (unsigned)strtoul(e, (char**)&e, 0) & ~0xFu;
++            while (*e == ',' || *e == ' ') e++;
++        }
++        g_spu_ls_watch_n = n;
++    }
++    *out_n = g_spu_ls_watch_n;
++    return s_spu_ls_watch;
++}
++void spu_ls_watch_slow(uint32_t lsa, int is_write, const uint8_t* p, uint32_t pc, uint32_t lr)
++{
++    int n; spu_ls_watch_list(&n);
++    if (!n) return;
++    uint32_t a = lsa & (SPU_LS_MASK & ~0xFu);
++    for (int i = 0; i < g_spu_ls_watch_n; i++) {
++        if (s_spu_ls_watch[i] == a) {
++            fprintf(stderr, "[spu-watch %s 0x%05X pc=0x%05X lr=0x%05X] "
++                "%02X%02X%02X%02X %02X%02X%02X%02X %02X%02X%02X%02X %02X%02X%02X%02X\n",
++                is_write ? "WR" : "rd", a, pc, lr,
++                p[0],p[1],p[2],p[3], p[4],p[5],p[6],p[7],
++                p[8],p[9],p[10],p[11], p[12],p[13],p[14],p[15]);
++            fflush(stderr);
++            break;
++        }
++    }
++}
++
+ static SPU_TLS jmp_buf s_spu_halt_env;
+ static SPU_TLS int     s_spu_halt_armed = 0;
+ 
+@@ -224,7 +224,7 @@ int spu_run_with_halt(void (*entry)(spu_context*), spu_context* ctx)
+      * recursion guard halted the SPU at 2000 after a few minutes of idling. */
+     ctx->host_depth = 0;
+     ctx->irq_frame = 0;
+-    ctx->drain_ret_pc = 0;
++    ctx->drain_ret_pc = 0;
+     /* Nest-safe: a job run synchronously from inside another SPU's execution
+      * re-enters here on the same host thread. The halt target is per-thread,
+      * so save the outer one and put it back on the way out -- otherwise the
+@@ -843,10 +843,10 @@ static int spu_mfc_atomic(spu_context* ctx, uint32_t cmd)
+                       ctx->gpr[0]._u32[0] & SPU_LS_MASK, ea); }
+         ctx->resv_valid = 0;                           /* reservation consumed */
+         spu_lockline_unlock();
+-        if (ctx->atomic_stat == 0) {
+-            spu_taskset_line_committed(ea & ~127u);
+-            if (g_spu_line_commit_hook) g_spu_line_commit_hook(ea & ~127u);
+-        }
++        if (ctx->atomic_stat == 0) {
++            spu_taskset_line_committed(ea & ~127u);
++            if (g_spu_line_commit_hook) g_spu_line_commit_hook(ea & ~127u);
++        }
+         return 1;
+ 
+     case MFC_PUTLLUC_CMD:
+@@ -864,7 +864,7 @@ static int spu_mfc_atomic(spu_context* ctx, uint32_t cmd)
+         ctx->resv_valid = 0; ctx->atomic_stat = 2;   /* PUTLLUC complete */
+         spu_lockline_unlock();
+         spu_taskset_line_committed(ea & ~127u);
+-        if (g_spu_line_commit_hook) g_spu_line_commit_hook(ea & ~127u);
++        if (g_spu_line_commit_hook) g_spu_line_commit_hook(ea & ~127u);
+         return 1;
+ 
+     default:
+@@ -2177,15 +2177,29 @@ static int spu_smc_microstep(spu_context* ctx)
+          * III`s job kernel dies here on an `ilh` at LS 0x6638 -- a perfectly
+          * ordinary instruction the interpreter handles -- and with it the
+          * decompression job it was running never completes. */
+-        { static int _n = 0;
+-          if (_n++ < 8)
+-              fprintf(stderr, "[spu-smc] microstep img=%d pc=0x%05X word 0x%08X not in the"
+-                      " microstep set -- handing to the interpreter (steps=%d)\n",
+-                      ctx->image_id, pc, w, steps); }
++        /* Every DISTINCT entry, once, with the resident overlay: each one is
++         * code the lift has no function for (a runtime-built return address,
++         * a function pointer), and the list is what a re-lift needs as extra
++         * entries. A capped count showed the first 8 and hid the hot one. */
++        { static struct { int img, ovl; uint32_t pc; } seen[256]; static int n_seen = 0;
++          int known = 0;
++          for (int i = 0; i < n_seen; i++)
++              if (seen[i].pc == pc && seen[i].img == ctx->image_id &&
++                  seen[i].ovl == ctx->resident_ovl) { known = 1; break; }
++          if (!known && n_seen < 256) {
++              seen[n_seen].img = ctx->image_id; seen[n_seen].ovl = ctx->resident_ovl;
++              seen[n_seen++].pc = pc;
++              /* start= is where the unresolved branch landed -- the address a
++               * lift needs as an entry; pc= is only where the microstep gave
++               * up, steps instructions further on. */
++              fprintf(stderr, "[spu-smc] microstep img=%d ovl=%d start=0x%05X pc=0x%05X word 0x%08X"
++                      " not in the microstep set -- handing to the interpreter (steps=%d)\n",
++                      ctx->image_id, ctx->resident_ovl, ctx->pc & SPU_LS_MASK & ~3u, pc, w, steps);
++          } }
+         ctx->pc = pc;
+-        /* Stop at the drain's return point too: it sits mid-function, so it is
+-         * no lifted entry, and a job's return would otherwise run on through
+-         * the caller's code (GH3's song-freeze; see drain_ret_pc). */
++        /* Stop at the drain's return point too: it sits mid-function, so it is
++         * no lifted entry, and a job's return would otherwise run on through
++         * the caller's code (GH3's song-freeze; see drain_ret_pc). */
+         const uint32_t return_pc = ctx->drain_ret_pc;
+         uint32_t result = spu_interp_run_until(ctx, pc, return_pc);
+         /* A live interpreter rejoin is a transfer, not a host return. Nested
+diff --git a/runtime/spu/spu_workload.c b/runtime/spu/spu_workload.c
+index f9e6695..5b359c4 100644
+--- a/runtime/spu/spu_workload.c
++++ b/runtime/spu/spu_workload.c
+@@ -225,7 +225,7 @@ int spu_workload_dispatch(const uint8_t* image, uint32_t image_size,
+         return 0;
+     }
+ 
+-    fprintf(stderr,
++    if (ps3_log_verbose()) fprintf(stderr,
+         "[spu_workload] dispatch HIT fp=0x%016llX entry=0x%05X args=0x%08X image=%d -> running\n",
+         (unsigned long long)fp, entry, args_ea, image_id);
+ 
+@@ -430,7 +430,7 @@ static void ts_start_ready(uint32_t taskset_ea, uint32_t done_task)
+         if (!sz) continue;
+         ts[0x20 + t / 8] &= (uint8_t)~m;                 /* pending -> started */
+         run[t / 8] |= m;
+-        fprintf(stderr, "[taskset] start task %u of taskset 0x%08X elf=0x%08X "
++        if (ps3_log_verbose()) fprintf(stderr, "[taskset] start task %u of taskset 0x%08X elf=0x%08X "
+                         "(after task %u exited)\n", t, taskset_ea, elf, done_task);
+         g_ydkj_real_taskset_ea = taskset_ea; g_ydkj_real_taskid = t;
+         spu_workload_dispatch_async(vm_base + elf, (uint32_t)sz, ctx);
+@@ -670,7 +670,7 @@ static void spu_async_run(spu_async_job* j)
+                  * both audio tasks run task 1's descriptor). */
+                 if (j->taskset_ea) {
+                     spurs_pm_build_context(ls, j->taskset_ea, j->taskid, 0, 0);
+-                    fprintf(stderr, "[taskset] built SpursTasksetContext image=%d "
++                    if (ps3_log_verbose()) fprintf(stderr, "[taskset] built SpursTasksetContext image=%d "
+                             "taskset=0x%08X task=%u\n", j->image_id,
+                             j->taskset_ea, j->taskid); fflush(stderr);
+                 }
+@@ -810,7 +810,7 @@ static void spu_async_run(spu_async_job* j)
+                   FILE* f = fopen(path, "wb");
+                   if (f) { fwrite(ls, 1, SPU_LS_SIZE, f); fclose(f);
+                       fprintf(stderr, "[spu_workload] wrote local store -> %s\n", path); } } }
+-            fprintf(stderr, "[spu_workload] async image=%d RETURNED rc=%d "
++            if (ps3_log_verbose()) fprintf(stderr, "[spu_workload] async image=%d RETURNED rc=%d "
+                     "(job ran to completion, did not loop)\n", j->image_id, rc);
+             spu_serial_release();
+             if (j->taskset_ea) spu_taskset_task_exited(j->taskset_ea, j->taskid);
+@@ -1313,7 +1313,7 @@ int spu_workload_dispatch_async(const uint8_t* image, uint32_t image_size,
+         if ((j->r3[0] >> 16) == 0x40) j->have_r3 = 1;   /* valid marker */
+     }
+ 
+-    fprintf(stderr,
++    if (ps3_log_verbose()) fprintf(stderr,
+         "[spu_workload] dispatch HIT (async) fp=0x%016llX args=0x%08X image=%d -> spawning thread\n",
+         (unsigned long long)fp, args_ea, image_id);
+     if (args_ea) { extern uint8_t* vm_base; const uint8_t* c = vm_base + args_ea;
+diff --git a/tools/lift_jobmods.py b/tools/lift_jobmods.py
+index d2e6b07..5fbc2ae 100644
+--- a/tools/lift_jobmods.py
++++ b/tools/lift_jobmods.py
+@@ -135,7 +135,18 @@ def main():
+     ap.add_argument("--symbol-prefix", default="port", metavar="NAME",
+                     help="C symbol prefix for the registration functions, so two "
+                          "ports linked in one tree cannot collide (default: port).")
++    ap.add_argument("--extra-funcs-json", default=None, metavar="FILE",
++                    help="Per-module extra function entries: a JSON object "
++                         "{module name: [LS address, ...]}. Every module shares "
++                         "LS 0x4000, so an address one module needs is mid-function "
++                         "in another; the global $LBP_JOBMOD_EXTRA_FUNCS cannot say "
++                         "which. The list is what the runtime's '[spu-smc] microstep "
++                         "... ovl=<image>' lines report for that module's image.")
+     args = ap.parse_args()
++    per_module = {}
++    if args.extra_funcs_json:
++        with open(args.extra_funcs_json) as f:
++            per_module = {k: [hex(int(str(a), 0)) for a in v] for k, v in json.load(f).items()}
+     JOBMODS = args.jobmods
+     OUTDIR  = args.out
+     register_c = args.register or os.path.join(OUTDIR, "jobmods_register.c")
+@@ -169,7 +180,8 @@ def main():
+         if name in CODE_END:
+             cmd += ["--code-end", hex(CODE_END[name])]
+         # Only offer addresses that fall inside THIS module's image.
+-        inside = [a for a in EXTRA_FUNCS if BASE <= int(a, 0) < BASE + len(raw)]
++        inside = [a for a in EXTRA_FUNCS + per_module.get(name, [])
++                  if BASE <= int(a, 0) < BASE + len(raw)]
+         # The module's first function starts right after the 0x30-byte header
+         # (`4 ila | entry | size | 0 | 0 | C0DEC0DE | 0 | 0 | n`). Usually it is
+         # reached by a branch and found anyway, but in two modules it is a bare
+-- 
+2.55.0.windows.5
+

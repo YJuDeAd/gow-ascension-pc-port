@@ -1,0 +1,37 @@
+From d1b123d4086038914461d9f8bccda7577e0ce505 Mon Sep 17 00:00:00 2001
+From: YJuDeAd <robinrashi@gmail.com>
+Date: Wed, 21 Oct 2026 02:37:55 +0530
+Subject: [PATCH 4/6] cellGcmSys: Step-over parked self-jump and throttle dump
+ logs
+
+---
+ libs/video/cellGcmSys.c | 13 ++++++++++++-
+ 1 file changed, 12 insertions(+), 1 deletion(-)
+
+diff --git a/libs/video/cellGcmSys.c b/libs/video/cellGcmSys.c
+index 83c6f7f..b0849ab 100644
+--- a/libs/video/cellGcmSys.c
++++ b/libs/video/cellGcmSys.c
+@@ -1815,7 +1815,18 @@ static void gcm_rsx_process_fifo_unlocked(void)
+                           park_off = s_fifo_getoff; park_put = put; park_since = now;
+                       } else if (now - park_since >= GCM_PARK_GRACE_MS) {
+                           park_off = 0;
+-                          gcm_fifo_dump_around(s_fifo_getoff);
++                          static int s_park_dump = 0;
++                          if (s_park_dump++ < 3) {
++                              gcm_fifo_dump_around(s_fifo_getoff);
++                          }
++                          u32 next_ea = (s_fifo_getoff + 4 < GCM_MAX_IO_SIZE) ? gcm_io2ea(s_fifo_getoff + 4) : 0;
++                          u32 next_w = next_ea ? vm_read32(next_ea) : 0;
++                          if (next_w != 0 && (next_w >> 29) <= 1) {
++                              fprintf(stderr, "[cellGcmSys] FIFO step-over parked self-jump 0x%08X -> 0x%08X (next_w=0x%08X)\n",
++                                      s_fifo_getoff, s_fifo_getoff + 4, next_w);
++                              s_fifo_getoff += 4;
++                              continue;
++                          }
+                           gcm_fifo_resync_why("jump-park", &s_fifo_getoff, put);
+                       }
+                   }
+-- 
+2.48.1.windows.1
+

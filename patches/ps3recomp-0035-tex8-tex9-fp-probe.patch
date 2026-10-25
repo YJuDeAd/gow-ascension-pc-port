@@ -1,0 +1,164 @@
+From 96e860adbf591906d7dd4e06d19414367fdfa0b7 Mon Sep 17 00:00:00 2001
+From: Arnaldo Lima <arnaldolimaof@gmail.com>
+Date: Sun, 18 Oct 2026 08:18:04 -0300
+Subject: [PATCH] Vertex outputs TEX8/TEX9 reach the pixel program; FP probe
+ and vertex-array dump
+
+from gow-ascension-pc@676eefe
+
+- The vertex decompiler writes o[15] as TEXCOORD8 and o[6] as TEXCOORD9, the
+  pixel decompiler reads them as input.tc8/tc9 (they read as zero before).
+  Ten of God of War: Ascension's main-menu materials (the amber rocks, the
+  terrain) take a normalised light vector from TEX8. The fixed draw-engine
+  VS writes zeros there so every VS/PS pair still links.
+- LD_FP_PROBE=<pso key>:<expr> or <hlsl text>|<expr>: that pixel program
+  outputs float4((expr).xyz, 1), to see one term of a material on screen.
+- LD_ATTR_DBG=1 (draw CSV): each active vertex array with its format, the
+  first bytes and how many of the first 256 vertices are non-zero.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ libs/video/rsx_draw_engine.c   |  2 ++
+ libs/video/rsx_fp_decompiler.c |  5 +++-
+ libs/video/rsx_live_draw.c     | 51 ++++++++++++++++++++++++++++++++++
+ libs/video/rsx_vp_decompiler.c |  5 ++++
+ 4 files changed, 62 insertions(+), 1 deletion(-)
+
+diff --git a/libs/video/rsx_draw_engine.c b/libs/video/rsx_draw_engine.c
+index 0f41022..63329bb 100644
+--- a/libs/video/rsx_draw_engine.c
++++ b/libs/video/rsx_draw_engine.c
+@@ -1287,6 +1287,7 @@ static const char* const kEngFixedVS =
+ "    float4 fog:FOG;\n"
+ "    float4 t0:TEXCOORD0; float4 t1:TEXCOORD1; float4 t2:TEXCOORD2; float4 t3:TEXCOORD3;\n"
+ "    float4 t4:TEXCOORD4; float4 t5:TEXCOORD5; float4 t6:TEXCOORD6; float4 t7:TEXCOORD7;\n"
++"    float4 t8:TEXCOORD8; float4 t9:TEXCOORD9;\n"
+ "};\n"
+ "cbuffer VPConst : register(b0) {\n"
+ "    float4 vp_c[512];\n"
+@@ -1304,6 +1305,7 @@ static const char* const kEngFixedVS =
+ "    Out.col0 = input.a3; Out.col1 = float4(0,0,0,1); Out.fog = (float4)0;\n"
+ "    Out.t0 = input.a8; Out.t1 = (float4)0; Out.t2 = (float4)0; Out.t3 = (float4)0;\n"
+ "    Out.t4 = (float4)0; Out.t5 = (float4)0; Out.t6 = (float4)0; Out.t7 = (float4)0;\n"
++"    Out.t8 = (float4)0; Out.t9 = (float4)0;\n"
+ "    return Out;\n"
+ "}\n";
+ 
+diff --git a/libs/video/rsx_fp_decompiler.c b/libs/video/rsx_fp_decompiler.c
+index fb93391..addbf53 100644
+--- a/libs/video/rsx_fp_decompiler.c
++++ b/libs/video/rsx_fp_decompiler.c
+@@ -402,7 +402,9 @@ static const char* input_expr(u32 input_src)
+     case 0x3: return "input.fog";      /* FOGC */
+     default:
+         if (input_src >= 0x4 && input_src <= 0xB) return tc[input_src - 0x4]; /* TC0..7 */
+-        return "float4(0,0,0,0)";      /* TC8/TC9/FACING not plumbed */
++        if (input_src == 0xC) return "input.tc8";
++        if (input_src == 0xD) return "input.tc9";
++        return "float4(0,0,0,0)";      /* FACING/SSA not plumbed */
+     }
+ }
+ 
+@@ -1185,6 +1187,7 @@ static int rsx_fp_decompile_internal(
+         "    float4 fog : FOG;\n"
+         "    float4 tc0:TEXCOORD0; float4 tc1:TEXCOORD1; float4 tc2:TEXCOORD2; float4 tc3:TEXCOORD3;\n"
+         "    float4 tc4:TEXCOORD4; float4 tc5:TEXCOORD5; float4 tc6:TEXCOORD6; float4 tc7:TEXCOORD7;\n"
++        "    float4 tc8:TEXCOORD8; float4 tc9:TEXCOORD9;\n"
+         "};\n");
+     /* Texture bank. With no cube units (the default) emit the exact legacy
+      * array declaration so 2D-only programs are byte-identical. When any unit
+diff --git a/libs/video/rsx_live_draw.c b/libs/video/rsx_live_draw.c
+index 7c28524..95f6fc1 100644
+--- a/libs/video/rsx_live_draw.c
++++ b/libs/video/rsx_live_draw.c
+@@ -5230,6 +5230,36 @@ static ID3D12PipelineState* get_pso(
+       char* c0 = fc && vi > 0 && (!fk || fk == live_legacy_pso_key())
+                  ? strstr(vs_hlsl, "Out.col0 = o[1];") : NULL;
+       if (c0) memcpy(c0, "Out.col0=1+0*_p;", 16); }   /* same length, in place */
++    /* LD_FP_PROBE=<pso key>:<hlsl expr>: the PSO with that key (as the draw CSV
++     * and LD_HLSL_DUMP print it) outputs float4((expr).xyz, 1) on its first
++     * colour target instead, e.g. "a3cc99760cc9dd86:h[1].wwww" to see a
++     * material's mask on screen. Registers hold their last value at the end of
++     * the program, so a sample is visible if nothing wrote that register after. */
++    /* LD_FP_PROBE=<text>|<expr> matches by content instead: every pixel
++     * program containing <text> (keys change from run to run). */
++    { static const char* pe = (const char*)-1; static unsigned long long pk; static char pexpr[256], psub[256];
++      if (pe == (const char*)-1) {
++          pe = getenv("LD_FP_PROBE");
++          const char* bar = pe ? strchr(pe, '|') : NULL;
++          if (bar) { snprintf(psub, sizeof psub, "%.*s", (int)(bar - pe), pe); snprintf(pexpr, sizeof pexpr, "%s", bar + 1); }
++          else if (pe) { pk = _strtoui64(pe, 0, 16); const char* c = strchr(pe, ':');
++                         snprintf(pexpr, sizeof pexpr, "%s", c ? c + 1 : "h[0]"); }
++      }
++      if (pe && fi > 0 && (psub[0] ? strstr(ps_hlsl, psub) != NULL : pk == live_legacy_pso_key())) {
++          pk = live_legacy_pso_key();
++          const char* marks[2] = { "float4 _o0 = ", "float4 _o = " };
++          for (int mi = 0; mi < 2; mi++) {
++              char* at = strstr(ps_hlsl, marks[mi]);
++              char* semi = at ? strchr(at, ';') : NULL;
++              if (!semi) continue;
++              static char tail[256 * 1024];
++              snprintf(tail, sizeof tail, "%s", semi);
++              snprintf(at, sizeof(ps_hlsl) - (size_t)(at - ps_hlsl), "%sfloat4((%s).xyz, 1)%s",
++                       marks[mi], pexpr, tail);
++              fprintf(stderr, "[fp-probe] pso %016llx output 0 = %s\n", pk, pexpr);
++              break;
++          }
++      } }
+     /* LD_HLSL_DUMP=<dir>: files named by the PSO key the draw CSV prints. */
+     { static const char* hd = (const char*)-1;
+       if (hd == (const char*)-1) hd = getenv("LD_HLSL_DUMP");
+@@ -7016,6 +7046,27 @@ static void live_draw_csv_emit(u32 prim, u32 n_tri, const char* outcome)
+             fprintf(file, "%u:%u:%X:%02X:%ux%u ", u, t.location, t.offset,
+                     t.format & 0xFF, t.width, t.height);
+     }
++    /* LD_ATTR_DBG=1: each active vertex array, type/size/stride/location:offset
++     * and the first 12 bytes at that offset, to see a stream that reads as
++     * zeros (a buffer an SPU job fills, or a wrong offset). */
++    if (LD_DIAG_ENABLED("LD_ATTR_DBG"))
++        for (u32 a = 0; a < 16; a++) {
++            if (!((active_attr_mask >> a) & 1u)) continue;
++            rsx_dsp_vertex_attr va; rsx_dsp_get_vertex_attr(&g.rsx, a, &va);
++            const u8* p = guest_ptr(va.location, va.offset, 16);
++            fprintf(file, "va%u=%u/%u/%u/%u:%X", a, va.type, va.size, va.stride, va.location, va.offset);
++            if (p) { fputc('[', file); for (int b = 0; b < 12; b++) fprintf(file, "%02X", p[b]); fputc(']', file); }
++            /* how many of the first 256 vertices hold anything but zeros */
++            if (va.stride) {
++                const u32 bytes = va.type == 2 ? 4u : (va.type == 4 || va.type == 7) ? 1u : va.type == 6 ? 4u : 2u;
++                const u32 elem = va.type == 6 ? 4u : bytes * (va.size ? va.size : 1u);
++                const u8* q = guest_ptr(va.location, va.offset, va.stride * 256u);
++                if (q) { u32 nz = 0; for (u32 v = 0; v < 256u; v++) { u32 any = 0;
++                         for (u32 b = 0; b < elem; b++) any |= q[v * va.stride + b]; nz += any != 0; }
++                         fprintf(file, "{nz%u}", nz); }
++            }
++            fputc(' ', file);
++        }
+     if (rs.blend_enable)
+         fprintf(file, "bf=%X/%X/%X/%X eq=%X/%X ", rs.sf_rgb, rs.df_rgb, rs.sf_a, rs.df_a,
+                 rs.eq_rgb, rs.eq_a);
+diff --git a/libs/video/rsx_vp_decompiler.c b/libs/video/rsx_vp_decompiler.c
+index edd01d6..fb7b918 100644
+--- a/libs/video/rsx_vp_decompiler.c
++++ b/libs/video/rsx_vp_decompiler.c
+@@ -590,6 +590,7 @@ static int rsx_vp_decompile_impl(
+         "    float4 fog:FOG;\n"
+         "    float4 t0:TEXCOORD0; float4 t1:TEXCOORD1; float4 t2:TEXCOORD2; float4 t3:TEXCOORD3;\n"
+         "    float4 t4:TEXCOORD4; float4 t5:TEXCOORD5; float4 t6:TEXCOORD6; float4 t7:TEXCOORD7;\n"
++        "    float4 t8:TEXCOORD8; float4 t9:TEXCOORD9;\n"
+         "};\n"
+         /* b0: 512 vec4 transform constants + the RSX viewport transform,
+          * pre-mapped by the harness to D3D clip space:
+@@ -663,6 +664,10 @@ static int rsx_vp_decompile_impl(
+         "    Out.col0 = o[1]; Out.col1 = o[2]; Out.fog = o[5].xxxx;\n"
+         "    Out.t0=o[7];  Out.t1=o[8];  Out.t2=o[9];  Out.t3=o[10];\n"
+         "    Out.t4=o[11]; Out.t5=o[12]; Out.t6=o[13]; Out.t7=o[14];\n"
++        /* TEX8 is output 15, TEX9 output 6 (beside the point size). God of
++         * War: Ascension's amber and terrain materials read TEX8 (a normalised
++         * light vector): unplumbed it was zero and their N.L terms with it. */
++        "    Out.t8=o[15]; Out.t9=o[6];\n"
+         "    return Out;\n"
+         "}\n");
+ 
+-- 
+2.55.0.windows.5
+

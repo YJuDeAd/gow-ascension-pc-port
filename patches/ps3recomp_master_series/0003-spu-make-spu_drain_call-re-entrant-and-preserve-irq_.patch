@@ -1,0 +1,63 @@
+From 0b780bea7b73c3241273471d7dbdbb9aaaa878f9 Mon Sep 17 00:00:00 2001
+From: YJuDeAd <robinrashi@gmail.com>
+Date: Tue, 20 Oct 2026 14:34:04 +0530
+Subject: [PATCH 3/6] spu: make spu_drain_call re-entrant and preserve
+ irq_drain_ret_pc across interrupts
+
+---
+ runtime/spu/spu_context.h | 1 +
+ runtime/spu/spu_drain.c   | 6 +++++-
+ 2 files changed, 6 insertions(+), 1 deletion(-)
+
+diff --git a/runtime/spu/spu_context.h b/runtime/spu/spu_context.h
+index c911899..4fbc37a 100644
+--- a/runtime/spu/spu_context.h
++++ b/runtime/spu/spu_context.h
+@@ -383,6 +383,7 @@ typedef struct spu_context {
+      * the handler's registers. */
+     int      irq_saved;
+     uint32_t irq_resume_pc;
++    uint32_t irq_drain_ret_pc;
+     u128     irq_gpr[128];
+ 
+     /* Return pc of the innermost spu_drain_call (0 = none). The interpreter
+diff --git a/runtime/spu/spu_drain.c b/runtime/spu/spu_drain.c
+index 242b51f..3e5b7e2 100644
+--- a/runtime/spu/spu_drain.c
++++ b/runtime/spu/spu_drain.c
+@@ -225,6 +225,8 @@ static void spu_irq_regs_save(spu_context* ctx)
+ {
+     ctx->irq_saved = 1;
+     ctx->irq_resume_pc = ctx->srr0;
++    ctx->irq_drain_ret_pc = ctx->drain_ret_pc;
++    ctx->drain_ret_pc = 0;
+     memcpy(ctx->irq_gpr, ctx->gpr, sizeof ctx->irq_gpr);
+ }
+ 
+@@ -246,6 +248,7 @@ int spu_irq_regs_maybe_restore(spu_context* ctx)
+             if ((ctx->pc & SPU_LS_MASK) == (ctx->irq_resume_pc & SPU_LS_MASK) &&
+                 ctx->int_enable) {
+                 memcpy(ctx->gpr, ctx->irq_gpr, sizeof ctx->irq_gpr);
++                ctx->drain_ret_pc = ctx->irq_drain_ret_pc;
+                 ctx->irq_saved = 0;
+                 /* The iret completed below the frame that took the interrupt:
+                  * abandon the handler's host frames and resume there. */
+@@ -400,13 +403,14 @@ extern spu_drain_fn spu_lookup(uint32_t addr, int image_id);
+ void spu_drain_call(spu_context* ctx, uint32_t return_pc)
+ {
+     spu_depth_guard(ctx);
++    uint32_t prev_ret_pc = ctx->drain_ret_pc;
+     /* The frame an interrupt taken in THIS loop returns to. It stays armed
+      * after the handler's first host function returns -- the handler keeps
+      * running as trampolines of this loop -- until its iret fires or the
+      * loop exits, whichever first. */
+     spu_irq_frame f;
+     f.prev = 0; f.depth = 0; f.image_id = 0;
+-#define SPU_DRAIN_POP_IRQ() do { if (ctx->irq_frame == &f) ctx->irq_frame = f.prev; ctx->drain_ret_pc = 0; } while (0)
++#define SPU_DRAIN_POP_IRQ() do { if (ctx->irq_frame == &f) ctx->irq_frame = f.prev; ctx->drain_ret_pc = prev_ret_pc; } while (0)
+     for (;;) {
+         while (g_spu_trampoline_fn) {
+             if (g_spu_trampoline_fn == spu_indirect_branch &&
+-- 
+2.48.1.windows.1
+
