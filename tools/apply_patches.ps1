@@ -30,27 +30,17 @@ $patchPaths = $patchFiles | ForEach-Object { $_.FullName }
 
 Push-Location $Target
 try {
-    if (Test-Path (Join-Path $Target ".git\rebase-apply")) {
-        Write-Host "  -> Aborting previous interrupted git am session..."
-        & git am --abort
-    }
-    Write-Host "  -> Applying $($patchFiles.Count) patches via git am..."
-    & git am --ignore-space-change --ignore-whitespace $patchPaths
-    if ($LASTEXITCODE -ne 0) {
-        Write-Warning "git am failed, falling back to individual git apply..."
-        if (Test-Path (Join-Path $Target ".git\rebase-apply")) {
-            & git am --abort
-        }
-        foreach ($patch in $patchFiles) {
-            Write-Host "  -> Applying $($patch.Name)..."
-            & git apply --ignore-whitespace --whitespace=nowarn $patch.FullName
+    & git am --abort 2>$null
+    Write-Host "  -> Applying $($patchFiles.Count) patches via git apply..."
+    foreach ($patch in $patchFiles) {
+        Write-Host "  -> Applying $($patch.Name)..."
+        & git apply --ignore-whitespace --whitespace=nowarn $patch.FullName
+        if ($LASTEXITCODE -ne 0) {
+            Write-Warning "git apply failed for $($patch.Name), trying with 3-way merge..."
+            & git apply --3way --ignore-whitespace $patch.FullName
             if ($LASTEXITCODE -ne 0) {
-                Write-Warning "git apply failed for $($patch.Name), trying with 3-way merge..."
-                & git apply --3way --ignore-whitespace $patch.FullName
-                if ($LASTEXITCODE -ne 0) {
-                    Write-Error "Failed to apply $($patch.Name)"
-                    exit 1
-                }
+                Write-Error "Failed to apply $($patch.Name)"
+                exit 1
             }
         }
     }
