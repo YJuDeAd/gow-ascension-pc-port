@@ -23,9 +23,9 @@ if ($FiosCache) {
 }
 Write-Host "[smoke] GOW_FIOS_CACHE is set to: $env:GOW_FIOS_CACHE"
 if ($Cache -eq "cold") {
-    Write-Host "[smoke] Cache mode: COLD. Purging $fiosCacheDir/*..."
-    if (Test-Path $fiosCacheDir) {
-        Remove-Item -Path "$fiosCacheDir\*" -Force -Recurse -ErrorAction SilentlyContinue
+    Write-Host "[smoke] Cache mode: COLD. Purging vfs\cache..."
+    if (Test-Path "vfs\cache") {
+        Remove-Item -Path "vfs\cache\*" -Force -Recurse -ErrorAction SilentlyContinue
     }
     if ($env:GOW_FIOS_CACHE -eq "tiny") {
         New-Item -ItemType Directory -Path $fiosCacheDir -Force | Out-Null
@@ -77,6 +77,15 @@ $env:AUDIO_PEAK = "1"
 $env:LD_FRAME_DUMP = "build/frames"
 $env:LD_FRAME_DUMP_EVERY = "60"
 
+if (Test-Path "E:\PS3_GAME\USRDIR\GAME.PSARC") {
+    $env:PS3_VFS_ROOT = "E:"
+} elseif (Test-Path "D:\God of War - Ascension (Asia) (En,Zh,Ko).dec.iso") {
+    Mount-DiskImage -ImagePath "D:\God of War - Ascension (Asia) (En,Zh,Ko).dec.iso" -StorageType ISO | Out-Null
+    if (Test-Path "E:\PS3_GAME\USRDIR\GAME.PSARC") {
+        $env:PS3_VFS_ROOT = "E:"
+    }
+}
+
 if (Test-Path "mods\skip-intro") {
     $env:PS3_MODS = (Resolve-Path "mods\skip-intro").Path
 }
@@ -121,3 +130,7 @@ Start-Sleep -Seconds 2
 
 # 9. Post-run Analysis & CSV Recording via Helper
 python tools/smoke_helper.py post $timestamp $Cache $preInfo $stdoutLog $stderrLog $framesDir
+if ($LASTEXITCODE -ne 0) {
+    Write-Error "[smoke] FAILED: Effective environment defaults hash is empty or da39a3ee...!"
+    exit 2
+}
