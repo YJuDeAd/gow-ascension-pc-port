@@ -30,7 +30,7 @@ $patchPaths = $patchFiles | ForEach-Object { $_.FullName }
 
 Push-Location $Target
 try {
-    & git am --abort 2>$null
+    try { & git am --abort *>$null } catch {}
     Write-Host "  -> Applying $($patchFiles.Count) patches via git apply..."
     foreach ($patch in $patchFiles) {
         Write-Host "  -> Applying $($patch.Name)..."
