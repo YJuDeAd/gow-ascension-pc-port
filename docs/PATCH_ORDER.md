@@ -61,3 +61,10 @@ Patches are stored sequentially in `patches/series/NNNN-*.patch` and applied via
 | 0047 | `0047-lift_jobmods.py-fix-newline-syntax-error-before-pars.patch` | Ascension (Port) | Tools | Fix Python syntax error in `lift_jobmods.py` argument parsing logic. |
 | 0048 | `0048-diagnostics.patch` | Ascension (Port) | SPURS / PPU | SPURS 32-workload dispatch telemetry and thread HLE call chain diagnostics. |
 | 0049 | `0049-spu-stack-unwind.patch` | Ascension (Port) | SPU / Core | SPU recursion depth guard unwind to driver stack (`spu_restart_dispatch`) preventing halts. |
+| 0050 | `0050-fios-cache-modes.patch` | Ascension (Port) | FIOS / FS | Host FS caching modes and `FsLastOpInfo` tracking last file op/path per thread. |
+| 0051 | `0051-task5-mfc-diag.patch` | Ascension (Port) | SPU / MFC | SPU MFC diagnostics, DMA command history ring, and host Edge Zlib decompression hooks. |
+| 0052 | `0052-spu-cycle-state-preserve-spurs-accounting.patch` | Upstream (MIT) | SPU / SPURS | SPU instruction cycle accounting preservation across context switches; SPURS workload metrics. |
+| 0053 | `0053-fix-spurs-pm-poll-and-dma.patch` | Upstream (MIT) | SPURS / DMA | Fix SPURS policy module polling logic, interrupt status delivery, and DMA completion synchronization. |
+| 0054 | `0054-spurs-lane-preemption-idle-wake.patch` | Upstream (MIT) | SPURS | SPURS idle lane preemption signaling (`spurs_preempt_idle_lanes`) triggering interrupt 0x40 on lower-priority lanes. |
+| 0055 | `0055-spurs-lane-preemption-idle-wake-and-revert-fake-fios.patch` | Ascension (Port) | SPURS / FIOS | Clean SPU idle preemption wakeups without busy spin, and revert of synthetic FIOS timer completion writes. |
+
