@@ -2424,7 +2424,49 @@ static void cellVdecQueryAttrEx(ppu_context* ctx)
 /* ---------------------------------------------------------------------------
  * Registration of all Ascension single-player HLE handlers
  * ------------------------------------------------------------------------- */
-extern "C" void ascension_hle_register(void)
+extern "C" void func_0061B918(ppu_context* ctx);
+extern "C" void func_006016A8(ppu_context* ctx);
+extern "C" void func_0061B13C(ppu_context* ctx);
+extern "C" void func_006240BC(ppu_context* ctx);
+
+static void hook_func_0061B918(ppu_context* ctx)
+{
+    extern unsigned long long ps3_qpc_us(void);
+    fprintf(stderr, "[BRB-SESSION-ENTER] t=%lluus tid=%u func_0061B918 enter lr=0x%08llX\n",
+            ps3_qpc_us(), ctx->thread_id, (unsigned long long)ctx->lr);
+    func_0061B918(ctx);
+    fprintf(stderr, "[BRB-SESSION-EXIT] t=%lluus tid=%u func_0061B918 exit r3=%lld\n",
+            ps3_qpc_us(), ctx->thread_id, (long long)(int32_t)ctx->gpr[3]);
+}
+
+static void hook_func_006016A8(ppu_context* ctx)
+{
+    extern unsigned long long ps3_qpc_us(void);
+    uint32_t req = (uint32_t)ctx->gpr[3];
+    fprintf(stderr, "[FIOS-REQ-EXEC] t=%lluus tid=%u func_006016A8 req=0x%08X lr=0x%08llX\n",
+            ps3_qpc_us(), ctx->thread_id, req, (unsigned long long)ctx->lr);
+    func_006016A8(ctx);
+}
+
+static void hook_func_0061B13C(ppu_context* ctx)
+{
+    extern unsigned long long ps3_qpc_us(void);
+    fprintf(stderr, "[BRB-STAGE-ADV] t=%lluus tid=%u func_0061B13C r3=0x%08llX r4=0x%08llX r5=0x%08llX lr=0x%08llX\n",
+            ps3_qpc_us(), ctx->thread_id, (unsigned long long)ctx->gpr[3], (unsigned long long)ctx->gpr[4], (unsigned long long)ctx->gpr[5], (unsigned long long)ctx->lr);
+    func_0061B13C(ctx);
+}
+
+static void hook_func_006240BC(ppu_context* ctx)
+{
+    extern unsigned long long ps3_qpc_us(void);
+    uint32_t r9 = (uint32_t)ctx->gpr[3];
+    uint32_t r4 = (uint32_t)ctx->gpr[4];
+    fprintf(stderr, "[BRB-WRITE-COMP] t=%lluus tid=%u func_006240BC r9=0x%08X val=%u lr=0x%08llX\n",
+            ps3_qpc_us(), ctx->thread_id, r9, r4, (unsigned long long)ctx->lr);
+    func_006240BC(ctx);
+}
+
+void ascension_hle_register(void)
 {
     /* sysPrxForUser */
     ps3_hle_register_ctx(0xA3E3BE68u, "sys_ppu_thread_once",          sys_ppu_thread_once);
@@ -2566,6 +2608,10 @@ extern "C" void ascension_hle_register(void)
         ppu_register_function(0x00464F0Cu, hook_func_00464F0C);
         ppu_register_function(0x003A5A94u, hook_func_003A5A94);
         ppu_register_function(0x003A5D00u, hook_func_003A5D00);
+        ppu_register_function(0x0061B918u, hook_func_0061B918);
+        ppu_register_function(0x006016A8u, hook_func_006016A8);
+        ppu_register_function(0x0061B13Cu, hook_func_0061B13C);
+        ppu_register_function(0x006240BCu, hook_func_006240BC);
     }
     ps3_hle_register_ctx(0xF843818Du, "cellSpursReadyCountStore", hle_cellSpursReadyCountStore);
 }
@@ -2583,8 +2629,8 @@ extern "C" int64_t hook_sys_timer_usleep(ppu_context* ctx)
     const uint32_t tid = (uint32_t)ctx->thread_id;
     const uint32_t lr = (uint32_t)ctx->lr;
 
-    // brbDriver is tid=13 or callers with lr == 0x006245B8
-    if (tid == 13 || lr == 0x006245B8u) {
+    // brbDriver is tid=9, tid=11, or tid=13 or callers with lr == 0x006245B8
+    if (tid == 9 || tid == 11 || tid == 13 || lr == 0x006245B8u) {
         static uint32_t s_brb_ticks = 0;
         s_brb_ticks++;
 
@@ -2635,7 +2681,7 @@ extern "C" int64_t hook_sys_timer_usleep(ppu_context* ctx)
         }
     }
 
-    if (tid == 1 && lr == 0x0061B9FCu) {
+    if (tid == 1 && (lr == 0x0061B9FCu || lr == 0x0061BA90u || (lr >= 0x0061B900u && lr <= 0x0061BB00u))) {
         static uint32_t s_main_ticks = 0;
         uint32_t r28_val = (uint32_t)ctx->gpr[28];
         uint32_t r7 = (r28_val >= 0x10000u) ? vm_read32(r28_val) : 0;
@@ -2645,9 +2691,9 @@ extern "C" int64_t hook_sys_timer_usleep(ppu_context* ctx)
             uint32_t r10 = vm_read32(r7 + 0x14u);
             if (r9 >= 0x10000u && r10 >= 0x10000u) {
                 uint32_t sub = vm_read32(r9 + 0x10u);
-                vm_write32(r10 + 0x24u, sub);
+                uint32_t comp = vm_read32(r10 + 0x24u);
                 if (++s_main_ticks % 100 == 1) {
-                    fprintf(stderr, "[MAIN-BRB] Instantly satisfied brb_StartSession (sub=%u -> comp=%u)\n", sub, sub);
+                    fprintf(stderr, "[MAIN-BRB] brb_StartSession wait (sub=%u comp=%u)\n", sub, comp);
                 }
             }
         }
@@ -2923,9 +2969,24 @@ static void gow_wws_job_pm_interrupt_handler(spu_context* ctx)
 {
     static int s_logged = 0;
     if (s_logged++ < 16) {
-        fprintf(stderr, "[wws-irq] SPU img=2 interrupt 0x00A2C taken -> delegating to 0x0040 (stallstat=0x%X srr0=0x%05X loadJobState=%02X%02X%02X%02X)\n",
+        fprintf(stderr, "[wws-irq] SPU img=2 interrupt 0x00A2C taken (stallstat=0x%X srr0=0x%05X loadJobState=%02X%02X%02X%02X storeJobNum=%02X)\n",
                 ctx->list_stall_stat, ctx->srr0,
-                ctx->ls[0x12A0], ctx->ls[0x12A1], ctx->ls[0x12A2], ctx->ls[0x12A3]);
+                ctx->ls[0x12A0], ctx->ls[0x12A1], ctx->ls[0x12A2], ctx->ls[0x12A3], ctx->ls[0x12F0]);
+    }
+
+    // Check if this workload is idle (no active jobs in flight: loadJobState == 0 and storeJobNum < 0)
+    // If idle, yield cleanly to kernel (0x9C0) so other workloads (wids 8-14) can get an SPU lane!
+    uint16_t loadJobState = ((uint16_t)ctx->ls[0x12A0] << 8) | ctx->ls[0x12A1];
+    int8_t storeJobNum = (int8_t)ctx->ls[0x12F0];
+    if (loadJobState == 0 && storeJobNum < 0) {
+        static int s_preempt_count = 0;
+        if (++s_preempt_count <= 50) {
+            fprintf(stderr, "[wws-irq] PREEMPT YIELD: SPU img=2 lane idle -> exitToKernel (0x9C0) srr0=0x%05X\n", ctx->srr0);
+        }
+        ctx->pc = 0x9C0u; // SPURS_PM_EXIT_TO_KERNEL_LS
+        extern void spu_indirect_branch(spu_context*);
+        g_spu_trampoline_fn = spu_indirect_branch;
+        return;
     }
 
     // 0x2C..0x3C in wws_job_pm: save r78 to 0x1590, zero r78
@@ -2941,8 +3002,9 @@ void gow_register_spu_overrides(void)
 {
     spu_begin_image(2);
     spu_register_function(0x00A2Cu, gow_wws_job_pm_interrupt_handler);
+    spu_register_function(0x00040u, gow_wws_job_pm_interrupt_handler);
     spu_begin_image(0);
-    fprintf(stderr, "[ascension] Registered SPU img=2 vector 0x00A2C -> gow_wws_job_pm_interrupt_handler\n");
+    fprintf(stderr, "[ascension] Registered SPU img=2 vector 0x00A2C and 0x00040 -> gow_wws_job_pm_interrupt_handler\n");
 }
 
 __attribute__((constructor)) static void gow_spu_overrides_ctor(void)
