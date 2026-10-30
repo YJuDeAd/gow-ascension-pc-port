@@ -53,9 +53,24 @@ file(GLOB_RECURSE SPU_SOURCES "src/gen/spu/*.c" "src/spu_gen/*.c")
 
 # LAW 4: Compile generated code in Release /O2 / -O2 without full debug PDBs to protect disk space on C:
 if(MSVC)
-    set_source_files_properties(${GEN_SOURCES} ${SPU_SOURCES} ${HLE_NID_TABLE} PROPERTIES COMPILE_FLAGS "/O2")
+    set_source_files_properties(${GEN_SOURCES} ${HLE_NID_TABLE} PROPERTIES COMPILE_FLAGS "/O2")
 else()
-    set_source_files_properties(${GEN_SOURCES} ${SPU_SOURCES} ${HLE_NID_TABLE} PROPERTIES COMPILE_FLAGS "-O2 -g0")
+    set_source_files_properties(${GEN_SOURCES} ${HLE_NID_TABLE} PROPERTIES COMPILE_FLAGS "-O2 -g0")
+endif()
+
+option(ASCENSION_SPU_AVX2 "Lifted SPU code built for AVX2" OFF)
+if(ASCENSION_SPU_AVX2)
+    if(MSVC)
+        set_source_files_properties(${SPU_SOURCES} PROPERTIES COMPILE_FLAGS "/O2 /arch:AVX2")
+    else()
+        set_source_files_properties(${SPU_SOURCES} PROPERTIES COMPILE_FLAGS "-O2 -g0 -mavx2 -mfma -mbmi2")
+    endif()
+else()
+    if(MSVC)
+        set_source_files_properties(${SPU_SOURCES} PROPERTIES COMPILE_FLAGS "/O2")
+    else()
+        set_source_files_properties(${SPU_SOURCES} PROPERTIES COMPILE_FLAGS "-O2 -g0")
+    endif()
 endif()
 
 add_executable(gow_ascension

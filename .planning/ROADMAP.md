@@ -342,3 +342,15 @@
 **Milestone 2 (Phases 6–8): 100% Complete (Wws_Job Engine, RSX Ring Buffers & Playable Menus)**  
 **Milestone 3 (Phases 9–11): 100% Complete (In-Game Playability, Audio Output & PC Enhancements)**  
 
+
+
+---
+
+## Milestone 4: SPURS Scheduling, SPU Preemption & Soft-Lock Remediation
+
+### Phase 12: SPURS Priority Preemption, Workload Shutdown State & SPU Idle Yield
+- [x] Fix SPU slot saturation by implementing priority-aware preemption in ps3recomp \spurs_poll_select\.
+- [x] Implement SPU image 2 vector 0x00A2C / 0x00040 interrupt handler and 0x02358 idle spin yield in \src/compat/upstream_compat.cpp\.
+- [x] Add in-place SPU function override support to \ps3recomp/runtime/spu/spu_channels.c\.
+- [x] Update \SPURS_MAXCONT\ in \src/compat/ascension_defaults.cpp\ with 	=5,18=5\ to enable full SPU concurrency for RenJobSet and RsxSync.
+- [x] Verified main thread progresses past 0x00467B1C and advances through frame loop past presents=1970+.

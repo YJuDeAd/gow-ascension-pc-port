@@ -301,6 +301,12 @@ int main(int argc, char** argv)
 
 #ifdef _WIN32
     timeBeginPeriod(1);
+    {
+        const char* p = getenv("PS3_PIN_PPU");
+        if (p && *p == '1') {
+            SetThreadAffinityMask(GetCurrentThread(), (DWORD_PTR)1 << 0);
+        }
+    }
     SetUnhandledExceptionFilter(gow_crash_filter);
     signal(SIGABRT, gow_abort_handler);
     setvbuf(stdout, NULL, _IONBF, 0);

@@ -209,7 +209,7 @@ extern "C" void ascension_apply_defaults(void)
     set_default("GCM_ROUND_GATE", "9BAC30");
     set_default("GCM_ROUND_RING", "io:1ED00,18");
     set_default("SPURS_READY_LEVEL", "1");
-    set_default("SPURS_MAXCONT", "3=5,13=3,15=5,16=5,17=5");
+    set_default("SPURS_MAXCONT", "3=5,11=5,13=3,15=5,16=5,17=5,18=5");
     set_default("SPURS_IDLE_BACKOFF_MAX", "0");
     set_default("SPU_REJOIN", "204:9700-1C000");
     set_default("SPU_REJOIN_CALL", "1");
@@ -225,6 +225,16 @@ extern "C" void ascension_apply_defaults(void)
     set_default("SPU_INTERP_UNLIFTED", "1");
     set_default("SPU_DMA_LAX", "1");
     set_default("WATCHDOG_AT", "999999,9999999");
+    set_default("SPURS_PIN", "1");
+    set_default("PS3_PIN_PPU", "1");
+#ifdef _WIN32
+    {
+        const char* p = getenv("PS3_PIN_PPU");
+        if (p && *p == '1') {
+            SetThreadAffinityMask(GetCurrentThread(), (DWORD_PTR)1 << 0);
+        }
+    }
+#endif
 
     // A run killed while FIOS rewrites its HDD cache leaves cache.idx zero-filled,
     // and every later boot loops re-reading it on a black screen.

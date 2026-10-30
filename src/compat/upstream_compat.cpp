@@ -7,6 +7,7 @@
 
 #include "ps3_diagnostics.h"
 #include "sys_ppu_thread.h"
+#include "spu_context.h"
 #include <stdint.h>
 #include <stddef.h>
 #include <string.h>
@@ -901,8 +902,104 @@ extern "C" {
     GOW_WEAK void cellFiberPpuWakeup(void) {}
 
     extern void gow_psn_stubs_register(void);
+
+    void spu_begin_image(int image_id);
+    void spu_register_function(uint32_t addr, void (*fn)(spu_context*));
+    void spu_wws_job_pm_spu_func_00000040(spu_context* ctx);
+    void spu_wws_job_pm_spu_func_00002358(spu_context* ctx);
+    void spu_indirect_branch(spu_context* ctx);
+
+    static void gow_wws_job_pm_interrupt_handler(spu_context* ctx)
+    {
+        static int s_logged = 0;
+        if (s_logged++ < 16) {
+            fprintf(stderr, "[wws-irq] SPU img=2 interrupt 0x00A2C taken (stallstat=0x%X srr0=0x%05X loadJobState=%02X%02X%02X%02X storeJobNum=%02X)\n",
+                    ctx->list_stall_stat, ctx->srr0,
+                    ctx->ls[0x12A0], ctx->ls[0x12A1], ctx->ls[0x12A2], ctx->ls[0x12A3], ctx->ls[0x12F0]);
+        }
+
+        uint16_t loadJobState = ((uint16_t)ctx->ls[0x12A0] << 8) | ctx->ls[0x12A1];
+        int8_t storeJobNum = (int8_t)ctx->ls[0x12F0];
+        if (loadJobState == 0 && storeJobNum < 0) {
+            static int s_preempt_count = 0;
+            if (++s_preempt_count <= 50) {
+                fprintf(stderr, "[wws-irq] PREEMPT YIELD: SPU img=2 lane idle -> exitToKernel (0x9C0) srr0=0x%05X\n", ctx->srr0);
+            }
+            ctx->pc = 0x9C0u;
+            g_spu_trampoline_fn = spu_indirect_branch;
+            return;
+        }
+
+        memcpy(ctx->ls + 0x1590, &ctx->gpr[78], 16);
+        memset(&ctx->gpr[78], 0, sizeof(ctx->gpr[78]));
+        spu_wws_job_pm_spu_func_00000040(ctx);
+    }
+
+    static void gow_wws_job_pm_idle_spin_handler(spu_context* ctx)
+    {
+        uint16_t loadJobState = ((uint16_t)ctx->ls[0x12A0] << 8) | ctx->ls[0x12A1];
+        int8_t storeJobNum = (int8_t)ctx->ls[0x12F0];
+
+        if (loadJobState == 0 && storeJobNum < 0) {
+            const uint8_t* q = ctx->ls + 0x1C4;
+            const uint8_t* k = ctx->ls + 0x1DC;
+            uint32_t spurs_ea = ((uint32_t)q[0] << 24) | ((uint32_t)q[1] << 16) | ((uint32_t)q[2] << 8) | q[3];
+            uint32_t cur_wid = ((uint32_t)k[0] << 24) | ((uint32_t)k[1] << 16) | ((uint32_t)k[2] << 8) | k[3];
+
+            if (spurs_ea && vm_base) {
+                uint32_t enabled = ((uint32_t)vm_base[spurs_ea + 0xB0] << 24) |
+                                   ((uint32_t)vm_base[spurs_ea + 0xB1] << 16) |
+                                   ((uint32_t)vm_base[spurs_ea + 0xB2] << 8) |
+                                   vm_base[spurs_ea + 0xB3];
+
+                bool other_waiting = false;
+                for (uint32_t w = 0; w < 32; w++) {
+                    if (w == cur_wid) continue;
+                    if (!(enabled & (0x80000000u >> w))) continue;
+                    uint8_t state = vm_base[spurs_ea + (w < 16 ? 0x80 + w : 0xD0 + (w - 16))];
+                    if (state != 2) continue;
+                    uint8_t ready = vm_base[spurs_ea + (w < 16 ? w : 0x10 + (w - 16))];
+                    if (ready > 0) {
+                        other_waiting = true;
+                        break;
+                    }
+                }
+
+                uint8_t cur_ready = vm_base[spurs_ea + (cur_wid < 16 ? cur_wid : 0x10 + (cur_wid - 16))];
+
+                if (other_waiting || cur_ready == 0) {
+                    static int s_spin_yield = 0;
+                    if (++s_spin_yield <= 50 || (s_spin_yield % 500 == 0)) {
+                        fprintf(stderr, "[wws-idle] IDLE YIELD: SPU img=2 wid=%u lane idle (other_waiting=%d cur_ready=%u) -> exitToKernel (0x9C0)\n",
+                                cur_wid, other_waiting ? 1 : 0, cur_ready);
+                    }
+                    ctx->pc = 0x9C0u;
+                    g_spu_trampoline_fn = spu_indirect_branch;
+                    return;
+                }
+            }
+        }
+
+        spu_wws_job_pm_spu_func_00002358(ctx);
+    }
+
+    void gow_register_spu_overrides(void)
+    {
+        static bool s_registered = false;
+        if (s_registered) return;
+        s_registered = true;
+
+        spu_begin_image(2);
+        spu_register_function(0x00A2Cu, gow_wws_job_pm_interrupt_handler);
+        spu_register_function(0x00040u, gow_wws_job_pm_interrupt_handler);
+        spu_register_function(0x02358u, gow_wws_job_pm_idle_spin_handler);
+        spu_begin_image(0);
+        fprintf(stderr, "[ascension] Registered SPU img=2 overrides: 0x00A2C, 0x00040, 0x02358\n");
+    }
+
     void ps3_load_prx_modules(void) {
         gow_psn_stubs_register();
+        gow_register_spu_overrides();
     }
 
 }
