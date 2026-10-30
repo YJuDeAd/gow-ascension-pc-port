@@ -224,6 +224,48 @@ extern "C" void ascension_apply_defaults(void)
     set_default("GOW_FIOS_CACHE", "off");
     set_default("SPU_INTERP_UNLIFTED", "1");
     set_default("SPU_DMA_LAX", "1");
+    set_default("WATCHDOG_AT", "999999,9999999");
+
+    // A run killed while FIOS rewrites its HDD cache leaves cache.idx zero-filled,
+    // and every later boot loops re-reading it on a black screen.
+    // Only delete if the file exists, size > 0, and ALL bytes are zero.
+    auto check_and_clean_fios_cache = [](const std::string& path) {
+        FILE* f = fopen(path.c_str(), "rb");
+        if (!f) return;
+        fseek(f, 0, SEEK_END);
+        long long sz = _ftelli64(f);
+        if (sz <= 0) {
+            fclose(f);
+            return;
+        }
+        fseek(f, 0, SEEK_SET);
+        char buf[4096];
+        bool all_zero = true;
+        size_t n = 0;
+        while ((n = fread(buf, 1, sizeof(buf), f)) > 0) {
+            for (size_t i = 0; i < n; i++) {
+                if (buf[i] != 0) {
+                    all_zero = false;
+                    break;
+                }
+            }
+            if (!all_zero) break;
+        }
+        fclose(f);
+        if (all_zero) {
+            fprintf(stderr, "[FIOS] Deleted zero-filled cache.idx: path=%s, size=%lld bytes\n",
+                    path.c_str(), sz);
+#ifdef _WIN32
+            DeleteFileA(path.c_str());
+#else
+            unlink(path.c_str());
+#endif
+        }
+    };
+    check_and_clean_fios_cache("vfs/cache/BCAS25016/fios/cache.idx");
+    check_and_clean_fios_cache("vfs/cache/BCES01741/fios/cache.idx");
+    check_and_clean_fios_cache("vfs/cache/NPUA80918/fios/cache.idx");
+    check_and_clean_fios_cache("vfs/cache/UCES01741/fios/cache.idx");
 
     // VFS root check
     const char* env_vfs = getenv("PS3_VFS_ROOT");
