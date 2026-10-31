@@ -48,6 +48,11 @@ GOW_WEAK volatile uint32_t g_spurs_pm_entry_count[32] = {0};
 mfc_hist_t g_spu_mfc_hist[8][5] = {{{0}}};
 uint32_t g_spu_mfc_hist_idx[8] = {0};
 volatile uint32_t g_spurs_lane_active_wid[8] = {255, 255, 255, 255, 255, 255, 255, 255};
+GOW_WEAK spu_context* volatile g_spurs_lane_ctx[8] = {0};
+GOW_WEAK HANDLE g_spurs_lane_thread[8] = {0};
+GOW_WEAK LaneAtomicStats g_lane_atomic[8] = {{0}};
+GOW_WEAK SpursPollEntry g_spurs_poll_hist[5] = {{0}};
+GOW_WEAK volatile uint32_t g_spurs_poll_hist_idx = 0;
 extern unsigned long long ps3_qpc_us(void);
 extern ppu_context* volatile g_ppu_main_ctx;
 extern ppu_thread_info g_ppu_threads[PPU_THREAD_MAX];
@@ -295,11 +300,42 @@ struct RegInfo {
 static RegInfo s_current_reg{999, 0, 0};
 static std::mutex s_reg_mutex;
 
+
+#include <timeapi.h>
+#include <vector>
+#include <algorithm>
+
+static std::atomic<bool> s_task1_stop{false};
+static std::map<uint32_t, uint32_t> s_pc_hist_1s[6];
+static std::mutex s_pc_hist_mtx;
+
+static void start_pc_sampler(void) {
+    static bool s_started = false;
+    if (s_started) return;
+    s_started = true;
+    timeBeginPeriod(1);
+    std::thread([]() {
+        while (!s_task1_stop.load(std::memory_order_relaxed)) {
+            Sleep(1);
+            std::lock_guard<std::mutex> lk(s_pc_hist_mtx);
+            for (int l = 0; l < 6; l++) {
+                spu_context* c = g_spurs_lane_ctx[l];
+                if (c) {
+                    uint32_t pc = (uint32_t)c->pc & SPU_LS_MASK;
+                    s_pc_hist_1s[l][pc]++;
+                }
+            }
+        }
+        timeEndPeriod(1);
+    }).detach();
+}
+
 static void task4_monitor_thread_func();
 
 extern "C" void gow_register_main_thread(void)
 {
     init_lock_hooks();
+        start_pc_sampler();
     if (s_main_host_tid.load() == 0) {
         s_main_host_tid.store(GetCurrentThreadId());
         DuplicateHandle(GetCurrentProcess(), GetCurrentThread(),
@@ -576,6 +612,67 @@ static void task4_monitor_thread_func()
                     }
                     fprintf(stderr, "\n");
                 }
+
+                // TASK 1 & TASK 3 DETAILED AUDIT
+                fprintf(stderr, "\n=== [TASK1-LANE-ACTIVITY #%d @ %ds] ===\n", s_dump_7b1c_sec, sec);
+                std::map<uint32_t, uint32_t> pc_copy[6];
+                {
+                    std::lock_guard<std::mutex> lk(s_pc_hist_mtx);
+                    for (int l = 0; l < 6; l++) {
+                        pc_copy[l] = s_pc_hist_1s[l];
+                        s_pc_hist_1s[l].clear();
+                    }
+                }
+                for (int l = 0; l < 6; l++) {
+                    spu_context* c = g_spurs_lane_ctx[l];
+                    uint32_t wid = g_spurs_lane_active_wid[l];
+                    FILETIME wc, we, wk, wu;
+                    uint64_t user_ms = 0, kern_ms = 0;
+                    if (g_spurs_lane_thread[l] && GetThreadTimes(g_spurs_lane_thread[l], &wc, &we, &wk, &wu)) {
+                        user_ms = (((uint64_t)wu.dwHighDateTime << 32) | wu.dwLowDateTime) / 10000;
+                        kern_ms = (((uint64_t)wk.dwHighDateTime << 32) | wk.dwLowDateTime) / 10000;
+                    }
+                    fprintf(stderr, "Lane %d: wid=%u (%s), HostCPU=%llu ms (user %llu ms, kern %llu ms)\n",
+                            l, wid, (wid == 255) ? "IDLE/KERNEL" : "RUNNING", user_ms + kern_ms, user_ms, kern_ms);
+                    std::vector<std::pair<uint32_t, uint32_t>> sorted_pcs(pc_copy[l].begin(), pc_copy[l].end());
+                    std::sort(sorted_pcs.begin(), sorted_pcs.end(), [](const auto& a, const auto& b) { return a.second > b.second; });
+                    fprintf(stderr, "  PC Hist (1 kHz, top %zu):", std::min<size_t>(8, sorted_pcs.size()));
+                    for (size_t i = 0; i < 8 && i < sorted_pcs.size(); i++) {
+                        fprintf(stderr, " 0x%05X:%u", sorted_pcs[i].first, sorted_pcs[i].second);
+                    }
+                    fprintf(stderr, "\n");
+                    uint32_t ev_stat = c ? c->event_status : 0;
+                    uint32_t ev_mask = c ? c->event_mask : 0;
+                    uint32_t cur_pc  = c ? ((uint32_t)c->pc & SPU_LS_MASK) : 0;
+                    fprintf(stderr, "  Atomics: GETLLAR=%llu, PUTLLC_OK=%llu, PUTLLC_FAIL=%llu, PUTLLUC=%llu, LR_Events=%llu\n",
+                            (unsigned long long)g_lane_atomic[l].getllar,
+                            (unsigned long long)g_lane_atomic[l].putllc_ok,
+                            (unsigned long long)g_lane_atomic[l].putllc_fail,
+                            (unsigned long long)g_lane_atomic[l].putlluc,
+                            (unsigned long long)g_lane_atomic[l].lr_events);
+                    fprintf(stderr, "  Events: status=0x%X mask=0x%X cur_pc=0x%05X\n", ev_stat, ev_mask, cur_pc);
+                    const char* wait_desc = "computing / polling";
+                    if (cur_pc == 0x23A0 || cur_pc == 0x2DA8) wait_desc = "waiting for interrupt / timer";
+                    else if (c && c->resv_valid) wait_desc = "holding reservation";
+                    fprintf(stderr, "  Wait State: %s\n", wait_desc);
+                }
+                fprintf(stderr, "=======================================\n");
+
+                fprintf(stderr, "=== [TASK3-POLL-SELECT LAST 5 CALLS] ===\n");
+                uint32_t pidx = g_spurs_poll_hist_idx;
+                for (uint32_t i = 0; i < 5 && i < pidx; i++) {
+                    uint32_t slot = (pidx >= 5) ? (pidx - 5 + i) % 5 : i;
+                    const auto& p = g_spurs_poll_hist[slot];
+                    fprintf(stderr, "  [%llums] spu=%u cur=%u (rdy=%u sig=%d act=%u cont=%u pri=%u) -> RETURN %u (0x%02X)\n",
+                            (unsigned long long)p.t_ms, p.spu, p.cur, p.cur_ready, p.cur_sig, p.cur_active, p.cur_maxcont, p.cur_pri, p.sel, p.sel);
+                    fprintf(stderr, "    Evaluated wids:\n");
+                    for (int k = 0; k < 6; k++) {
+                        fprintf(stderr, "      wid=%-2u: ready=%u sig=%d active=%u maxcont=%u pri=%u\n",
+                                p.w[k].wid, p.w[k].ready, p.w[k].sig, p.w[k].active, p.w[k].maxcont, p.w[k].pri);
+                    }
+                }
+                fprintf(stderr, "========================================\n\n");
+
             }
         }
 
