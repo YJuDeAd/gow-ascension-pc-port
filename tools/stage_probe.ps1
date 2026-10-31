@@ -3,12 +3,16 @@ param(
     [int]$Seconds = 60,
     [ValidateSet("cold", "warm", "keep")][string]$Cache = "cold",
     [int]$SingleRun = 0,
-    [switch]$Watchdog
+    [switch]$Watchdog,
+    [switch]$NoMods,
+    [switch]$RevertDde3f83,
+    [string]$OutputDir = "build\logs",
+    [string]$Exe = "build\gow_ascension.exe"
 )
 
 $ErrorActionPreference = "Continue"
 
-$exe = "build\gow_ascension.exe"
+$exe = $Exe
 $elf = "vfs\PS3_GAME\USRDIR\EBOOT.ELF"
 
 if (!(Test-Path $exe)) {
@@ -16,7 +20,7 @@ if (!(Test-Path $exe)) {
     exit 1
 }
 
-$logDir = "build\logs"
+$logDir = $OutputDir
 New-Item -ItemType Directory -Path $logDir -Force | Out-Null
 
 $results = @()
@@ -45,13 +49,20 @@ for ($i = 1; $i -le $runCount; $i++) {
     $env:AUDIO_RATE = "1"
     $env:AUDIO_PEAK = "1"
     $env:PS3_VFS_ROOT = "E:"
-    if (Test-Path "mods\skip-intro") {
+    if (!$NoMods -and $env:GOW_NO_MODS -ne "1" -and (Test-Path "mods\skip-intro")) {
         $env:PS3_MODS = (Resolve-Path "mods\skip-intro").Path
+    } else {
+        $env:PS3_MODS = ""
     }
     if ($Watchdog -or $env:GOW_WATCHDOG -eq "1") {
         $env:GOW_WATCHDOG = "1"
     } else {
         $env:GOW_WATCHDOG = "0"
+    }
+    if ($RevertDde3f83 -or $env:GOW_REVERT_DDE3F83 -eq "1") {
+        $env:GOW_REVERT_DDE3F83 = "1"
+    } else {
+        $env:GOW_REVERT_DDE3F83 = "0"
     }
 
     $stdoutLog = "$logDir\stage_run_${runId}_stdout.log"
@@ -67,6 +78,7 @@ for ($i = 1; $i -le $runCount; $i++) {
     # Terminate process cleanly
     if (!$proc.HasExited) {
         Stop-Process -Id $proc.Id -Force -ErrorAction SilentlyContinue
+        try { $proc.WaitForExit(3000) } catch {}
         Start-Sleep -Milliseconds 500
     }
 
@@ -84,8 +96,19 @@ for ($i = 1; $i -le $runCount; $i++) {
 
         $reached0061B9FC = $false
         $left0061B9FC = $false
+        $reached00467B1C = $false
+        $time00467B1C = "never"
+
+        if ($lines | Select-String "0x00467B1C-WAIT") {
+            $reached00467B1C = $true
+        }
 
         foreach ($sl in $lines) {
+            if ($sl -match '\[0x00467B1C-WAIT\s+#\d+\s+@\s+(\d+)s\]') {
+                if ($time00467B1C -eq "never") {
+                    $time00467B1C = "$($matches[1])s"
+                }
+            }
             if ($sl -match '\[STAGE\]\s+t=(\d+)\s+main_lr=(0x[0-9a-fA-F]+)\s+main_last_hle=(\S+)\s+live_draws=(\d+)\s+presents=(\d+)') {
                 $t = [int]$matches[1]
                 $lr = $matches[2].ToLower()
@@ -106,6 +129,13 @@ for ($i = 1; $i -le $runCount; $i++) {
                     $left0061B9FC = $true
                     $leftTime = "${t}s"
                 }
+
+                if ($lr -eq "0x00467b1c") {
+                    $reached00467B1C = $true
+                    if ($time00467B1C -eq "never") {
+                        $time00467B1C = "${t}s"
+                    }
+                }
             }
         }
 
@@ -117,6 +147,8 @@ for ($i = 1; $i -le $runCount; $i++) {
 
         if ($lastLr -eq "0x0061b9fc") {
             $stage = "A"
+        } elseif ($lastLr -eq "0x00467b1c") {
+            $stage = "B (0x467B1C)"
         } elseif (($lrNum -ge 0x003C98CC -and $lrNum -le 0x003CBFFF) -or ($lrNum -ge 0x0041F4B0 -and $lrNum -le 0x0041F500) -or ($lrNum -eq 0x002AE194)) {
             $stage = "B"
         } elseif ($lastLr -eq "0x0046700c" -or $lastLr -eq "0x00467030" -or ($lrNum -ge 0x00466FE8 -and $lrNum -le 0x00467040)) {
@@ -131,27 +163,65 @@ for ($i = 1; $i -le $runCount; $i++) {
     $seqStr = ($distinctLrs | ForEach-Object { "t=$($_.t)s: $($_.lr)" }) -join ", "
     if (!$seqStr) { $seqStr = "(none)" }
 
+    $laneAlloc30s = "not captured"
+    $pmEntriesStr = "not captured"
+    if (Test-Path $stderrLog) {
+        $auditLines = @()
+        $captureAudit = $false
+        foreach ($sl in $lines) {
+            if ($sl -match '\[SPU-LANE-AUDIT @ (20|30|40)s\]') {
+                $captureAudit = $true
+                $auditLines = @()
+            } elseif ($captureAudit -and $sl -match '^\s+Lane (\d+): wid=(\d+)') {
+                $auditLines += "L$($matches[1])=w$($matches[2])"
+            } elseif ($captureAudit -and $sl -match '^===') {
+                $captureAudit = $false
+            }
+        }
+        if ($auditLines.Count -gt 0) {
+            $laneAlloc30s = $auditLines -join " "
+        }
+
+        $pmList = @()
+        foreach ($sl in $lines) {
+            if ($sl -match "Workload '([^']+)' \(wid=(\d+)[^)]*\): readyCount=(\d+), pm_entries=(\d+)") {
+                $wid = $matches[2]
+                $pme = $matches[4]
+                if ([int]$pme -gt 0 -or [int]$wid -ge 8) {
+                    $pmList += "w$wid=$pme"
+                }
+            }
+        }
+        if ($pmList.Count -gt 0) {
+            # Take the last status dump
+            $pmEntriesStr = ($pmList[-13..-1] | Select-Object -Unique) -join " "
+        }
+    }
+
     $res = [PSCustomObject]@{
         Run = $runId
-        LogFile = "build\logs\stage_run_${runId}_stderr.log"
+        LogFile = "$logDir\stage_run_${runId}_stderr.log"
         Stage = $stage
         FinalLr = $lastLr
+        Reached0x467B1C = if ($reached00467B1C) { "YES ($time00467B1C)" } else { "NO" }
+        LaneAlloc30s = $laneAlloc30s
+        PmEntries = $pmEntriesStr
         LrSequence = $seqStr
         TimeLeft0061B9FC = $leftTime
         MaxLiveDraws = $maxDraws
-        LogoCapture = "not measured"
         SpuIntTaken = $spuIntCount
     }
     $results += $res
-    Write-Host "[STAGE_PROBE] Run ${runId}: Stage=$stage, FinalLr=$lastLr, MaxDraws=$maxDraws, Left0x61B9FC=$leftTime"
+    Write-Host "[STAGE_PROBE] Run ${runId}: Stage=$stage, FinalLr=$lastLr, Reached0x467B1C=$($res.Reached0x467B1C), MaxDraws=$maxDraws, Left0x61B9FC=$leftTime"
+    Write-Host "             Lanes: $laneAlloc30s | PM: $pmEntriesStr"
     Write-Host "             Sequence: $seqStr"
 }
 
 Write-Host "`n====================== STAGE PROBE SUMMARY ======================"
-$results | Format-Table Run, LogFile, Stage, FinalLr, MaxLiveDraws, LogoCapture, TimeLeft0061B9FC -AutoSize
+$results | Format-Table Run, LogFile, Stage, FinalLr, Reached0x467B1C, LaneAlloc30s, MaxLiveDraws, TimeLeft0061B9FC -AutoSize
 
 $countA = @($results | Where-Object { $_.Stage -eq "A" }).Count
-$countB = @($results | Where-Object { $_.Stage -eq "B" }).Count
+$countB = @($results | Where-Object { $_.Stage -like "B*" }).Count
 $countD = @($results | Where-Object { $_.Stage -eq "D" }).Count
 $countE = @($results | Where-Object { $_.Stage -eq "E" }).Count
 $countF = @($results | Where-Object { $_.Stage -eq "F" }).Count

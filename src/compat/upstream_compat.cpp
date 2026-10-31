@@ -45,6 +45,9 @@ typedef struct GcmFifoBreakdown {
 extern "C" {
 extern uint8_t* vm_base;
 GOW_WEAK volatile uint32_t g_spurs_pm_entry_count[32] = {0};
+mfc_hist_t g_spu_mfc_hist[8][5] = {{{0}}};
+uint32_t g_spu_mfc_hist_idx[8] = {0};
+volatile uint32_t g_spurs_lane_active_wid[8] = {255, 255, 255, 255, 255, 255, 255, 255};
 extern unsigned long long ps3_qpc_us(void);
 extern ppu_context* volatile g_ppu_main_ctx;
 extern ppu_thread_info g_ppu_threads[PPU_THREAD_MAX];
@@ -278,7 +281,7 @@ static void init_lock_hooks() {
 
     hook_iat(self, "AcquireSRWLockExclusive", (void*)my_AcquireSRWLockExclusive, (void**)&g_real_AcquireSRWLock);
     hook_iat(self, "ReleaseSRWLockExclusive", (void*)my_ReleaseSRWLockExclusive, (void**)&g_real_ReleaseSRWLock);
-    hook_iat(self, "getenv", (void*)my_getenv, (void**)&g_real_getenv);
+    // hook_iat(self, "getenv", (void*)my_getenv, (void**)&g_real_getenv); // removed: cached at source
     fprintf(stderr, "[LOCK-HOOK] Installed IAT hooks: si->lock=%p, registry_lock=%p, base=%p\n",
             s_si_lock_mon.target_lock, s_reg_lock_mon.target_lock, base);
 }
@@ -545,6 +548,37 @@ static void task4_monitor_thread_func()
                     current_pass);
         }
 
+        static int s_dump_7b1c_sec = 0;
+        if (vm_base && g_ppu_main_ctx && (cur_main_lr == 0x00467B1C || (cur_main_lr >= 0x00466E28 && cur_main_lr <= 0x00467000))) {
+            if (s_dump_7b1c_sec < 20) {
+                s_dump_7b1c_sec++;
+                uint64_t r31 = g_ppu_main_ctx->gpr[31];
+                uint64_t r5  = g_ppu_main_ctx->gpr[5];
+                uint64_t r4  = g_ppu_main_ctx->gpr[4];
+                uint32_t mgr_holder = (uint32_t)r31;
+                uint32_t mgr_ea = (mgr_holder && mgr_holder < 0xF0000000u) ? __builtin_bswap32(*(const uint32_t*)(vm_base + mgr_holder)) : 0;
+                fprintf(stderr, "\n>>> [0x00467B1C-WAIT #%d @ %ds] target_r5=%llu (0x%llX) r4(qid)=%llu r31=0x%08X mgr_ea=0x%08X\n",
+                        s_dump_7b1c_sec, sec, (unsigned long long)r5, (unsigned long long)r5, (unsigned long long)r4, mgr_holder, mgr_ea);
+                if (mgr_ea && mgr_ea < 0xF0000000u) {
+                    fprintf(stderr, ">>> [0x00467B1C 32-WORDS @ 0x%08X]:\n", mgr_ea);
+                    for (int w = 0; w < 32; w += 4) {
+                        fprintf(stderr, "  +0x%02X: %08X %08X %08X %08X\n",
+                                w * 4,
+                                __builtin_bswap32(*(const uint32_t*)(vm_base + mgr_ea + (w + 0) * 4)),
+                                __builtin_bswap32(*(const uint32_t*)(vm_base + mgr_ea + (w + 1) * 4)),
+                                __builtin_bswap32(*(const uint32_t*)(vm_base + mgr_ea + (w + 2) * 4)),
+                                __builtin_bswap32(*(const uint32_t*)(vm_base + mgr_ea + (w + 3) * 4)));
+                    }
+                    uint32_t q_ea = mgr_ea + ((uint32_t)r4 << 4) + 0x40;
+                    fprintf(stderr, ">>> [0x00467B1C QUEUE-%llu COUNTERS @ 0x%08X]:", (unsigned long long)r4, q_ea);
+                    for (int l = 0; l < 7; l++) {
+                        fprintf(stderr, " L%d=%u", l, (unsigned)__builtin_bswap16(*(const uint16_t*)(vm_base + q_ea + 2 + l * 2)));
+                    }
+                    fprintf(stderr, "\n");
+                }
+            }
+        }
+
         static int s_dump_done = 0;
         if (s_gow_watchdog) {
             if (s_stall_e_sec == 3 && !(s_dump_done & 1)) {
@@ -556,6 +590,7 @@ static void task4_monitor_thread_func()
                 fprintf(stderr, "\n>>> [WATCHDOG DUMP #2 @ %ds] main stalled at 0x00466740 for 13s (10s later)! Dumping symbolized stacks...\n", sec);
                 dump_all_threads_stacks(sec);
             }
+        }
 
         // Detect new threads every second
         for (uint32_t tid = 2; tid <= PPU_THREAD_MAX; tid++) {
@@ -599,7 +634,9 @@ static void task4_monitor_thread_func()
                 {"RenJobSet11",    11, 0x71664680},
                 {"RenJobSet12",    12, 0x71696700},
                 {"RenderJobs",     13, 0x71965600},
-                {"MeshProcJobs",   14, 0x71965B80}
+                {"MeshProcJobs",   14, 0x71965B80},
+                {"SpursWkld16",    16, 0x73D6B900},
+                {"RsxSync18",      18, 0x73E83D80}
             };
 
             fprintf(stderr, "\n=== [TASK4-WORKLOAD-STATUS @ %ds] ===\n", sec);
@@ -615,6 +652,20 @@ static void task4_monitor_thread_func()
                         (w.wid >= 9 && pm_entries > 0) ? " [WID-RUNNING]" : "");
             }
             fprintf(stderr, "======================================\n\n");
+            fprintf(stderr, "=== [SPU-LANE-AUDIT @ %ds] ===\n", sec);
+            for (int l = 0; l < 6; l++) {
+                uint32_t active_wid = g_spurs_lane_active_wid[l];
+                fprintf(stderr, "  Lane %d: wid=%u (%s), last 5 MFC commands:\n",
+                        l, active_wid, (active_wid == 255) ? "IDLE/KERNEL" : "RUNNING");
+                uint32_t hidx = g_spu_mfc_hist_idx[l];
+                for (uint32_t i = 0; i < 5 && i < hidx; i++) {
+                    uint32_t slot = (hidx >= 5) ? (hidx - 5 + i) % 5 : i;
+                    const auto& m = g_spu_mfc_hist[l][slot];
+                    fprintf(stderr, "    [%llums] cmd=0x%02X pc=0x%05X lsa=0x%05X ea=0x%08X size=%u tag=%u\n",
+                            (unsigned long long)m.t_ms, m.cmd, m.pc, m.lsa, m.ea, m.size, m.tag);
+                }
+            }
+            fprintf(stderr, "==============================\n");
         }
 
         // 3. Periodic Thread Audit every 10 seconds
@@ -664,7 +715,6 @@ static void task4_monitor_thread_func()
             }
             fprintf(stderr, "===================================\n\n");
         }
-        } // if (s_gow_watchdog)
         fflush(stderr);
     }
 }
@@ -988,6 +1038,11 @@ extern "C" {
         static bool s_registered = false;
         if (s_registered) return;
         s_registered = true;
+
+        if (getenv("GOW_REVERT_DDE3F83") || getenv("GOW_NO_SPU_OVERRIDES")) {
+            fprintf(stderr, "[ascension] SPU img=2 overrides DISABLED by env (GOW_REVERT_DDE3F83/GOW_NO_SPU_OVERRIDES)\n");
+            return;
+        }
 
         spu_begin_image(2);
         spu_register_function(0x00A2Cu, gow_wws_job_pm_interrupt_handler);
