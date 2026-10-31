@@ -349,8 +349,28 @@
 ## Milestone 4: SPURS Scheduling, SPU Preemption & Soft-Lock Remediation
 
 ### Phase 12: SPURS Priority Preemption, Workload Shutdown State & SPU Idle Yield
-- [x] Fix SPU slot saturation by implementing priority-aware preemption in ps3recomp \spurs_poll_select\.
-- [x] Implement SPU image 2 vector 0x00A2C / 0x00040 interrupt handler and 0x02358 idle spin yield in \src/compat/upstream_compat.cpp\.
-- [x] Add in-place SPU function override support to \ps3recomp/runtime/spu/spu_channels.c\.
-- [x] Update \SPURS_MAXCONT\ in \src/compat/ascension_defaults.cpp\ with 	=5,18=5\ to enable full SPU concurrency for RenJobSet and RsxSync.
+- [x] Fix SPU slot saturation by implementing priority-aware preemption in ps3recomp spurs_poll_select.
+- [x] Implement SPU image 2 vector 0x00A2C / 0x00040 interrupt handler and 0x02358 idle spin yield in src/compat/upstream_compat.cpp.
+- [x] Add in-place SPU function override support to ps3recomp/runtime/spu/spu_channels.c.
+- [x] Update SPURS_MAXCONT in src/compat/ascension_defaults.cpp with 11=5,18=5 to enable full SPU concurrency for RenJobSet and RsxSync.
 - [x] Verified main thread progresses past 0x00467B1C and advances through frame loop past presents=1970+.
+
+### Phase 13: Wake Up Dead SPU Lanes (cur_pc=0x00000) & Fix SPURS 32-Workload Dispatch
+- [x] Fix SPU lane state machine so when an SPU thread returns, finishes quantum, or hits cur_pc=0x00000, lane state transitions to IDLE/WAITING instead of staying stuck RUNNING.
+- [x] Fix spurs_kernel preemption and dispatch to schedule runnable workloads (wid=11 readyCount=8, wid=18 readyCount=5) onto Lanes 0-5.
+- [x] Fix SPURS2 32-workload priority iteration (wid >= 16) across all 32 workloads (0..31) rather than clamping/masking at 16.
+
+### Phase 14: Inspect & Fix Queue-3 Counter Polling at 0x00467B1C (0x71632670)
+- [ ] Audit lifted PPU code at 0x00467B1C and [0x00467B1C-WAIT] diagnostics for offsets from r31 (0x716002E0) or mgr_ea (0x71632600) compared against target_r5=1 and L0..L6.
+- [ ] Verify endianness (bswap16/bswap32) on writes to 0x71632600 (+0x1C or +0x44..+0x7C).
+- [ ] Verify sentinel 0xFFFF handling and update flow from SPU jobs on wid=9, wid=11, or wid=18.
+
+### Phase 15: Implement Accurate Big-Endian cellSpursGetWorkloadInfo (wid=9)
+- [ ] Audit HLE implementation of cellSpursGetWorkloadInfo for wid=9 (info=0x0FEFF480).
+- [ ] Ensure all fields in CellSpursWorkloadInfo reflect live registry state and are byte-swapped to big-endian.
+- [ ] Add diagnostic logging dumping struct bytes written to 0x0FEFF480 and verify caller branching.
+
+### Phase 16: Guarded Fallback Timeout Bypass at 0x00467B1C (Downstream Rendering Test)
+- [ ] Implement configurable guarded timeout fallback at 0x00467B1C wait hook.
+- [ ] Log warning [0x00467B1C-BYPASS], zero out stuck 0xFFFF counters L1..L6, and satisfy target_r5=1 on mgr_ea if timeout occurs.
+- [ ] Run full verification to confirm live draws advance past 3,135 frames.

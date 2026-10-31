@@ -4,11 +4,18 @@
 
 | Field | Value |
 |---|---|
-| **Active Phase** | Phase 12 — SPURS Priority Preemption & SPU Idle Yield (Fixed 0x00467B1C Hang) |
+| **Active Phase** | Phase 13 — Wake Up Dead SPU Lanes (cur_pc=0x00000) & Fix SPURS 32-Workload Dispatch |
 | **Milestone** | 4 — Soft-Lock Remediation & SPU Preemption |
-| **Last Updated** | 2026-10-31 |
+| **Last Updated** | 2026-11-01 |
 
 ## Progress
+
+### Phase 13: Wake Up Dead SPU Lanes & Fix SPURS 32-Workload Dispatch
+- [x] SPU lane context and active wid cleanup on policy module exit (g_spurs_lane_active_wid reset to 255, g_spurs_lane_ctx reset to NULL in spurs_policy.c).
+- [x] Priority initialization defaults in _cellSpursWorkloadAttributeInitialize and cellSpursAddWorkload in cellSpurs.c (default 1 to avoid zero-priority lane ineligibility).
+- [x] SPURS2 32-workload maxContention fallback (default 8 for wid >= 16 if uninitialized).
+- [x] spurs_poll_select preemption and idle-yield to allow idle workloads (wids 0..3) to return 0x20 or yield to waiting workloads (wid=11 and wid=18).
+- [x] Rebuilt ps3recomp_runtime and linked gow_ascension.exe cleanly.
 
 ### Phase 1: Host Toolchain Build, Binary Inventory & Clean PPU Lift
 - [x] Install clang-cl / clang (LLVM-MinGW UCRT), cmake, ninja, pycryptodome
@@ -182,4 +189,4 @@ _None yet — Phase 1 not started._
 
 
 | 2026-10-24 | Quick task completed: fixed vblank ticker catch-up loop (bounded 240, integrated clock), exposed alternating display buffer IDs and updated cellGcm_take_flip_pending_synced for GOW display list jumps, corrected LD_FRAME_ANATOMY frame indexing and captured 12 passes at present=726 with 11 draws, and instrumented NV4097(0x1808) 4 sub-stages (b: 63.8% texture, c: 36.0% shader/PSO). |
-| 2026-10-31 | Phase 12 completed: diagnosed and resolved main thread hang at 0x00467B1C in func_00466E28 (waiting on Wws progress counters). Root cause was all 6 SPU worker slots permanently occupied by idle workloads 0-3 in wws_job_pm loc_00002390 loop while wid=11 (RenJobSet) and wid=18 (RsxSync) were starved. Implemented priority-aware preemption in ps3recomp spurs_poll_select, registered SPU img=2 0x00A2C/0x00040 interrupt and 0x02358 idle-spin yield handlers in upstream_compat.cpp, added in-place SPU function override support to spu_channels.c, and added 11=5,18=5 to SPURS_MAXCONT in ascension_defaults.cpp. Verified cold run progresses smoothly past 0x00467B1C to lr=0x0041F4F0/0x0041F4CC (mutex lock loop) past 1,970+ presents. |
+| 2026-11-01 | Phase 12 completed: diagnosed and resolved main thread hang at 0x00467B1C in func_00466E28 (waiting on Wws progress counters). Root cause was all 6 SPU worker slots permanently occupied by idle workloads 0-3 in wws_job_pm loc_00002390 loop while wid=11 (RenJobSet) and wid=18 (RsxSync) were starved. Implemented priority-aware preemption in ps3recomp spurs_poll_select, registered SPU img=2 0x00A2C/0x00040 interrupt and 0x02358 idle-spin yield handlers in upstream_compat.cpp, added in-place SPU function override support to spu_channels.c, and added 11=5,18=5 to SPURS_MAXCONT in ascension_defaults.cpp. Verified cold run progresses smoothly past 0x00467B1C to lr=0x0041F4F0/0x0041F4CC (mutex lock loop) past 1,970+ presents. |
