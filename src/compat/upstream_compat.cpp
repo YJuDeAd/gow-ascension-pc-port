@@ -37,7 +37,7 @@ typedef struct GcmFifoBreakdown {
 
 extern "C" {
 extern uint8_t* vm_base;
-extern volatile uint32_t g_spurs_pm_entry_count[32];
+volatile uint32_t g_spurs_pm_entry_count[32] = {0};
 extern unsigned long long ps3_qpc_us(void);
 extern ppu_context* volatile g_ppu_main_ctx;
 extern ppu_thread_info g_ppu_threads[PPU_THREAD_MAX];
