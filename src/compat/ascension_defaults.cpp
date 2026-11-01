@@ -226,6 +226,7 @@ extern "C" void ascension_apply_defaults(void)
     std::string skip_intro_mod = root + "/mods/skip-intro";
     set_default("PS3_MODS", skip_intro_mod.c_str());
     set_default("GOW_FIOS_CACHE", "off");
+    set_default("GOW_7B1C_TIMEOUT_SEC", "5");
     set_default("SPU_INTERP_UNLIFTED", "1");
     set_default("SPU_DMA_LAX", "1");
     if (!getenv("GOW_REVERT_DDE3F83")) {

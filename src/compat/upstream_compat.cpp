@@ -585,9 +585,9 @@ static void task4_monitor_thread_func()
         }
 
         static int s_dump_7b1c_sec = 0;
-        if (vm_base && g_ppu_main_ctx && (cur_main_lr == 0x00467B1C || (cur_main_lr >= 0x00466E28 && cur_main_lr <= 0x00467000))) {
-            if (s_dump_7b1c_sec < 20) {
-                s_dump_7b1c_sec++;
+        if (vm_base && g_ppu_main_ctx && (cur_main_lr == 0x00467B1C || (cur_main_lr >= 0x00466E28 && cur_main_lr <= 0x00467054))) {
+            s_dump_7b1c_sec++;
+            if (s_dump_7b1c_sec <= 20 || (s_dump_7b1c_sec % 10 == 0)) {
                 uint64_t r31 = g_ppu_main_ctx->gpr[31];
                 uint64_t r5  = g_ppu_main_ctx->gpr[5];
                 uint64_t r4  = g_ppu_main_ctx->gpr[4];
@@ -620,7 +620,55 @@ static void task4_monitor_thread_func()
                     for (int l = 0; l < 7; l++) {
                         fprintf(stderr, " L%d=%u", l, (unsigned)l_vals[l]);
                     }
-                    fprintf(stderr, " => %s\n", (min_l >= target_hdr) ? "SATISFIED (EXIT LOOP)" : "WAITING (L0 < target)");
+                    uint16_t exp_target = (r5 < 0x10000 && (uint16_t)r5 > target_hdr) ? (uint16_t)r5 : target_hdr;
+                    fprintf(stderr, " => %s\n", (min_l >= exp_target) ? "SATISFIED (EXIT LOOP)" : "WAITING (min_L < target)");
+
+                    static int s_7b1c_timeout_sec = -1;
+                    if (s_7b1c_timeout_sec < 0) {
+                        const char* env_t = getenv("GOW_7B1C_TIMEOUT_SEC");
+                        s_7b1c_timeout_sec = env_t ? atoi(env_t) : 5;
+                    }
+
+                    if (s_7b1c_timeout_sec > 0 && s_dump_7b1c_sec >= s_7b1c_timeout_sec) {
+                        uint16_t req = target_hdr;
+                        if (r5 < 0x10000 && (uint16_t)r5 > req) {
+                            req = (uint16_t)r5;
+                        }
+                        if (req == 0) req = 1;
+
+                        fprintf(stderr, "\n[0x00467B1C-BYPASS] Guarded timeout reached (%d s >= %d s). Zeroing stuck sentinels & satisfying target_r5=%u on mgr_ea=0x%08X q_ea=0x%08X (L0..L6 set to %u)\n",
+                                s_dump_7b1c_sec, s_7b1c_timeout_sec, req, mgr_ea, q_ea, req);
+
+                        for (int l = 0; l < 7; l++) {
+                            *(uint16_t*)(vm_base + q_ea + 2 + l * 2) = __builtin_bswap16(req);
+                        }
+
+                        // Also advance all active queues on mgr_ea
+                        for (uint32_t q = 0; q < 8; q++) {
+                            uint32_t cur_q = mgr_ea + (q << 4) + 0x40;
+                            uint16_t q_target = __builtin_bswap16(*(const uint16_t*)(vm_base + cur_q));
+                            if (q == (uint32_t)r4 && req > q_target) {
+                                q_target = req;
+                            }
+                            if (q_target > 0) {
+                                for (int l = 0; l < 7; l++) {
+                                    *(uint16_t*)(vm_base + cur_q + 2 + l * 2) = __builtin_bswap16(q_target);
+                                }
+                            }
+                        }
+
+                        // Also ensure wid target readyCount is clear in SPURS instance if waiting
+                        if (mgr_holder && mgr_holder < 0xF0000000u) {
+                            uint32_t spurs_ea = __builtin_bswap32(*(const uint32_t*)(vm_base + mgr_holder + 4));
+                            uint32_t wid_target = __builtin_bswap32(*(const uint32_t*)(vm_base + mgr_holder + 8));
+                            if (spurs_ea && spurs_ea < 0xF0000000u && wid_target < 32) {
+                                uint32_t ready_off = (wid_target < 16 ? wid_target : 0x10 + (wid_target - 16));
+                                *(vm_base + spurs_ea + ready_off) = 0;
+                                fprintf(stderr, "[0x00467B1C-BYPASS] Zeroed readyCount for wid=%u in SpursInst@0x%08X (offset 0x%X)\n",
+                                        wid_target, spurs_ea, ready_off);
+                            }
+                        }
+                    }
                 }
 
                 // TASK 1 & TASK 3 DETAILED AUDIT
@@ -684,6 +732,8 @@ static void task4_monitor_thread_func()
                 fprintf(stderr, "========================================\n\n");
 
             }
+        } else {
+            s_dump_7b1c_sec = 0;
         }
 
         static int s_dump_done = 0;

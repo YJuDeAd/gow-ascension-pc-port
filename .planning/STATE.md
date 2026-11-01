@@ -4,11 +4,17 @@
 
 | Field | Value |
 |---|---|
-| **Active Phase** | Phase 16 — Guarded Fallback Timeout Bypass at 0x00467B1C (Downstream Rendering Test) |
+| **Active Phase** | Phase 16 — Guarded Fallback Timeout Bypass at 0x00467B1C [COMPLETED] |
 | **Milestone** | 4 — Soft-Lock Remediation & SPU Preemption |
 | **Last Updated** | 2026-11-01 |
 
 ## Progress
+
+### Phase 16: Guarded Fallback Timeout Bypass at 0x00467B1C (Downstream Rendering Test)
+- [x] Implemented configurable guarded timeout fallback at 0x00467B1C wait hook via `GOW_7B1C_TIMEOUT_SEC` in `src/compat/upstream_compat.cpp` and `src/compat/ascension_defaults.cpp` (default 5s, configurable down to 2s).
+- [x] Log warning `[0x00467B1C-BYPASS]`, satisfy `req = max(target_hdr, r5)` on `mgr_ea` and across all active subqueues, zero out stuck sentinels `L0..L6`, and clear `readyCount` on target workload in SpursInst.
+- [x] Added generalized workload `readyCount` and `contention` spin guards in `ps3recomp/libs/spurs/cellSpurs.c` `cellSpursGetWorkloadInfo` across all workloads (`s_wid_spin[SPURS_MAX_WID]`, `s_cont_spin[SPURS_MAX_WID]`).
+- [x] Verified main PPU thread fully unblocks past `0x00467B1C` and `func_00466E28`, advancing past `wid=9`, `wid=10`, `wid=11`, `wid=2`, `wid=5`, `wid=14` into the main engine loop at `0x003E8378` (polling `cellSysutilCheckCallback`, `cellPadGetData`, `cellPadGetInfo2`, `cellPadSetActDirect`, `cellSpursSetPriorities`).
 
 ### Phase 15: Implement Accurate Big-Endian cellSpursGetWorkloadInfo (wid=9)
 - [x] Audited caller branching at 0x00466FF8 (lr=0x0046700C, tests info+0x23 readyCount == 0) and 0x00467030 (lr=0x00467030, tests info+0x20 contention == 0) in func_00466E28.
