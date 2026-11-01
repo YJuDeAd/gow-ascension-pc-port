@@ -1129,6 +1129,8 @@ extern "C" {
     void spu_register_function(uint32_t addr, void (*fn)(spu_context*));
     void spu_wws_job_pm_spu_func_00000040(spu_context* ctx);
     void spu_wws_job_pm_spu_func_00002358(spu_context* ctx);
+    void spu_wws_job_pm_spu_func_00002360(spu_context* ctx);
+    void spu_wws_job_pm_spu_func_00002390(spu_context* ctx);
     void spu_indirect_branch(spu_context* ctx);
 
     static void gow_wws_job_pm_interrupt_handler(spu_context* ctx)
@@ -1159,6 +1161,7 @@ extern "C" {
 
     static void gow_wws_job_pm_idle_spin_handler(spu_context* ctx)
     {
+        uint32_t pc = (uint32_t)ctx->pc & 0x3FFFFu;
         uint16_t loadJobState = ((uint16_t)ctx->ls[0x12A0] << 8) | ctx->ls[0x12A1];
         int8_t storeJobNum = (int8_t)ctx->ls[0x12F0];
 
@@ -1187,13 +1190,13 @@ extern "C" {
                     }
                 }
 
-                uint8_t cur_ready = vm_base[spurs_ea + (cur_wid < 16 ? cur_wid : 0x10 + (cur_wid - 16))];
+                uint8_t cur_ready = (cur_wid < 32) ? vm_base[spurs_ea + (cur_wid < 16 ? cur_wid : 0x10 + (cur_wid - 16))] : 0;
 
                 if (other_waiting || cur_ready == 0) {
                     static int s_spin_yield = 0;
                     if (++s_spin_yield <= 50 || (s_spin_yield % 500 == 0)) {
-                        fprintf(stderr, "[wws-idle] IDLE YIELD: SPU img=2 wid=%u lane idle (other_waiting=%d cur_ready=%u) -> exitToKernel (0x9C0)\n",
-                                cur_wid, other_waiting ? 1 : 0, cur_ready);
+                        fprintf(stderr, "[wws-idle] IDLE YIELD: SPU img=2 wid=%u lane idle (other_waiting=%d cur_ready=%u pc=0x%05X) -> exitToKernel (0x9C0)\n",
+                                cur_wid, other_waiting ? 1 : 0, cur_ready, pc);
                     }
                     ctx->pc = 0x9C0u;
                     g_spu_trampoline_fn = spu_indirect_branch;
@@ -1202,7 +1205,13 @@ extern "C" {
             }
         }
 
-        spu_wws_job_pm_spu_func_00002358(ctx);
+        if (pc == 0x2360u) {
+            spu_wws_job_pm_spu_func_00002360(ctx);
+        } else if (pc == 0x2390u) {
+            spu_wws_job_pm_spu_func_00002390(ctx);
+        } else {
+            spu_wws_job_pm_spu_func_00002358(ctx);
+        }
     }
 
     void gow_register_spu_overrides(void)
@@ -1220,8 +1229,10 @@ extern "C" {
         spu_register_function(0x00A2Cu, gow_wws_job_pm_interrupt_handler);
         spu_register_function(0x00040u, gow_wws_job_pm_interrupt_handler);
         spu_register_function(0x02358u, gow_wws_job_pm_idle_spin_handler);
+        spu_register_function(0x02360u, gow_wws_job_pm_idle_spin_handler);
+        spu_register_function(0x02390u, gow_wws_job_pm_idle_spin_handler);
         spu_begin_image(0);
-        fprintf(stderr, "[ascension] Registered SPU img=2 overrides: 0x00A2C, 0x00040, 0x02358\n");
+        fprintf(stderr, "[ascension] Registered SPU img=2 overrides: 0x00A2C, 0x00040, 0x02358, 0x02360, 0x02390\n");
     }
 
     void ps3_load_prx_modules(void) {
