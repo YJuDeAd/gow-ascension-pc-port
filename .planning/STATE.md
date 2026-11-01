@@ -4,11 +4,17 @@
 
 | Field | Value |
 |---|---|
-| **Active Phase** | Phase 15 — Implement Accurate Big-Endian cellSpursGetWorkloadInfo (wid=9) |
+| **Active Phase** | Phase 16 — Guarded Fallback Timeout Bypass at 0x00467B1C (Downstream Rendering Test) |
 | **Milestone** | 4 — Soft-Lock Remediation & SPU Preemption |
 | **Last Updated** | 2026-11-01 |
 
 ## Progress
+
+### Phase 15: Implement Accurate Big-Endian cellSpursGetWorkloadInfo (wid=9)
+- [x] Audited caller branching at 0x00466FF8 (lr=0x0046700C, tests info+0x23 readyCount == 0) and 0x00467030 (lr=0x00467030, tests info+0x20 contention == 0) in func_00466E28.
+- [x] Removed artificial destructive ready_off zeroing hack (if (wid == 9 || ...) *(vm_base + se + wkl_ready_off(wid)) = 0) from cellSpursGetWorkloadInfo in cellSpurs.c.
+- [x] Populated CellSpursWorkloadInfo fields accurately from live registry and SpursInst (si->active[wid] contention, vm_read8 state, wkl_maxcont, live readyCount, big-endian data/pm/nameClass/nameInstance).
+- [x] Added diagnostic logging for wid=9 and info_ea=0x0FEFF480 tracking struct fields and loop exit state.
 
 ### Phase 14: Inspect & Fix Queue-3 Counter Polling at 0x00467B1C (0x71632670)
 - [x] Audited lifted PPU code in func_00466E28 (called with lr=0x00467B1C from func_00467B08, qid=3, r31=0x716002E0, mgr_ea=0x71632600): confirmed unsigned min reduction across 7 16-bit counters at 0x71632672..0x7163267E against target_r5=1.

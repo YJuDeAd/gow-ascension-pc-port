@@ -366,9 +366,9 @@
 - [x] Verify sentinel 0xFFFF handling and update flow from SPU jobs on wid=9, wid=11, or wid=18. Added wid=9,10,12 to SPURS_MAXCONT concurrency overrides in ascension_defaults.cpp.
 
 ### Phase 15: Implement Accurate Big-Endian cellSpursGetWorkloadInfo (wid=9)
-- [ ] Audit HLE implementation of cellSpursGetWorkloadInfo for wid=9 (info=0x0FEFF480).
-- [ ] Ensure all fields in CellSpursWorkloadInfo reflect live registry state and are byte-swapped to big-endian.
-- [ ] Add diagnostic logging dumping struct bytes written to 0x0FEFF480 and verify caller branching.
+- [x] Audit HLE implementation of cellSpursGetWorkloadInfo for wid=9 (info=0x0FEFF480).
+- [x] Ensure all fields in CellSpursWorkloadInfo reflect live registry state and are byte-swapped to big-endian. Removed destructive readyCount zeroing hack.
+- [x] Add diagnostic logging dumping struct bytes written to 0x0FEFF480 and verify caller branching at 0x00466FF8/0x00467030.
 
 ### Phase 16: Guarded Fallback Timeout Bypass at 0x00467B1C (Downstream Rendering Test)
 - [ ] Implement configurable guarded timeout fallback at 0x00467B1C wait hook.
