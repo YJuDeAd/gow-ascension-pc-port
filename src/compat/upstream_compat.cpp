@@ -515,7 +515,54 @@ static void task4_monitor_thread_func()
     static bool s_seen_thread[PPU_THREAD_MAX + 1] = {false};
 
     for (int sec = 1; sec <= 300; sec++) {
-        std::this_thread::sleep_for(std::chrono::seconds(1));
+        for (int ms = 0; ms < 1000; ms += 50) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(50));
+            uint32_t fast_lr = g_ppu_main_ctx ? (uint32_t)g_ppu_main_ctx->lr : 0;
+            if (vm_base && g_ppu_main_ctx && (fast_lr == 0x00467B1C || (fast_lr >= 0x00466E28 && fast_lr <= 0x00467054))) {
+                uint64_t r31 = g_ppu_main_ctx->gpr[31];
+                uint64_t r5  = g_ppu_main_ctx->gpr[5];
+                uint64_t r4  = g_ppu_main_ctx->gpr[4];
+                uint32_t mgr_holder = (uint32_t)r31;
+                uint32_t mgr_ea = (mgr_holder && mgr_holder < 0xF0000000u) ? __builtin_bswap32(*(const uint32_t*)(vm_base + mgr_holder)) : 0;
+                if (mgr_ea && mgr_ea < 0xF0000000u) {
+                    uint32_t q_ea = mgr_ea + ((uint32_t)r4 << 4) + 0x40;
+                    uint16_t target_hdr = __builtin_bswap16(*(const uint16_t*)(vm_base + q_ea));
+                    uint16_t exp_target = (r5 < 0x10000 && (uint16_t)r5 > target_hdr) ? (uint16_t)r5 : target_hdr;
+                    uint16_t min_l = 0xFFFF;
+                    uint32_t active_sum = 0;
+                    for (int l = 0; l < 7; l++) {
+                        uint16_t v = __builtin_bswap16(*(const uint16_t*)(vm_base + q_ea + 2 + l * 2));
+                        if (v != 0xFFFF) {
+                            active_sum += v;
+                            if (v < min_l) min_l = v;
+                        }
+                    }
+                    if ((min_l >= exp_target) || (exp_target > 0 && active_sum >= exp_target)) {
+                        if (min_l < exp_target) {
+                            for (int l = 0; l < 7; l++) {
+                                uint16_t v = __builtin_bswap16(*(const uint16_t*)(vm_base + q_ea + 2 + l * 2));
+                                if (v != 0xFFFF && v < exp_target) {
+                                    *(uint16_t*)(vm_base + q_ea + 2 + l * 2) = __builtin_bswap16(exp_target);
+                                }
+                            }
+                        }
+                        if (r31 >= 0x10000u) {
+                            uint32_t spurs_ptr = __builtin_bswap32(*(const uint32_t*)(vm_base + r31 + 4));
+                            uint32_t q_wid = __builtin_bswap32(*(const uint32_t*)(vm_base + r31 + 8));
+                            if (spurs_ptr >= 0x10000u && q_wid < 32) {
+                                uint32_t ready_off = (q_wid < 16) ? q_wid : (0x10 + (q_wid - 16));
+                                uint8_t cur_r = *(vm_base + spurs_ptr + ready_off);
+                                if (cur_r > 0) {
+                                    fprintf(stderr, "[WWS-FAST-DONE] Queue %llu satisfied (min_L=%u sum_L=%u >= target=%u). Updating wid=%u readyCount from %u to 0\n",
+                                            (unsigned long long)r4, min_l, active_sum, exp_target, q_wid, cur_r);
+                                    *(vm_base + spurs_ptr + ready_off) = 0;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
 
         // Always-on cheap stage probe every 2 seconds (no thread suspension)
         if (sec % 2 == 0) {
@@ -624,6 +671,35 @@ static void task4_monitor_thread_func()
                     }
                     uint16_t exp_target = (r5 < 0x10000 && (uint16_t)r5 > target_hdr) ? (uint16_t)r5 : target_hdr;
                     fprintf(stderr, " => %s\n", (min_l >= exp_target) ? "SATISFIED (EXIT LOOP)" : "WAITING (min_L < target)");
+
+                    uint32_t active_sum = 0;
+                    for (int l = 0; l < 7; l++) {
+                        if (l_vals[l] != 0xFFFF) active_sum += l_vals[l];
+                    }
+
+                    bool satisfied = (min_l >= exp_target) || (exp_target > 0 && active_sum >= exp_target);
+                    if (satisfied) {
+                        if (min_l < exp_target) {
+                            for (int l = 0; l < 7; l++) {
+                                if (l_vals[l] != 0xFFFF && l_vals[l] < exp_target) {
+                                    *(uint16_t*)(vm_base + q_ea + 2 + l * 2) = __builtin_bswap16(exp_target);
+                                }
+                            }
+                        }
+                        if (r31 >= 0x10000u) {
+                            uint32_t spurs_ptr = __builtin_bswap32(*(const uint32_t*)(vm_base + r31 + 4));
+                            uint32_t q_wid = __builtin_bswap32(*(const uint32_t*)(vm_base + r31 + 8));
+                            if (spurs_ptr >= 0x10000u && q_wid < 32) {
+                                uint32_t ready_off = (q_wid < 16) ? q_wid : (0x10 + (q_wid - 16));
+                                uint8_t cur_r = *(vm_base + spurs_ptr + ready_off);
+                                if (cur_r > 0) {
+                                    fprintf(stderr, "[WWS-QUEUE-DONE] Queue %llu satisfied (min_L=%u sum_L=%u >= target=%u). Updating wid=%u readyCount from %u to 0\n",
+                                            (unsigned long long)r4, min_l, active_sum, exp_target, q_wid, cur_r);
+                                    *(vm_base + spurs_ptr + ready_off) = 0;
+                                }
+                            }
+                        }
+                    }
 
                     static int s_7b1c_bp_enabled = -1;
                     if (s_7b1c_bp_enabled < 0) {
@@ -1132,6 +1208,7 @@ extern "C" {
     void spu_wws_job_pm_spu_func_00002360(spu_context* ctx);
     void spu_wws_job_pm_spu_func_00002390(spu_context* ctx);
     void spu_indirect_branch(spu_context* ctx);
+    void spu_halt(spu_context* ctx);
 
     static void gow_wws_job_pm_interrupt_handler(spu_context* ctx)
     {
@@ -1199,7 +1276,7 @@ extern "C" {
                                 cur_wid, other_waiting ? 1 : 0, cur_ready, pc);
                     }
                     ctx->pc = 0x9C0u;
-                    g_spu_trampoline_fn = spu_indirect_branch;
+                    spu_halt(ctx);
                     return;
                 }
             }
