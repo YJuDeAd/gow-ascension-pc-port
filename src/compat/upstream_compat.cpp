@@ -938,8 +938,14 @@ static void task4_monitor_thread_func()
             fprintf(stderr, "=== [SPU-LANE-AUDIT @ %ds] ===\n", sec);
             for (int l = 0; l < 6; l++) {
                 uint32_t active_wid = g_spurs_lane_active_wid[l];
-                fprintf(stderr, "  Lane %d: wid=%u (%s), last 5 MFC commands:\n",
-                        l, active_wid, (active_wid == 255) ? "IDLE/KERNEL" : "RUNNING");
+                FILETIME wc, we, wk, wu;
+                uint64_t user_ms = 0, kern_ms = 0;
+                if (g_spurs_lane_thread[l] && GetThreadTimes(g_spurs_lane_thread[l], &wc, &we, &wk, &wu)) {
+                    user_ms = (((uint64_t)wu.dwHighDateTime << 32) | wu.dwLowDateTime) / 10000;
+                    kern_ms = (((uint64_t)wk.dwHighDateTime << 32) | wk.dwLowDateTime) / 10000;
+                }
+                fprintf(stderr, "  Lane %d: wid=%u (%s), HostCPU=%llu ms (user %llu ms, kern %llu ms), Yields=%llu, last 5 MFC commands:\n",
+                        l, active_wid, (active_wid == 255) ? "IDLE/KERNEL" : "RUNNING", user_ms + kern_ms, user_ms, kern_ms, (unsigned long long)g_spu_yield_count[l]);
                 uint32_t hidx = g_spu_mfc_hist_idx[l];
                 for (uint32_t i = 0; i < 5 && i < hidx; i++) {
                     uint32_t slot = (hidx >= 5) ? (hidx - 5 + i) % 5 : i;
