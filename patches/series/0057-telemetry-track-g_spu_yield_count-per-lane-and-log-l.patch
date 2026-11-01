@@ -1,0 +1,40 @@
+From 599458994a8e73201663e404fd27b583dfe8929d Mon Sep 17 00:00:00 2001
+From: YJuDeAd <robinrashi@gmail.com>
+Date: Sun, 1 Nov 2026 17:06:09 +0530
+Subject: [PATCH 57/57] telemetry: track g_spu_yield_count per lane and log
+ lane id
+
+---
+ runtime/spu/spu_channels.c | 7 +++++--
+ 1 file changed, 5 insertions(+), 2 deletions(-)
+
+diff --git a/runtime/spu/spu_channels.c b/runtime/spu/spu_channels.c
+index f1f61db1..6d706d48 100644
+--- a/runtime/spu/spu_channels.c
++++ b/runtime/spu/spu_channels.c
+@@ -509,6 +509,7 @@ void spu_evlog(const spu_context* ctx, const char* what, uint32_t a, uint32_t b)
+ }
+ 
+ /* Returns 1 if `cmd` is an atomic line op and was handled here, else 0. */
++volatile uint64_t g_spu_yield_count[8] = {0};
+ static int spu_mfc_atomic(spu_context* ctx, uint32_t cmd)
+ {
+     static SPU_THREAD_LOCAL uint32_t s_consec_fails = 0;
+@@ -1036,10 +1037,12 @@ static int spu_mfc_atomic(spu_context* ctx, uint32_t cmd)
+                         uint8_t cur_ready = (cur_wid < 32) ? vm_base[spurs_ea + (cur_wid < 16 ? cur_wid : 0x10 + (cur_wid - 16))] : 0;
+ 
+                         if (other_waiting || cur_ready == 0) {
++                            uint32_t lane = spu_ctx_lane(ctx);
++                            if (lane < 8) g_spu_yield_count[lane]++;
+                             static int s_yield_count = 0;
+                             if (++s_yield_count <= 20 || (s_yield_count % 5000 == 0)) {
+-                                fprintf(stderr, "[spu-yield] SPU img=2 wid=%u lane idle (other_waiting=%d cur_ready=%u) -> exitToKernel (0x9C0)\n",
+-                                        cur_wid, other_waiting ? 1 : 0, cur_ready);
++                                fprintf(stderr, "[spu-yield] lane=%u SPU img=2 wid=%u lane idle (other_waiting=%d cur_ready=%u) -> exitToKernel (0x9C0)\n",
++                                        lane, cur_wid, other_waiting ? 1 : 0, cur_ready);
+                                 fflush(stderr);
+                             }
+                             ctx->pc = SPURS_PM_EXIT_TO_KERNEL_LS;
+-- 
+2.48.1.windows.1
+

@@ -1,0 +1,142 @@
+From 2d6ca27e3b99f07a138965a64044fb6b26df5e89 Mon Sep 17 00:00:00 2001
+From: YJuDeAd <robinrashi@gmail.com>
+Date: Sun, 1 Nov 2026 15:57:04 +0530
+Subject: [PATCH 56/57] fix(spurs): add workload poll thread yield and SPU
+ queue-scan cooperative preemption
+
+---
+ libs/spurs/cellSpurs.c     | 10 ++++--
+ runtime/spu/spu_channels.c | 72 +++++++++++++++++++++++++++++++++++++-
+ 2 files changed, 79 insertions(+), 3 deletions(-)
+
+diff --git a/libs/spurs/cellSpurs.c b/libs/spurs/cellSpurs.c
+index 17ea73be..45402f87 100644
+--- a/libs/spurs/cellSpurs.c
++++ b/libs/spurs/cellSpurs.c
+@@ -3681,9 +3681,15 @@ s32 cellSpursGetWorkloadInfo(u64 spurs_ea, u32 wid, u64 info_ea)
+     *(vm_base + base + 0x27) = 0;                                          /* reserved */
+     ReleaseSRWLockExclusive(&s_workload_registry_lock);
+ 
++#if defined(_WIN32)
++    if (ready_cnt > 0 || cur_cont > 0) {
++        SwitchToThread();
++    }
++#endif
++
+     static int s_info_log_cnt = 0;
+-    if (wid == 9 || base == 0x0FEFF480u) {
+-        if (++s_info_log_cnt <= 30 || (s_info_log_cnt % 50000 == 0)) {
++    if (1) {
++        if (++s_info_log_cnt <= 50 || (s_info_log_cnt % 50000 == 0)) {
+             fprintf(stderr, "[cellSpursGetWorkloadInfo #%d] wid=%u info_ea=0x%08X: data=0x%llX readyCount=%u cur_cont=%u max_cont=%u state=%u\n",
+                     s_info_log_cnt, wid, base, (unsigned long long)w->data, ready_cnt, cur_cont,
+                     (unsigned)wkl_maxcont(se, wid), (unsigned)vm_read8(se + wkl_state_off(wid)));
+diff --git a/runtime/spu/spu_channels.c b/runtime/spu/spu_channels.c
+index 299db402..f1f61db1 100644
+--- a/runtime/spu/spu_channels.c
++++ b/runtime/spu/spu_channels.c
+@@ -511,6 +511,7 @@ void spu_evlog(const spu_context* ctx, const char* what, uint32_t a, uint32_t b)
+ /* Returns 1 if `cmd` is an atomic line op and was handled here, else 0. */
+ static int spu_mfc_atomic(spu_context* ctx, uint32_t cmd)
+ {
++    static SPU_THREAD_LOCAL uint32_t s_consec_fails = 0;
+     /* Classify FIRST. Every MFC_Cmd write lands here, and only the switch at
+      * the bottom used to filter -- so the uncommitted-EA guard below reported
+      * ORDINARY DMA as `[spu-atomic]`. A plain put (0x20) to a garbage EA read
+@@ -906,6 +907,7 @@ static int spu_mfc_atomic(spu_context* ctx, uint32_t cmd)
+                 uint32_t lane = spu_ctx_lane(ctx);
+                 g_lane_atomic[lane].putllc_ok++;
+                 g_lane_atomic[lane].last_ea = (uint32_t)ea;
++                s_consec_fails = 0;
+             } /* PUTLLC_SUCCESS */
+         } else {
+             ctx->atomic_stat = 1; {
+@@ -913,9 +915,16 @@ static int spu_mfc_atomic(spu_context* ctx, uint32_t cmd)
+                 uint32_t lane = spu_ctx_lane(ctx);
+                 g_lane_atomic[lane].putllc_fail++;
+                 g_lane_atomic[lane].last_ea = (uint32_t)ea;
++                s_consec_fails++;
++                if (s_consec_fails > 64) {
++                    Sleep(1);
++                } else if (s_consec_fails > 16) {
++                    SwitchToThread();
++                } else {
+ #if defined(_WIN32)
+-                _mm_pause();
++                    _mm_pause();
+ #endif
++                }
+             } /* PUTLLC_FAILURE -> retry */
+             /* SPU_PUTLLC_WHY=1: which of the three conditions failed.
+              * A PUTLLC retry loop that never succeeds is a livelock, and
+@@ -979,6 +988,67 @@ static int spu_mfc_atomic(spu_context* ctx, uint32_t cmd)
+         if (ctx->atomic_stat == 0) {
+             spu_taskset_line_committed(ea & ~127u);
+             if (g_spu_line_commit_hook) g_spu_line_commit_hook(ea & ~127u);
++
++            if (ctx->policy_mode && ctx->image_id == 2) {
++                const uint8_t* q = ctx->ls + 0x1C4;
++                const uint8_t* k = ctx->ls + 0x1DC;
++                uint32_t spurs_ea = ((uint32_t)q[0] << 24) | ((uint32_t)q[1] << 16) | ((uint32_t)q[2] << 8) | q[3];
++                uint32_t cur_wid = ((uint32_t)k[0] << 24) | ((uint32_t)k[1] << 16) | ((uint32_t)k[2] << 8) | k[3];
++
++                if (spurs_ea && vm_base) {
++                    uint16_t loadJobState = ((uint16_t)ctx->ls[0x12A0] << 8) | ctx->ls[0x12A1];
++                    int8_t storeJobNum = (int8_t)ctx->ls[0x12F0];
++                    int8_t runJobNum = (int8_t)ctx->ls[0x12E0];
++                    uint32_t pc = ctx->pc & SPU_LS_MASK;
++
++                    static SPU_THREAD_LOCAL uint32_t s_queue_spin_cnt = 0;
++                    bool in_queue_scan = (pc >= 0x1A60 && pc <= 0x1B68);
++                    if (in_queue_scan) {
++                        s_queue_spin_cnt++;
++                        if (s_queue_spin_cnt > 64) {
++                            Sleep(1);
++                        } else if (s_queue_spin_cnt > 16) {
++                            SwitchToThread();
++                        }
++                    } else {
++                        s_queue_spin_cnt = 0;
++                    }
++
++                    if ((loadJobState == 0 || (in_queue_scan && s_queue_spin_cnt > 32)) && storeJobNum < 0 && runJobNum < 0) {
++                        uint32_t enabled = ((uint32_t)vm_base[spurs_ea + 0xB0] << 24) |
++                                           ((uint32_t)vm_base[spurs_ea + 0xB1] << 16) |
++                                           ((uint32_t)vm_base[spurs_ea + 0xB2] << 8) |
++                                           vm_base[spurs_ea + 0xB3];
++
++                        bool other_waiting = false;
++                        for (uint32_t w = 0; w < 32; w++) {
++                            if (w == cur_wid) continue;
++                            if (!(enabled & (0x80000000u >> w))) continue;
++                            uint8_t state = vm_base[spurs_ea + (w < 16 ? 0x80 + w : 0xD0 + (w - 16))];
++                            if (state != 2) continue;
++                            uint8_t ready = vm_base[spurs_ea + (w < 16 ? w : 0x10 + (w - 16))];
++                            if (ready > 0) {
++                                other_waiting = true;
++                                break;
++                            }
++                        }
++
++                        uint8_t cur_ready = (cur_wid < 32) ? vm_base[spurs_ea + (cur_wid < 16 ? cur_wid : 0x10 + (cur_wid - 16))] : 0;
++
++                        if (other_waiting || cur_ready == 0) {
++                            static int s_yield_count = 0;
++                            if (++s_yield_count <= 20 || (s_yield_count % 5000 == 0)) {
++                                fprintf(stderr, "[spu-yield] SPU img=2 wid=%u lane idle (other_waiting=%d cur_ready=%u) -> exitToKernel (0x9C0)\n",
++                                        cur_wid, other_waiting ? 1 : 0, cur_ready);
++                                fflush(stderr);
++                            }
++                            ctx->pc = SPURS_PM_EXIT_TO_KERNEL_LS;
++                            spu_halt(ctx);
++                            return 1;
++                        }
++                    }
++                }
++            }
+         }
+         return 1;
+ 
+-- 
+2.48.1.windows.1
+
