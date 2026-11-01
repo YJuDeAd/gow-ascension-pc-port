@@ -53,6 +53,7 @@ GOW_WEAK HANDLE g_spurs_lane_thread[8] = {0};
 GOW_WEAK LaneAtomicStats g_lane_atomic[8] = {{0}};
 GOW_WEAK SpursPollEntry g_spurs_poll_hist[5] = {{0}};
 GOW_WEAK volatile uint32_t g_spurs_poll_hist_idx = 0;
+int g_gow_bypass_used = 0;
 extern unsigned long long ps3_qpc_us(void);
 extern ppu_context* volatile g_ppu_main_ctx;
 extern ppu_thread_info g_ppu_threads[PPU_THREAD_MAX];
@@ -522,8 +523,9 @@ static void task4_monitor_thread_func()
             const char* main_last_hle = g_ppu_thread_diags[1].last_hle_name ? g_ppu_thread_diags[1].last_hle_name : "(none)";
             uint32_t live_draws = rsx_live_draw_get_last_draws();
             uint32_t presents = rsx_live_draw_get_frames();
-            fprintf(stderr, "[STAGE] t=%d main_lr=0x%08X main_last_hle=%s live_draws=%u presents=%u\n",
-                    sec, main_lr, main_last_hle, live_draws, presents);
+            const char* stage_tag = g_gow_bypass_used ? "[STAGE-BYPASS-EXCLUDED]" : "[STAGE]";
+            fprintf(stderr, "%s t=%d main_lr=0x%08X main_last_hle=%s live_draws=%u presents=%u\n",
+                    stage_tag, sec, main_lr, main_last_hle, live_draws, presents);
             fflush(stderr);
         }
 
@@ -623,49 +625,58 @@ static void task4_monitor_thread_func()
                     uint16_t exp_target = (r5 < 0x10000 && (uint16_t)r5 > target_hdr) ? (uint16_t)r5 : target_hdr;
                     fprintf(stderr, " => %s\n", (min_l >= exp_target) ? "SATISFIED (EXIT LOOP)" : "WAITING (min_L < target)");
 
-                    static int s_7b1c_timeout_sec = -1;
-                    if (s_7b1c_timeout_sec < 0) {
-                        const char* env_t = getenv("GOW_7B1C_TIMEOUT_SEC");
-                        s_7b1c_timeout_sec = env_t ? atoi(env_t) : 5;
+                    static int s_7b1c_bp_enabled = -1;
+                    if (s_7b1c_bp_enabled < 0) {
+                        const char* env_bp = getenv("GOW_7B1C_BYPASS");
+                        s_7b1c_bp_enabled = (env_bp && (strcmp(env_bp, "1") == 0 || strcmp(env_bp, "true") == 0)) ? 1 : 0;
                     }
 
-                    if (s_7b1c_timeout_sec > 0 && s_dump_7b1c_sec >= s_7b1c_timeout_sec) {
-                        uint16_t req = target_hdr;
-                        if (r5 < 0x10000 && (uint16_t)r5 > req) {
-                            req = (uint16_t)r5;
-                        }
-                        if (req == 0) req = 1;
-
-                        fprintf(stderr, "\n[0x00467B1C-BYPASS] Guarded timeout reached (%d s >= %d s). Zeroing stuck sentinels & satisfying target_r5=%u on mgr_ea=0x%08X q_ea=0x%08X (L0..L6 set to %u)\n",
-                                s_dump_7b1c_sec, s_7b1c_timeout_sec, req, mgr_ea, q_ea, req);
-
-                        for (int l = 0; l < 7; l++) {
-                            *(uint16_t*)(vm_base + q_ea + 2 + l * 2) = __builtin_bswap16(req);
+                    if (s_7b1c_bp_enabled) {
+                        static int s_7b1c_timeout_sec = -1;
+                        if (s_7b1c_timeout_sec < 0) {
+                            const char* env_t = getenv("GOW_7B1C_TIMEOUT_SEC");
+                            s_7b1c_timeout_sec = env_t ? atoi(env_t) : 5;
                         }
 
-                        // Also advance all active queues on mgr_ea
-                        for (uint32_t q = 0; q < 8; q++) {
-                            uint32_t cur_q = mgr_ea + (q << 4) + 0x40;
-                            uint16_t q_target = __builtin_bswap16(*(const uint16_t*)(vm_base + cur_q));
-                            if (q == (uint32_t)r4 && req > q_target) {
-                                q_target = req;
+                        if (s_7b1c_timeout_sec > 0 && s_dump_7b1c_sec >= s_7b1c_timeout_sec) {
+                            g_gow_bypass_used = 1;
+                            uint16_t req = target_hdr;
+                            if (r5 < 0x10000 && (uint16_t)r5 > req) {
+                                req = (uint16_t)r5;
                             }
-                            if (q_target > 0) {
-                                for (int l = 0; l < 7; l++) {
-                                    *(uint16_t*)(vm_base + cur_q + 2 + l * 2) = __builtin_bswap16(q_target);
+                            if (req == 0) req = 1;
+
+                            fprintf(stderr, "\n[BYPASS-USED] 0x00467B1C: Guarded timeout reached (%d s >= %d s). Zeroing stuck sentinels & satisfying target_r5=%u on mgr_ea=0x%08X q_ea=0x%08X (L0..L6 set to %u)\n",
+                                    s_dump_7b1c_sec, s_7b1c_timeout_sec, req, mgr_ea, q_ea, req);
+
+                            for (int l = 0; l < 7; l++) {
+                                *(uint16_t*)(vm_base + q_ea + 2 + l * 2) = __builtin_bswap16(req);
+                            }
+
+                            // Also advance all active queues on mgr_ea
+                            for (uint32_t q = 0; q < 8; q++) {
+                                uint32_t cur_q = mgr_ea + (q << 4) + 0x40;
+                                uint16_t q_target = __builtin_bswap16(*(const uint16_t*)(vm_base + cur_q));
+                                if (q == (uint32_t)r4 && req > q_target) {
+                                    q_target = req;
+                                }
+                                if (q_target > 0) {
+                                    for (int l = 0; l < 7; l++) {
+                                        *(uint16_t*)(vm_base + cur_q + 2 + l * 2) = __builtin_bswap16(q_target);
+                                    }
                                 }
                             }
-                        }
 
-                        // Also ensure wid target readyCount is clear in SPURS instance if waiting
-                        if (mgr_holder && mgr_holder < 0xF0000000u) {
-                            uint32_t spurs_ea = __builtin_bswap32(*(const uint32_t*)(vm_base + mgr_holder + 4));
-                            uint32_t wid_target = __builtin_bswap32(*(const uint32_t*)(vm_base + mgr_holder + 8));
-                            if (spurs_ea && spurs_ea < 0xF0000000u && wid_target < 32) {
-                                uint32_t ready_off = (wid_target < 16 ? wid_target : 0x10 + (wid_target - 16));
-                                *(vm_base + spurs_ea + ready_off) = 0;
-                                fprintf(stderr, "[0x00467B1C-BYPASS] Zeroed readyCount for wid=%u in SpursInst@0x%08X (offset 0x%X)\n",
-                                        wid_target, spurs_ea, ready_off);
+                            // Also ensure wid target readyCount is clear in SPURS instance if waiting
+                            if (mgr_holder && mgr_holder < 0xF0000000u) {
+                                uint32_t spurs_ea = __builtin_bswap32(*(const uint32_t*)(vm_base + mgr_holder + 4));
+                                uint32_t wid_target = __builtin_bswap32(*(const uint32_t*)(vm_base + mgr_holder + 8));
+                                if (spurs_ea && spurs_ea < 0xF0000000u && wid_target < 32) {
+                                    uint32_t ready_off = (wid_target < 16 ? wid_target : 0x10 + (wid_target - 16));
+                                    *(vm_base + spurs_ea + ready_off) = 0;
+                                    fprintf(stderr, "[BYPASS-USED] Zeroed readyCount for wid=%u in SpursInst@0x%08X (offset 0x%X)\n",
+                                            wid_target, spurs_ea, ready_off);
+                                }
                             }
                         }
                     }
@@ -702,12 +713,13 @@ static void task4_monitor_thread_func()
                     uint32_t ev_stat = c ? c->event_status : 0;
                     uint32_t ev_mask = c ? c->event_mask : 0;
                     uint32_t cur_pc  = c ? ((uint32_t)c->pc & SPU_LS_MASK) : 0;
-                    fprintf(stderr, "  Atomics: GETLLAR=%llu, PUTLLC_OK=%llu, PUTLLC_FAIL=%llu, PUTLLUC=%llu, LR_Events=%llu\n",
+                    fprintf(stderr, "  Atomics: GETLLAR=%llu, PUTLLC_OK=%llu, PUTLLC_FAIL=%llu, PUTLLUC=%llu, LR_Events=%llu, LastEA=0x%08X\n",
                             (unsigned long long)g_lane_atomic[l].getllar,
                             (unsigned long long)g_lane_atomic[l].putllc_ok,
                             (unsigned long long)g_lane_atomic[l].putllc_fail,
                             (unsigned long long)g_lane_atomic[l].putlluc,
-                            (unsigned long long)g_lane_atomic[l].lr_events);
+                            (unsigned long long)g_lane_atomic[l].lr_events,
+                            (unsigned)g_lane_atomic[l].last_ea);
                     fprintf(stderr, "  Events: status=0x%X mask=0x%X cur_pc=0x%05X\n", ev_stat, ev_mask, cur_pc);
                     const char* wait_desc = "computing / polling";
                     if (cur_pc == 0x23A0 || cur_pc == 0x2DA8) wait_desc = "waiting for interrupt / timer";
