@@ -4,11 +4,17 @@
 
 | Field | Value |
 |---|---|
-| **Active Phase** | Phase 13 — Wake Up Dead SPU Lanes (cur_pc=0x00000) & Fix SPURS 32-Workload Dispatch |
+| **Active Phase** | Phase 15 — Implement Accurate Big-Endian cellSpursGetWorkloadInfo (wid=9) |
 | **Milestone** | 4 — Soft-Lock Remediation & SPU Preemption |
 | **Last Updated** | 2026-11-01 |
 
 ## Progress
+
+### Phase 14: Inspect & Fix Queue-3 Counter Polling at 0x00467B1C (0x71632670)
+- [x] Audited lifted PPU code in func_00466E28 (called with lr=0x00467B1C from func_00467B08, qid=3, r31=0x716002E0, mgr_ea=0x71632600): confirmed unsigned min reduction across 7 16-bit counters at 0x71632672..0x7163267E against target_r5=1.
+- [x] Verified sentinel 0xFFFF handling: unallocated lanes L1..L6 are initialized to 0xFFFF via vector stores in func_00466B88, acting as neutral identities for min(L0..L6), so L0 alone dictates completion.
+- [x] Verified endianness (be_t): all reads/writes via vm_read16/vm_write16 are big-endian. Fixed ready_off and state_off calculation in upstream_compat.cpp task4 workload audit.
+- [x] Added wid=9, wid=10 (RenJobSet10 owning mgr_ea=0x71632600), and wid=12 to SPURS_MAXCONT concurrency overrides in ascension_defaults.cpp.
 
 ### Phase 13: Wake Up Dead SPU Lanes & Fix SPURS 32-Workload Dispatch
 - [x] SPU lane context and active wid cleanup on policy module exit (g_spurs_lane_active_wid reset to 255, g_spurs_lane_ctx reset to NULL in spurs_policy.c).

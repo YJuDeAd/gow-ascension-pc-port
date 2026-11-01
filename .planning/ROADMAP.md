@@ -361,9 +361,9 @@
 - [x] Fix SPURS2 32-workload priority iteration (wid >= 16) across all 32 workloads (0..31) rather than clamping/masking at 16.
 
 ### Phase 14: Inspect & Fix Queue-3 Counter Polling at 0x00467B1C (0x71632670)
-- [ ] Audit lifted PPU code at 0x00467B1C and [0x00467B1C-WAIT] diagnostics for offsets from r31 (0x716002E0) or mgr_ea (0x71632600) compared against target_r5=1 and L0..L6.
-- [ ] Verify endianness (bswap16/bswap32) on writes to 0x71632600 (+0x1C or +0x44..+0x7C).
-- [ ] Verify sentinel 0xFFFF handling and update flow from SPU jobs on wid=9, wid=11, or wid=18.
+- [x] Audit lifted PPU code at 0x00467B1C and [0x00467B1C-WAIT] diagnostics for offsets from r31 (0x716002E0) or mgr_ea (0x71632600) compared against target_r5=1 and L0..L6.
+- [x] Verify endianness (bswap16/bswap32) on writes to 0x71632600 (+0x1C or +0x44..+0x7C). Fixed ready_off and state_off calculation in upstream_compat.cpp task4 audit.
+- [x] Verify sentinel 0xFFFF handling and update flow from SPU jobs on wid=9, wid=11, or wid=18. Added wid=9,10,12 to SPURS_MAXCONT concurrency overrides in ascension_defaults.cpp.
 
 ### Phase 15: Implement Accurate Big-Endian cellSpursGetWorkloadInfo (wid=9)
 - [ ] Audit HLE implementation of cellSpursGetWorkloadInfo for wid=9 (info=0x0FEFF480).

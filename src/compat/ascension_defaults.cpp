@@ -212,7 +212,7 @@ extern "C" void ascension_apply_defaults(void)
     if (getenv("GOW_REVERT_DDE3F83")) {
         set_default("SPURS_MAXCONT", "3=5,13=3,15=5,16=5,17=5");
     } else {
-        set_default("SPURS_MAXCONT", "3=5,11=5,13=3,15=5,16=5,17=5,18=5");
+        set_default("SPURS_MAXCONT", "3=5,9=5,10=5,11=5,12=5,13=3,15=5,16=5,17=5,18=5");
     }
     set_default("SPURS_IDLE_BACKOFF_MAX", "0");
     set_default("SPU_REJOIN", "204:9700-1C000");

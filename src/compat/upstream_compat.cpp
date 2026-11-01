@@ -606,11 +606,21 @@ static void task4_monitor_thread_func()
                                 __builtin_bswap32(*(const uint32_t*)(vm_base + mgr_ea + (w + 3) * 4)));
                     }
                     uint32_t q_ea = mgr_ea + ((uint32_t)r4 << 4) + 0x40;
-                    fprintf(stderr, ">>> [0x00467B1C QUEUE-%llu COUNTERS @ 0x%08X]:", (unsigned long long)r4, q_ea);
+                    uint16_t target_hdr = __builtin_bswap16(*(const uint16_t*)(vm_base + q_ea));
+                    uint16_t l_vals[7];
+                    uint16_t min_l = 0xFFFF;
+                    int sentinel_cnt = 0;
                     for (int l = 0; l < 7; l++) {
-                        fprintf(stderr, " L%d=%u", l, (unsigned)__builtin_bswap16(*(const uint16_t*)(vm_base + q_ea + 2 + l * 2)));
+                        l_vals[l] = __builtin_bswap16(*(const uint16_t*)(vm_base + q_ea + 2 + l * 2));
+                        if (l_vals[l] < min_l) min_l = l_vals[l];
+                        if (l_vals[l] == 0xFFFF) sentinel_cnt++;
                     }
-                    fprintf(stderr, "\n");
+                    fprintf(stderr, ">>> [0x00467B1C QUEUE-%llu COUNTERS @ 0x%08X] target=%u min_L=%u (sentinels=%d/7):",
+                            (unsigned long long)r4, q_ea, target_hdr, min_l, sentinel_cnt);
+                    for (int l = 0; l < 7; l++) {
+                        fprintf(stderr, " L%d=%u", l, (unsigned)l_vals[l]);
+                    }
+                    fprintf(stderr, " => %s\n", (min_l >= target_hdr) ? "SATISFIED (EXIT LOOP)" : "WAITING (L0 < target)");
                 }
 
                 // TASK 1 & TASK 3 DETAILED AUDIT
@@ -739,13 +749,16 @@ static void task4_monitor_thread_func()
             fprintf(stderr, "\n=== [TASK4-WORKLOAD-STATUS @ %ds] ===\n", sec);
             for (auto& w : wks) {
                 uint8_t ready = 0;
+                uint8_t state = 0;
                 if (vm_base && spurs_ea) {
-                    uint32_t ready_off = (w.wid < 16) ? (0x90 + w.wid) : (0xE0 + (w.wid - 16));
+                    uint32_t ready_off = (w.wid < 16) ? w.wid : (0x10 + (w.wid - 16));
+                    uint32_t state_off = (w.wid < 16) ? (0x80 + w.wid) : (0xD0 + (w.wid - 16));
                     ready = *(vm_base + spurs_ea + ready_off);
+                    state = *(vm_base + spurs_ea + state_off);
                 }
                 uint32_t pm_entries = (w.wid < 32) ? g_spurs_pm_entry_count[w.wid] : 0;
-                fprintf(stderr, "Workload '%s' (wid=%u, data_ea=0x%08X): readyCount=%u, pm_entries=%u%s\n",
-                        w.name, w.wid, w.ea, (unsigned)ready, pm_entries,
+                fprintf(stderr, "Workload '%s' (wid=%u, data_ea=0x%08X): state=%u readyCount=%u, pm_entries=%u%s\n",
+                        w.name, w.wid, w.ea, (unsigned)state, (unsigned)ready, pm_entries,
                         (w.wid >= 9 && pm_entries > 0) ? " [WID-RUNNING]" : "");
             }
             fprintf(stderr, "======================================\n\n");
