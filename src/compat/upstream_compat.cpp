@@ -509,6 +509,17 @@ static void dump_all_threads_stacks(int sec) {}
 
 extern "C" uint32_t rsx_live_draw_get_last_draws(void);
 extern "C" uint32_t rsx_live_draw_get_frames(void);
+extern "C" volatile uint64_t g_spu_yield_count[8];
+
+static bool is_fake_done_enabled()
+{
+    static int s_fake_enabled = -1;
+    if (s_fake_enabled < 0) {
+        const char* e = getenv("GOW_FAKE_DONE");
+        s_fake_enabled = (e && (strcmp(e, "1") == 0 || strcmp(e, "true") == 0)) ? 1 : 0;
+    }
+    return s_fake_enabled == 1;
+}
 
 static void task4_monitor_thread_func()
 {
@@ -517,45 +528,48 @@ static void task4_monitor_thread_func()
     for (int sec = 1; sec <= 300; sec++) {
         for (int ms = 0; ms < 1000; ms += 50) {
             std::this_thread::sleep_for(std::chrono::milliseconds(50));
-            uint32_t fast_lr = g_ppu_main_ctx ? (uint32_t)g_ppu_main_ctx->lr : 0;
-            if (vm_base && g_ppu_main_ctx && (fast_lr == 0x00467B1C || (fast_lr >= 0x00466E28 && fast_lr <= 0x00467054))) {
-                uint64_t r31 = g_ppu_main_ctx->gpr[31];
-                uint64_t r5  = g_ppu_main_ctx->gpr[5];
-                uint64_t r4  = g_ppu_main_ctx->gpr[4];
-                uint32_t mgr_holder = (uint32_t)r31;
-                uint32_t mgr_ea = (mgr_holder && mgr_holder < 0xF0000000u) ? __builtin_bswap32(*(const uint32_t*)(vm_base + mgr_holder)) : 0;
-                if (mgr_ea && mgr_ea < 0xF0000000u) {
-                    uint32_t q_ea = mgr_ea + ((uint32_t)r4 << 4) + 0x40;
-                    uint16_t target_hdr = __builtin_bswap16(*(const uint16_t*)(vm_base + q_ea));
-                    uint16_t exp_target = (r5 < 0x10000 && (uint16_t)r5 > target_hdr) ? (uint16_t)r5 : target_hdr;
-                    uint16_t min_l = 0xFFFF;
-                    uint32_t active_sum = 0;
-                    for (int l = 0; l < 7; l++) {
-                        uint16_t v = __builtin_bswap16(*(const uint16_t*)(vm_base + q_ea + 2 + l * 2));
-                        if (v != 0xFFFF) {
-                            active_sum += v;
-                            if (v < min_l) min_l = v;
-                        }
-                    }
-                    if ((min_l >= exp_target) || (exp_target > 0 && active_sum >= exp_target)) {
-                        if (min_l < exp_target) {
-                            for (int l = 0; l < 7; l++) {
-                                uint16_t v = __builtin_bswap16(*(const uint16_t*)(vm_base + q_ea + 2 + l * 2));
-                                if (v != 0xFFFF && v < exp_target) {
-                                    *(uint16_t*)(vm_base + q_ea + 2 + l * 2) = __builtin_bswap16(exp_target);
-                                }
+            if (is_fake_done_enabled()) {
+                uint32_t fast_lr = g_ppu_main_ctx ? (uint32_t)g_ppu_main_ctx->lr : 0;
+                if (vm_base && g_ppu_main_ctx && (fast_lr == 0x00467B1C || (fast_lr >= 0x00466E28 && fast_lr <= 0x00467054))) {
+                    uint64_t r31 = g_ppu_main_ctx->gpr[31];
+                    uint64_t r5  = g_ppu_main_ctx->gpr[5];
+                    uint64_t r4  = g_ppu_main_ctx->gpr[4];
+                    uint32_t mgr_holder = (uint32_t)r31;
+                    uint32_t mgr_ea = (mgr_holder && mgr_holder < 0xF0000000u) ? __builtin_bswap32(*(const uint32_t*)(vm_base + mgr_holder)) : 0;
+                    if (mgr_ea && mgr_ea < 0xF0000000u) {
+                        uint32_t q_ea = mgr_ea + ((uint32_t)r4 << 4) + 0x40;
+                        uint16_t target_hdr = __builtin_bswap16(*(const uint16_t*)(vm_base + q_ea));
+                        uint16_t exp_target = (r5 < 0x10000 && (uint16_t)r5 > target_hdr) ? (uint16_t)r5 : target_hdr;
+                        uint16_t min_l = 0xFFFF;
+                        uint32_t active_sum = 0;
+                        for (int l = 0; l < 7; l++) {
+                            uint16_t v = __builtin_bswap16(*(const uint16_t*)(vm_base + q_ea + 2 + l * 2));
+                            if (v != 0xFFFF) {
+                                active_sum += v;
+                                if (v < min_l) min_l = v;
                             }
                         }
-                        if (r31 >= 0x10000u) {
-                            uint32_t spurs_ptr = __builtin_bswap32(*(const uint32_t*)(vm_base + r31 + 4));
-                            uint32_t q_wid = __builtin_bswap32(*(const uint32_t*)(vm_base + r31 + 8));
-                            if (spurs_ptr >= 0x10000u && q_wid < 32) {
-                                uint32_t ready_off = (q_wid < 16) ? q_wid : (0x10 + (q_wid - 16));
-                                uint8_t cur_r = *(vm_base + spurs_ptr + ready_off);
-                                if (cur_r > 0) {
-                                    fprintf(stderr, "[WWS-FAST-DONE] Queue %llu satisfied (min_L=%u sum_L=%u >= target=%u). Updating wid=%u readyCount from %u to 0\n",
-                                            (unsigned long long)r4, min_l, active_sum, exp_target, q_wid, cur_r);
-                                    *(vm_base + spurs_ptr + ready_off) = 0;
+                        if ((min_l >= exp_target) || (exp_target > 0 && active_sum >= exp_target)) {
+                            g_gow_bypass_used = 1;
+                            if (min_l < exp_target) {
+                                for (int l = 0; l < 7; l++) {
+                                    uint16_t v = __builtin_bswap16(*(const uint16_t*)(vm_base + q_ea + 2 + l * 2));
+                                    if (v != 0xFFFF && v < exp_target) {
+                                        *(uint16_t*)(vm_base + q_ea + 2 + l * 2) = __builtin_bswap16(exp_target);
+                                    }
+                                }
+                            }
+                            if (r31 >= 0x10000u) {
+                                uint32_t spurs_ptr = __builtin_bswap32(*(const uint32_t*)(vm_base + r31 + 4));
+                                uint32_t q_wid = __builtin_bswap32(*(const uint32_t*)(vm_base + r31 + 8));
+                                if (spurs_ptr >= 0x10000u && q_wid < 32) {
+                                    uint32_t ready_off = (q_wid < 16) ? q_wid : (0x10 + (q_wid - 16));
+                                    uint8_t cur_r = *(vm_base + spurs_ptr + ready_off);
+                                    if (cur_r > 0) {
+                                        fprintf(stderr, "[FAKE-USED] [WWS-FAST-DONE] Queue %llu satisfied (min_L=%u sum_L=%u >= target=%u). Updating wid=%u readyCount from %u to 0\n",
+                                                (unsigned long long)r4, min_l, active_sum, exp_target, q_wid, cur_r);
+                                        *(vm_base + spurs_ptr + ready_off) = 0;
+                                    }
                                 }
                             }
                         }
@@ -573,6 +587,20 @@ static void task4_monitor_thread_func()
             const char* stage_tag = g_gow_bypass_used ? "[STAGE-BYPASS-EXCLUDED]" : "[STAGE]";
             fprintf(stderr, "%s t=%d main_lr=0x%08X main_last_hle=%s live_draws=%u presents=%u\n",
                     stage_tag, sec, main_lr, main_last_hle, live_draws, presents);
+            if (vm_base) {
+                uint32_t q3_ea = 0x71632670u;
+                uint16_t q3_target = __builtin_bswap16(*(const uint16_t*)(vm_base + q3_ea));
+                uint16_t q3_l[7];
+                uint16_t q3_min = 0xFFFF;
+                for (int l = 0; l < 7; l++) {
+                    q3_l[l] = __builtin_bswap16(*(const uint16_t*)(vm_base + q3_ea + 2 + l * 2));
+                    if (q3_l[l] < q3_min) q3_min = q3_l[l];
+                }
+                fprintf(stderr, "[QUEUE3-TELEMETRY @ %ds] target=%u min_L=%u : L0=%u L1=%u L2=%u L3=%u L4=%u L5=%u L6=%u\n",
+                        sec, (unsigned)q3_target, (unsigned)q3_min,
+                        (unsigned)q3_l[0], (unsigned)q3_l[1], (unsigned)q3_l[2], (unsigned)q3_l[3],
+                        (unsigned)q3_l[4], (unsigned)q3_l[5], (unsigned)q3_l[6]);
+            }
             fflush(stderr);
         }
 
@@ -678,7 +706,8 @@ static void task4_monitor_thread_func()
                     }
 
                     bool satisfied = (min_l >= exp_target) || (exp_target > 0 && active_sum >= exp_target);
-                    if (satisfied) {
+                    if (is_fake_done_enabled() && satisfied) {
+                        g_gow_bypass_used = 1;
                         if (min_l < exp_target) {
                             for (int l = 0; l < 7; l++) {
                                 if (l_vals[l] != 0xFFFF && l_vals[l] < exp_target) {
@@ -693,7 +722,7 @@ static void task4_monitor_thread_func()
                                 uint32_t ready_off = (q_wid < 16) ? q_wid : (0x10 + (q_wid - 16));
                                 uint8_t cur_r = *(vm_base + spurs_ptr + ready_off);
                                 if (cur_r > 0) {
-                                    fprintf(stderr, "[WWS-QUEUE-DONE] Queue %llu satisfied (min_L=%u sum_L=%u >= target=%u). Updating wid=%u readyCount from %u to 0\n",
+                                    fprintf(stderr, "[FAKE-USED] [WWS-QUEUE-DONE] Queue %llu satisfied (min_L=%u sum_L=%u >= target=%u). Updating wid=%u readyCount from %u to 0\n",
                                             (unsigned long long)r4, min_l, active_sum, exp_target, q_wid, cur_r);
                                     *(vm_base + spurs_ptr + ready_off) = 0;
                                 }
@@ -722,7 +751,7 @@ static void task4_monitor_thread_func()
                             }
                             if (req == 0) req = 1;
 
-                            fprintf(stderr, "\n[BYPASS-USED] 0x00467B1C: Guarded timeout reached (%d s >= %d s). Zeroing stuck sentinels & satisfying target_r5=%u on mgr_ea=0x%08X q_ea=0x%08X (L0..L6 set to %u)\n",
+                            fprintf(stderr, "\n[FAKE-USED] [BYPASS-USED] 0x00467B1C: Guarded timeout reached (%d s >= %d s). Zeroing stuck sentinels & satisfying target_r5=%u on mgr_ea=0x%08X q_ea=0x%08X (L0..L6 set to %u)\n",
                                     s_dump_7b1c_sec, s_7b1c_timeout_sec, req, mgr_ea, q_ea, req);
 
                             for (int l = 0; l < 7; l++) {
@@ -777,8 +806,8 @@ static void task4_monitor_thread_func()
                         user_ms = (((uint64_t)wu.dwHighDateTime << 32) | wu.dwLowDateTime) / 10000;
                         kern_ms = (((uint64_t)wk.dwHighDateTime << 32) | wk.dwLowDateTime) / 10000;
                     }
-                    fprintf(stderr, "Lane %d: wid=%u (%s), HostCPU=%llu ms (user %llu ms, kern %llu ms)\n",
-                            l, wid, (wid == 255) ? "IDLE/KERNEL" : "RUNNING", user_ms + kern_ms, user_ms, kern_ms);
+                    fprintf(stderr, "Lane %d: wid=%u (%s), HostCPU=%llu ms (user %llu ms, kern %llu ms), Yields=%llu\n",
+                            l, wid, (wid == 255) ? "IDLE/KERNEL" : "RUNNING", user_ms + kern_ms, user_ms, kern_ms, (unsigned long long)g_spu_yield_count[l]);
                     std::vector<std::pair<uint32_t, uint32_t>> sorted_pcs(pc_copy[l].begin(), pc_copy[l].end());
                     std::sort(sorted_pcs.begin(), sorted_pcs.end(), [](const auto& a, const auto& b) { return a.second > b.second; });
                     fprintf(stderr, "  PC Hist (1 kHz, top %zu):", std::min<size_t>(8, sorted_pcs.size()));
@@ -873,14 +902,20 @@ static void task4_monitor_thread_func()
                 {"SpursTaskset1",  1,  0x70027200},
                 {"SpursTaskset2",  2,  0x70029B80},
                 {"SpursTaskset3",  3,  0x74E65100},
+                {"Workload4",      4,  0},
+                {"Workload5",      5,  0},
+                {"Workload6",      6,  0},
+                {"Workload7",      7,  0},
                 {"BrBDblBufWrkld", 8,  0x009FDF80},
-                {"RenJobSet",      9,  0x71600580},
+                {"RenJobSet9",     9,  0x71600580},
                 {"RenJobSet10",    10, 0x71632600},
                 {"RenJobSet11",    11, 0x71664680},
                 {"RenJobSet12",    12, 0x71696700},
                 {"RenderJobs",     13, 0x71965600},
                 {"MeshProcJobs",   14, 0x71965B80},
+                {"Workload15",     15, 0},
                 {"SpursWkld16",    16, 0x73D6B900},
+                {"Workload17",     17, 0},
                 {"RsxSync18",      18, 0x73E83D80}
             };
 
