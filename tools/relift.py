@@ -95,42 +95,7 @@ def postprocess_lifted_chunks(out_dir: Path):
             print(f"  [postprocess] {cpp_file.name}: preserved gpr[3]/gpr[11] across {cnt} yield site(s)")
             replaced_count += cnt
 
-    # 2. In ppu_recomp_005.cpp: inject non-clobbering 0x3FC yield at Loop 3 (func_00466E28)
-    chunk5 = out_dir / "ppu_recomp_005.cpp"
-    if chunk5.exists():
-        text = chunk5.read_text(encoding="latin-1")
-        
-        # Loop 3 site 1: between func_006288DC (0x0046700C) and vm_read8(... + 0x93)
-        loop3_site1_old = (
-            "        ctx->lr = 0x0046700C; func_006288DC(ctx); DRAIN_TRAMPOLINE(ctx);\n"
-            "        /* nop */;\n"
-            "        ctx->gpr[0] = vm_read8(ctx->gpr[1] + 0x93);"
-        )
-        loop3_site1_new = (
-            "        ctx->lr = 0x0046700C; func_006288DC(ctx); DRAIN_TRAMPOLINE(ctx);\n"
-            "        { uint64_t _r3 = ctx->gpr[3], _r11 = ctx->gpr[11]; ctx->gpr[11] = 0x3FC; lv2_syscall(ctx); ctx->gpr[3] = _r3; ctx->gpr[11] = _r11; }\n"
-            "        ctx->gpr[0] = vm_read8(ctx->gpr[1] + 0x93);"
-        )
-        
-        # Loop 3 site 2: between func_006288DC (0x00467030) and vm_read8(... + 0x90)
-        loop3_site2_old = (
-            "        ctx->lr = 0x00467030; func_006288DC(ctx); DRAIN_TRAMPOLINE(ctx);\n"
-            "        /* nop */;\n"
-            "        ctx->gpr[0] = vm_read8(ctx->gpr[1] + 0x90);"
-        )
-        loop3_site2_new = (
-            "        ctx->lr = 0x00467030; func_006288DC(ctx); DRAIN_TRAMPOLINE(ctx);\n"
-            "        { uint64_t _r3 = ctx->gpr[3], _r11 = ctx->gpr[11]; ctx->gpr[11] = 0x3FC; lv2_syscall(ctx); ctx->gpr[3] = _r3; ctx->gpr[11] = _r11; }\n"
-            "        ctx->gpr[0] = vm_read8(ctx->gpr[1] + 0x90);"
-        )
-        
-        assert loop3_site1_old in text, "[FATAL] Loop 3 site 1 pattern not found in ppu_recomp_005.cpp!"
-        assert loop3_site2_old in text, "[FATAL] Loop 3 site 2 pattern not found in ppu_recomp_005.cpp!"
-        
-        text = text.replace(loop3_site1_old, loop3_site1_new)
-        text = text.replace(loop3_site2_old, loop3_site2_new)
-        chunk5.write_text(text, encoding="latin-1")
-        print("  [postprocess] ppu_recomp_005.cpp: successfully injected non-clobbering yields into func_00466E28 (Loop 3)")
+    print(f"[relift] Post-processed {replaced_count} yield site(s) with register preservation.")
 
 def main():
     parser = argparse.ArgumentParser(description="PPU code lifting wrapper for God of War: Ascension")

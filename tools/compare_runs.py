@@ -11,11 +11,13 @@ def load_summary(path):
 s_base = load_summary('build/logs/parity_10/summary.json')
 s_post = load_summary('build/logs/parity_10_post/summary.json')
 s_fixed = load_summary('build/logs/parity_10_fixed/summary.json')
+s_restored = load_summary('build/logs/parity_10_restored/summary.json')
 
 datasets = []
-if s_base: datasets.append(("Baseline (0198d37)", s_base))
-if s_post: datasets.append(("Broken Post-Relift (439b7b4)", s_post))
-if s_fixed: datasets.append(("Fixed Post-Relift (fixed)", s_fixed))
+if s_base: datasets.append(("Baseline (0198d37, 180s)", s_base))
+if s_post: datasets.append(("Broken Relift (439b7b4, 180s)", s_post))
+if s_fixed: datasets.append(("Corrupted Yield (4294d28, 45s)", s_fixed))
+if s_restored: datasets.append(("Restored (45s)", s_restored))
 
 print("=== MILESTONE DISTRIBUTION COMPARISON ===")
 def dist(dataset):
