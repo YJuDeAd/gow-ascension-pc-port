@@ -179,6 +179,24 @@ static std::string get_project_root()
     return dir;
 }
 
+unsigned logical_cpus()
+{
+#ifdef _WIN32
+    DWORD_PTR proc = 0, sys = 0;
+    if (GetProcessAffinityMask(GetCurrentProcess(), &proc, &sys) && proc) {
+        unsigned n = 0;
+        for (; proc; proc &= proc - 1) n++;
+        return n;
+    }
+    SYSTEM_INFO si;
+    GetSystemInfo(&si);
+    return si.dwNumberOfProcessors;
+#else
+    const long n = sysconf(_SC_NPROCESSORS_ONLN);
+    return n > 0 ? (unsigned)n : 1u;
+#endif
+}
+
 void set_default_overlay_font()
 {
     std::string dir = get_project_root();
@@ -211,12 +229,19 @@ extern "C" void ascension_apply_defaults(void)
     set_default("SPURS_READY_LEVEL", "1");
     set_default("SPURS_MAXCONT", "3=5,13=3,15=5,16=5,17=5");
     set_default("SPURS_IDLE_BACKOFF_MAX", "0");
+    set_default("SPURS_PIN", "1");
+    set_default("PS3_PIN_PPU", "1");
+    set_default("PS3_PPU_POLL_WAIT", "3E8378:99AAC4");
+    set_default("PS3_RSX_HOLD_WAIT", "1");
+    set_default("GOWA_PPU_SCHED_WAIT", "1");
     set_default("SPU_REJOIN", "204:9700-1C000");
     set_default("SPU_REJOIN_CALL", "1");
     set_default("LD_PERF_OVERLAY", "1");
     set_default("PS3_OVERLAY_COLORS", "#E2B86AFF,#0B090899,#E2B86AFF,#00000000");
     set_default_overlay_font();
     set_default("PS3_VERBOSE", "0");
+    if (logical_cpus() <= 8)
+        set_default("SPURS_NSPUS", "5");
     // Title-specific defaults:
     std::string root = get_project_root();
     std::string skip_intro_mod = root + "/mods/skip-intro";
@@ -289,5 +314,5 @@ struct AscensionDefaultsInit {
 } s_init;
 } // namespace
 
-extern "C" const char* const spu_title_nolift = "2:0";
+extern "C" const char* const spu_title_nolift = nullptr;
 
