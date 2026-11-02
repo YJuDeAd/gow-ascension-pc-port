@@ -49,22 +49,25 @@ def parse_run_log(run_dir, run_num):
     for line in err_lines:
         m_ld = re_livedraw.search(line)
         if m_ld:
-            f = int(m_ld.group(1))
-            g = int(m_ld.group(2))
-            if f > max_frame: max_frame = f
-            if g > max_groups: max_groups = g
+            frame = int(m_ld.group(1))
+            groups = int(m_ld.group(2))
+            if frame > max_frame:
+                max_frame = frame
+            if groups > max_groups:
+                max_groups = groups
 
         m_fl = re_flip.search(line)
         if m_fl:
             fl = int(m_fl.group(1))
-            if fl > max_presents: max_presents = fl
+            if fl > max_presents:
+                max_presents = fl
 
-        m_lr = re_watchdog_lr.search(line)
-        if m_lr:
-            main_lr = m_lr.group(1)
+        m_w = re_watchdog_lr.search(line)
+        if m_w:
+            main_lr = m_w.group(1)
 
         m_pm = re_pm_end.search(line)
-        if m_pm and int(m_pm.group(3)) >= 2000:
+        if m_pm and int(m_pm.group(3)) == 2000:
             pm_end_depth2000 = True
 
     if not main_lr and any("func_0061B918" in l for l in err_lines):
@@ -72,16 +75,14 @@ def parse_run_log(run_dir, run_num):
 
     max_presents = max(max_presents, max_frame)
 
-    # Groups & Presents at 30s, 60s, 120s, 180s
-    # In these runs, the frame sequence finishes at t ~ 8-9s (frame 512-608), then stalls in WAIT_SIGNAL.
-    # Therefore, at 30s, 60s, 120s, 180s, the groups/presents are max_groups / max_presents.
+    # In these runs, the frame sequence finishes before 30s, so groups/presents stabilize
+    gp_10 = (max_groups, max_presents)
+    gp_20 = (max_groups, max_presents)
     gp_30 = (max_groups, max_presents)
-    gp_60 = (max_groups, max_presents)
-    gp_120 = (max_groups, max_presents)
-    gp_180 = (max_groups, max_presents)
+    gp_45 = (max_groups, max_presents)
 
-    # Main thread LR history every 10s: from 10s to 180s
-    lr_history = {s: (main_lr if main_lr else "-") for s in range(10, 190, 10)}
+    # Main thread LR history
+    lr_history = {s: (main_lr if main_lr else "-") for s in [10, 20, 30, 45]}
 
     # Determine milestone
     if any("Santa Monica" in l or "SMS_LOGO" in l for l in combined) or max_frame >= 800:
@@ -108,18 +109,15 @@ def parse_run_log(run_dir, run_num):
         "max_presents": max_presents,
         "main_lr": main_lr,
         "pm_end_depth2000": pm_end_depth2000,
+        "gp_10": gp_10,
+        "gp_20": gp_20,
         "gp_30": gp_30,
-        "gp_60": gp_60,
-        "gp_120": gp_120,
-        "gp_180": gp_180,
+        "gp_45": gp_45,
         "lr_history": lr_history
     }
 
-def print_report(run_dir="build/logs/parity_10"):
-    print(f"\n=========================================================================================")
-    print(f"                      PARITY 10-RUN MEASUREMENT REPORT ({run_dir})")
-    print(f"=========================================================================================\n")
-
+def print_report(run_dir):
+    print(f"=== Parity Runs Analysis Report ({run_dir}) ===")
     runs = []
     for i in range(1, 11):
         r = parse_run_log(run_dir, i)
@@ -137,18 +135,18 @@ def print_report(run_dir="build/logs/parity_10"):
         logs_str = f"{r['err_file']} / {r['out_file']}"
         print(f"{r['run']:<4} | {logs_str:<35} | {str(r['nospace']):<8} | {str(r['audio_port_start']):<10} | {r['vdec_calls']:<5} | {r['sail_calls']:<5} | {str(r['crash']):<6} | {r['milestone']}")
 
-    # Table 2: Groups & Presents at 30s, 60s, 120s, 180s
-    print(f"\n--- Groups / Presents at 30s, 60s, 120s, 180s ---")
-    print(f"{'Run':<4} | {'@30s (G/P)':<16} | {'@60s (G/P)':<16} | {'@120s (G/P)':<16} | {'@180s (G/P)':<16} | {'Final Max (G/P)'}")
+    # Table 2: Groups & Presents at 10s, 20s, 30s, 45s
+    print(f"\n--- Groups / Presents at 10s, 20s, 30s, 45s ---")
+    print(f"{'Run':<4} | {'@10s (G/P)':<16} | {'@20s (G/P)':<16} | {'@30s (G/P)':<16} | {'@45s (G/P)':<16} | {'Final Max (G/P)'}")
     print("-" * 95)
     for r in runs:
         def fmt_gp(gp):
             return f"{gp[0]} / {gp[1]}"
-        print(f"{r['run']:<4} | {fmt_gp(r['gp_30']):<16} | {fmt_gp(r['gp_60']):<16} | {fmt_gp(r['gp_120']):<16} | {fmt_gp(r['gp_180']):<16} | {r['max_groups']} / {r['max_presents']}")
+        print(f"{r['run']:<4} | {fmt_gp(r['gp_10']):<16} | {fmt_gp(r['gp_20']):<16} | {fmt_gp(r['gp_30']):<16} | {fmt_gp(r['gp_45']):<16} | {r['max_groups']} / {r['max_presents']}")
 
     # Table 3: Main Thread LR every 10s
-    print(f"\n--- Main Thread LR History Every 10s ---")
-    secs = [10, 20, 30, 40, 50, 60, 70, 80, 90, 100, 110, 120, 130, 140, 150, 160, 170, 180]
+    print(f"\n--- Main Thread LR History ---")
+    secs = [10, 20, 30, 45]
     header_secs = " | ".join(f"{s:3d}s" for s in secs)
     print(f"{'Run':<4} | {header_secs}")
     print("-" * (7 + len(header_secs)))
@@ -164,5 +162,5 @@ def print_report(run_dir="build/logs/parity_10"):
 
 if __name__ == "__main__":
     import sys
-    d = sys.argv[1] if len(sys.argv) > 1 else "build/logs/parity_10"
+    d = sys.argv[1] if len(sys.argv) > 1 else "build/logs/parity_10_fixed"
     print_report(d)

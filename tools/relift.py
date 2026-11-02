@@ -3,10 +3,11 @@
 relift.py — PPU lifting pipeline wrapper for God of War: Ascension.
 
 Handles:
-1. Instruction switches from tools/ppu_switches.json (--insn-switches)
+1. Instruction switches from tools/ppu_switches.json with strict NOP-only assertion
 2. Heuristic function recovery & import stubs from analysis/
 3. PPU lifting via ps3recomp/tools/ppu_lifter.py into target directory
-4. Firmware HLE NID dispatch table generation via ps3recomp/tools/gen_hle_nids.py
+4. Post-processing to preserve gpr[3] and gpr[11] around all 0x3FC yields (including Loop 3)
+5. Firmware HLE NID dispatch table generation via ps3recomp/tools/gen_hle_nids.py
 """
 
 import sys
@@ -50,6 +51,14 @@ def apply_insn_switches(elf_in_path, elf_out_path, switches_path):
             if p_vaddr <= addr < p_vaddr + p_filesz:
                 file_off = addr - p_vaddr + p_offset
                 orig_insn = int.from_bytes(elf_bytes[file_off:file_off+4], "big")
+                
+                # Hard guardrail: all spin-yield patches MUST overwrite pure NOPs (0x60000000)
+                if insn in (0x396003FC, 0x44000002):
+                    assert orig_insn == 0x60000000, (
+                        f"[FATAL GUARDRAIL] Attempted to patch non-NOP at {s['addr']} (file off 0x{file_off:X}): "
+                        f"original instruction is 0x{orig_insn:08X}, expected 0x60000000 (NOP). Aborting."
+                    )
+                
                 elf_bytes[file_off:file_off+4] = insn.to_bytes(4, "big")
                 note = s.get("note", "")[:50]
                 print(f"  [switch] {s['addr']} (file off 0x{file_off:X}): orig 0x{orig_insn:08X} -> new 0x{insn:08X} ({note})")
@@ -57,11 +66,71 @@ def apply_insn_switches(elf_in_path, elf_out_path, switches_path):
                 patched = True
                 break
         if not patched:
-            print(f"  [WARNING] Switch address {s['addr']} not found in any PT_LOAD segment!")
+            raise RuntimeError(f"[relift] Switch address {s['addr']} not found in any PT_LOAD segment!")
 
     with open(elf_out_path, "wb") as f:
         f.write(elf_bytes)
     print(f"[relift] Applied {applied_count} instruction switches -> {elf_out_path}")
+
+def postprocess_lifted_chunks(out_dir: Path):
+    print(f"[relift] Post-processing lifted chunks in {out_dir} to preserve gpr[3] and gpr[11]...")
+    
+    yield_old = (
+        "        ctx->gpr[11] = (int64_t)(int32_t)(0x3FC);\n"
+        "        lv2_syscall(ctx);"
+    )
+    yield_new = (
+        "        { uint64_t _r3 = ctx->gpr[3], _r11 = ctx->gpr[11]; "
+        "ctx->gpr[11] = 0x3FC; lv2_syscall(ctx); ctx->gpr[3] = _r3; ctx->gpr[11] = _r11; }"
+    )
+
+    # 1. Replace all bare 0x3FC syscall yields with register-preserving block
+    replaced_count = 0
+    for cpp_file in sorted(out_dir.glob("ppu_recomp_*.cpp")):
+        text = cpp_file.read_text(encoding="latin-1")
+        if yield_old in text:
+            cnt = text.count(yield_old)
+            text = text.replace(yield_old, yield_new)
+            cpp_file.write_text(text, encoding="latin-1")
+            print(f"  [postprocess] {cpp_file.name}: preserved gpr[3]/gpr[11] across {cnt} yield site(s)")
+            replaced_count += cnt
+
+    # 2. In ppu_recomp_005.cpp: inject non-clobbering 0x3FC yield at Loop 3 (func_00466E28)
+    chunk5 = out_dir / "ppu_recomp_005.cpp"
+    if chunk5.exists():
+        text = chunk5.read_text(encoding="latin-1")
+        
+        # Loop 3 site 1: between func_006288DC (0x0046700C) and vm_read8(... + 0x93)
+        loop3_site1_old = (
+            "        ctx->lr = 0x0046700C; func_006288DC(ctx); DRAIN_TRAMPOLINE(ctx);\n"
+            "        /* nop */;\n"
+            "        ctx->gpr[0] = vm_read8(ctx->gpr[1] + 0x93);"
+        )
+        loop3_site1_new = (
+            "        ctx->lr = 0x0046700C; func_006288DC(ctx); DRAIN_TRAMPOLINE(ctx);\n"
+            "        { uint64_t _r3 = ctx->gpr[3], _r11 = ctx->gpr[11]; ctx->gpr[11] = 0x3FC; lv2_syscall(ctx); ctx->gpr[3] = _r3; ctx->gpr[11] = _r11; }\n"
+            "        ctx->gpr[0] = vm_read8(ctx->gpr[1] + 0x93);"
+        )
+        
+        # Loop 3 site 2: between func_006288DC (0x00467030) and vm_read8(... + 0x90)
+        loop3_site2_old = (
+            "        ctx->lr = 0x00467030; func_006288DC(ctx); DRAIN_TRAMPOLINE(ctx);\n"
+            "        /* nop */;\n"
+            "        ctx->gpr[0] = vm_read8(ctx->gpr[1] + 0x90);"
+        )
+        loop3_site2_new = (
+            "        ctx->lr = 0x00467030; func_006288DC(ctx); DRAIN_TRAMPOLINE(ctx);\n"
+            "        { uint64_t _r3 = ctx->gpr[3], _r11 = ctx->gpr[11]; ctx->gpr[11] = 0x3FC; lv2_syscall(ctx); ctx->gpr[3] = _r3; ctx->gpr[11] = _r11; }\n"
+            "        ctx->gpr[0] = vm_read8(ctx->gpr[1] + 0x90);"
+        )
+        
+        assert loop3_site1_old in text, "[FATAL] Loop 3 site 1 pattern not found in ppu_recomp_005.cpp!"
+        assert loop3_site2_old in text, "[FATAL] Loop 3 site 2 pattern not found in ppu_recomp_005.cpp!"
+        
+        text = text.replace(loop3_site1_old, loop3_site1_new)
+        text = text.replace(loop3_site2_old, loop3_site2_new)
+        chunk5.write_text(text, encoding="latin-1")
+        print("  [postprocess] ppu_recomp_005.cpp: successfully injected non-clobbering yields into func_00466E28 (Loop 3)")
 
 def main():
     parser = argparse.ArgumentParser(description="PPU code lifting wrapper for God of War: Ascension")
@@ -123,7 +192,10 @@ def main():
     print(f"[relift] Running: {' '.join(str(c) for c in lift_cmd)}")
     subprocess.run(lift_cmd, check=True)
 
-    # Step 4: Run gen_hle_nids.py
+    # Step 4: Post-process lifted chunks
+    postprocess_lifted_chunks(out_dir)
+
+    # Step 5: Run gen_hle_nids.py
     hle_nids_out = out_dir / "ppu_hle_nids.cpp"
     gen_nids_cmd = [sys.executable, str(ps3recomp_tools / "gen_hle_nids.py"), "--all", "--out", str(hle_nids_out)]
     print(f"[relift] Running: {' '.join(str(c) for c in gen_nids_cmd)}")
@@ -133,7 +205,7 @@ def main():
     if temp_elf and temp_elf.exists():
         temp_elf.unlink()
 
-    # Step 5: Summary
+    # Step 6: Summary
     gen_files = list(out_dir.glob("*.cpp")) + list(out_dir.glob("*.h"))
     total_bytes = sum(f.stat().st_size for f in gen_files)
     print(f"\n[relift] Complete: {len(gen_files)} files, {total_bytes / (1024*1024):.2f} MB in {out_dir}")

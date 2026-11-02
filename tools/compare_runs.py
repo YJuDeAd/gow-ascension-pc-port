@@ -1,9 +1,21 @@
 import json
+import os
+import sys
 
-with open('build/logs/parity_10/summary.json', 'r') as f:
-    pre = json.load(f)
-with open('build/logs/parity_10_post/summary.json', 'r') as f:
-    post = json.load(f)
+def load_summary(path):
+    if not os.path.exists(path):
+        return None
+    with open(path, 'r') as f:
+        return json.load(f)
+
+s_base = load_summary('build/logs/parity_10/summary.json')
+s_post = load_summary('build/logs/parity_10_post/summary.json')
+s_fixed = load_summary('build/logs/parity_10_fixed/summary.json')
+
+datasets = []
+if s_base: datasets.append(("Baseline (0198d37)", s_base))
+if s_post: datasets.append(("Broken Post-Relift (439b7b4)", s_post))
+if s_fixed: datasets.append(("Fixed Post-Relift (fixed)", s_fixed))
 
 print("=== MILESTONE DISTRIBUTION COMPARISON ===")
 def dist(dataset):
@@ -13,38 +25,60 @@ def dist(dataset):
         counts[m] = counts.get(m, 0) + 1
     return counts
 
-pre_dist = dist(pre)
-post_dist = dist(post)
-all_keys = set(pre_dist.keys()) | set(post_dist.keys())
+all_keys = set()
+for _, data in datasets:
+    all_keys.update(dist(data).keys())
 
-print(f"{'Milestone':<35} | {'Pre (0198d37)':<15} | {'Post (relift+switches)':<22}")
-print("-" * 78)
+header = f"{'Milestone':<35}"
+for name, _ in datasets:
+    header += f" | {name:<26}"
+print(header)
+print("-" * len(header))
+
 for k in sorted(all_keys):
-    print(f"{k:<35} | {pre_dist.get(k, 0):>2}/10 ({pre_dist.get(k,0)*10}%)   | {post_dist.get(k, 0):>2}/10 ({post_dist.get(k,0)*10}%)")
+    row = f"{k:<35}"
+    for _, data in datasets:
+        d = dist(data)
+        cnt = d.get(k, 0)
+        pct = (cnt * 100) // len(data)
+        row += f" | {cnt:>2}/{len(data)} ({pct:>2}%)                 "[:29]
+    print(row)
 
 print("\n=== RUN-BY-RUN DETAILS ===")
-print(f"{'Run':<4} | {'Pre Milestone':<32} | {'Pre G/P':<12} | {'Post Milestone':<32} | {'Post G/P':<12}")
-print("-" * 105)
-for r1, r2 in zip(pre, post):
-    m1 = r1['milestone'].split('(')[0].strip()
-    gp1 = f"{r1['max_groups']}/{r1['max_presents']}"
-    m2 = r2['milestone'].split('(')[0].strip()
-    gp2 = f"{r2['max_groups']}/{r2['max_presents']}"
-    print(f"{r1['run']:<4} | {m1:<32} | {gp1:<12} | {m2:<32} | {gp2:<12}")
+num_runs = max(len(d) for _, d in datasets)
+header = f"{'Run':<4}"
+for name, _ in datasets:
+    header += f" | {name[:12]+' Milest':<20} | {name[:12]+' G/P':<12}"
+print(header)
+print("-" * len(header))
+
+for i in range(num_runs):
+    row = f"{i+1:<4}"
+    for _, data in datasets:
+        if i < len(data):
+            r = data[i]
+            m = r['milestone'].split('(')[0].strip()[:18]
+            gp = f"{r['max_groups']}/{r['max_presents']}"
+            row += f" | {m:<20} | {gp:<12}"
+        else:
+            row += f" | {'N/A':<20} | {'N/A':<12}"
+    print(row)
 
 print("\n=== KEY METRICS ===")
-for name, data in [("Pre (0198d37)", pre), ("Post (relift+switches)", post)]:
+for name, data in datasets:
     nospace = sum(1 for r in data if r['nospace'])
     audio = sum(1 for r in data if r['audio_port_start'])
     vdec = sum(r['vdec_calls'] for r in data)
     sail = sum(r['sail_calls'] for r in data)
     crash = sum(1 for r in data if r['crash'])
+    zero_gp = sum(1 for r in data if r['max_groups'] == 0)
     avg_gp = sum(r['max_groups'] for r in data) / len(data)
     avg_pres = sum(r['max_presents'] for r in data) / len(data)
     print(f"{name}:")
-    print(f"  NOSPACE_EXIT: {nospace}/10")
-    print(f"  cellAudioPortStart: {audio}/10")
+    print(f"  NOSPACE_EXIT: {nospace}/{len(data)}")
+    print(f"  cellAudioPortStart: {audio}/{len(data)}")
     print(f"  cellVdec calls: {vdec}")
     print(f"  cellSail calls: {sail}")
-    print(f"  Crashes: {crash}/10")
+    print(f"  Crashes: {crash}/{len(data)}")
+    print(f"  0-group runs: {zero_gp}/{len(data)}")
     print(f"  Mean max groups: {avg_gp:.1f}, Mean max presents: {avg_pres:.1f}")
