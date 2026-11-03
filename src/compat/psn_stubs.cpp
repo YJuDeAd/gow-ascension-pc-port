@@ -24,6 +24,26 @@ static void psn_stub_ok(ppu_context* ctx)
     ctx->gpr[3] = 0; // CELL_OK
 }
 
+/* _cellSpursWorkloadFlagReceiver (0xA73BF47E)
+ * r3 = Spurs*, r4 = flag index, r5 = receiver flag / mode
+ * Caller LR = 0x003E6E5C. Return CELL_OK (0). */
+static void stub_cellSpursWorkloadFlagReceiver(ppu_context* ctx)
+{
+    ctx->gpr[3] = 0; // CELL_OK
+}
+
+/* cellSpursGetWorkloadFlag (0xC765B995)
+ * r3 = Spurs*, r4 = guest pointer to uint32_t flag destination
+ * Caller LR = 0x003E6E78. Write flag = 0 and return CELL_OK (0). */
+static void stub_cellSpursGetWorkloadFlag(ppu_context* ctx)
+{
+    uint32_t pFlag = (uint32_t)ctx->gpr[4];
+    if (pFlag) {
+        vm_write32(pFlag, 0u);
+    }
+    ctx->gpr[3] = 0; // CELL_OK
+}
+
 /* sceNpManagerGetAccountRegion (0xB1E0718B)
  * r3 = userId, r4 = guest pointer to u32 region
  * Set region = 0x5553 ('US') and return CELL_OK */
@@ -159,4 +179,9 @@ extern "C" void gow_psn_stubs_register(void)
     ps3_hle_register_ctx(0xDC751B40u, "send",                                psn_stub_ok);
     ps3_hle_register_ctx(0x5A045BD1u, "getsockopt",                          psn_stub_ok);
     ps3_hle_register_ctx(0xDABBC2C0u, "inet_addr",                           psn_stub_ok);
+
+    /* cellSpurs extra (2 stubs - BUG 5) */
+    ps3_hle_register_ctx(0xA73BF47Eu, "_cellSpursWorkloadFlagReceiver",      stub_cellSpursWorkloadFlagReceiver);
+    ps3_hle_register_ctx(0xC765B995u, "cellSpursGetWorkloadFlag",            stub_cellSpursGetWorkloadFlag);
 }
+
