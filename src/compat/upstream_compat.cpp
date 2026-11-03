@@ -70,6 +70,28 @@ static void task4_monitor_thread_func()
             }
         }
 
+        // Boot & MFC Telemetry
+        if (sec == 5 || sec == 10 || sec == 15) {
+            uint32_t lr = g_ppu_main_ctx ? (uint32_t)g_ppu_main_ctx->lr : 0;
+            uint64_t r28 = g_ppu_main_ctx ? g_ppu_main_ctx->gpr[28] : 0;
+            uint64_t r30 = g_ppu_main_ctx ? g_ppu_main_ctx->gpr[30] : 0;
+            uint32_t val_r28 = 0, bit29 = 0;
+            uint32_t tmo_r30 = 0;
+            if (vm_base && r28 > 0 && r28 < 0xFF000000ull) {
+                val_r28 = *(const uint32_t*)(vm_base + (uint32_t)r28 + 0x64);
+                bit29 = (val_r28 >> 2) & 1; // PowerPC bit 29
+            }
+            if (vm_base && r30 > 0 && r30 < 0xFF000000ull) {
+                tmo_r30 = *(const uint32_t*)(vm_base + (uint32_t)r30 + 0x2B50);
+            }
+            extern volatile unsigned long long g_mfc_list_stall_count;
+            extern volatile unsigned long long g_mfc_list_resume_count;
+            fprintf(stderr, "[BOOT-DIAG @ %ds] lr=0x%08X r28=0x%llX [r28+0x64]=0x%08X (bit29=%u) r30=0x%llX [r30+0x2B50]=0x%08X (%d) | MFC stalls=%llu resumes=%llu\n",
+                    sec, lr, (unsigned long long)r28, val_r28, bit29,
+                    (unsigned long long)r30, tmo_r30, (int)tmo_r30,
+                    g_mfc_list_stall_count, g_mfc_list_resume_count);
+        }
+
         // 1. Log rates per second (for first 60s)
         if (sec <= 60) {
             std::lock_guard<std::mutex> lock(s_task4_mutex);
@@ -389,8 +411,86 @@ extern "C" {
     GOW_WEAK void cellFiberPpuSleep(void) {}
     GOW_WEAK void cellFiberPpuWakeup(void) {}
 
+    void spu_begin_image(int image_id);
+    void spu_register_function(uint32_t addr, void (*fn)(spu_context*));
+    void spu_indirect_branch(spu_context* ctx);
+    void spu_wws_job_pm_spu_func_00000040(spu_context* ctx);
+
+    static void gow_wws_job_pm_3fec0_handler(spu_context* ctx)
+    {
+        if (ctx->image_id != 2) return;
+        // Dynamic shim at 0x3FEC0 loaded into high LS by SPURS; return to link in r79
+        ctx->pc = ctx->gpr[79]._u32[0] & SPU_LS_MASK;
+        if (ctx->host_depth == 0) {
+            g_spu_trampoline_fn = spu_indirect_branch;
+        }
+    }
+
+    static void gow_wws_job_pm_a2c_handler(spu_context* ctx)
+    {
+        if (ctx->image_id != 2) return;
+
+        uint32_t saved_srr0 = ctx->srr0;
+        u128 saved_gprs[128];
+        memcpy(saved_gprs, ctx->gpr, sizeof(saved_gprs));
+
+        static int s_irq_count = 0;
+        s_irq_count++;
+        if (s_irq_count <= 16) {
+            fprintf(stderr, "[wws-irq] SPU img=2 IRQ #%d at 0x00A2C: r0=0x%08X r1=0x%08X srr0=0x%05X stallstat=0x%X loadJobState=%02X%02X%02X%02X\n",
+                    s_irq_count,
+                    ctx->gpr[0]._u32[0], ctx->gpr[1]._u32[0],
+                    ctx->srr0, ctx->list_stall_stat,
+                    ctx->ls[0x12A0], ctx->ls[0x12A1], ctx->ls[0x12A2], ctx->ls[0x12A3]);
+        }
+
+        // Vector 0x00A2C: save r78 to 0x1590, zero r78
+        memcpy(ctx->ls + 0x1590, &ctx->gpr[78], 16);
+        memset(&ctx->gpr[78], 0, sizeof(ctx->gpr[78]));
+
+        // Call lifted interrupt handler at 0x40 (which executes 0x40->0x80->0x3FEC0->0x1990->0xD0->iret)
+        spu_wws_job_pm_spu_func_00000040(ctx);
+
+        // Verify registers after round-trip
+        int diff_count = 0;
+        for (int r = 0; r < 128; r++) {
+            if (memcmp(&saved_gprs[r], &ctx->gpr[r], sizeof(u128)) != 0) {
+                diff_count++;
+                if (s_irq_count <= 4) {
+                    fprintf(stderr, "  [wws-irq-diff] r%d modified: before=0x%08X after=0x%08X\n",
+                            r, saved_gprs[r]._u32[0], ctx->gpr[r]._u32[0]);
+                }
+            }
+        }
+        if (s_irq_count <= 16) {
+            fprintf(stderr, "[wws-irq] SPU img=2 IRQ #%d complete: pc=0x%05X (srr0=0x%05X) diff_regs=%d loadJobState=%02X%02X%02X%02X\n",
+                    s_irq_count, ctx->pc, saved_srr0, diff_count,
+                    ctx->ls[0x12A0], ctx->ls[0x12A1], ctx->ls[0x12A2], ctx->ls[0x12A3]);
+        }
+    }
+
+    void gow_register_spu_overrides(void)
+    {
+        static int s_registered = 0;
+        if (s_registered) return;
+        s_registered = 1;
+
+        spu_begin_image(2);
+        spu_register_function(0x3FEC0u, gow_wws_job_pm_3fec0_handler);
+        spu_register_function(0x00A2Cu, gow_wws_job_pm_a2c_handler);
+        spu_begin_image(0);
+
+        fprintf(stderr, "[ascension] Registered SPU img=2 overrides: 0x3FEC0 shim return, IRQ 0x00A2C\n");
+    }
+
+    __attribute__((constructor(101))) static void gow_spu_overrides_ctor(void)
+    {
+        gow_register_spu_overrides();
+    }
+
     extern void gow_psn_stubs_register(void);
     void ps3_load_prx_modules(void) {
+        gow_register_spu_overrides();
         gow_psn_stubs_register();
     }
 
