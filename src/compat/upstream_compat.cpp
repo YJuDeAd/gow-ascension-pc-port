@@ -492,6 +492,9 @@ extern "C" {
     void ps3_load_prx_modules(void) {
         gow_register_spu_overrides();
         gow_psn_stubs_register();
+        if (!s_task4_monitor_started.exchange(true)) {
+            std::thread(task4_monitor_thread_func).detach();
+        }
     }
 
 }
