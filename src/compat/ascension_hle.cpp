@@ -1182,13 +1182,13 @@ extern "C" void gow_fios_diag_tick(void)
 #define TSA2_PRIORITY  0x10
 #define TSA2_MAXCONT   0x18
 
-extern "C" int32_t cellSpursInitializeWithAttribute(void* spurs, const void* attr);
+extern "C" int32_t cellSpursInitializeWithAttribute2(void* spurs, const void* attr);
 static void cellSpursInitializeWithAttribute2(ppu_context* ctx)
 {
     const uint32_t spurs = (uint32_t)ctx->gpr[3];
     const uint32_t attr = (uint32_t)ctx->gpr[4];
     fprintf(stderr, "[cellSpurs] InitializeWithAttribute2(spurs=0x%08X, attr=0x%08X)\n", spurs, attr);
-    int32_t rc = cellSpursInitializeWithAttribute((void*)(uintptr_t)spurs, (const void*)(uintptr_t)attr);
+    int32_t rc = cellSpursInitializeWithAttribute2((void*)(uintptr_t)spurs, (const void*)(uintptr_t)attr);
     ctx->gpr[3] = (uint64_t)(int64_t)rc;
 }
 

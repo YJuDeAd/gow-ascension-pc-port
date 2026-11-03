@@ -104,39 +104,73 @@ static void task4_monitor_thread_func()
             fprintf(stderr, "=================================\n");
         }
 
-        // 2. Periodic Workload Status every 10 seconds
+        // 2. Periodic Workload Status every 10 seconds (All 32 workloads supported)
         if (sec % 10 == 0) {
             uint32_t spurs_ea = 0x7001AD00; // Big Spurs instance
-            struct WkldInfo {
-                const char* name;
-                uint32_t wid;
-                uint32_t ea;
-            };
-            WkldInfo wks[] = {
-                {"SpursTaskset0",  0,  0x70024880},
-                {"SpursTaskset1",  1,  0x70027200},
-                {"SpursTaskset2",  2,  0x70029B80},
-                {"SpursTaskset3",  3,  0x74E65100},
-                {"BrBDblBufWrkld", 8,  0x009FDF80},
-                {"RenJobSet",      9,  0x71600580},
-                {"RenJobSet10",    10, 0x71632600},
-                {"RenJobSet11",    11, 0x71664680},
-                {"RenJobSet12",    12, 0x71696700},
-                {"RenderJobs",     13, 0x71965600},
-                {"MeshProcJobs",   14, 0x71965B80}
+            static const char* s_known_names[32] = {
+                "CollisL",       // 0
+                "SpursTaskset0", // 1
+                "SpursTaskset1", // 2
+                "SpursTaskset2", // 3
+                "SysMisc",       // 4
+                "ModelServer",   // 5
+                "ModelServerPrep",// 6
+                "BatchJobList",  // 7
+                "BrBDblBufWrkld",// 8
+                "RenJobSet9",    // 9
+                "RenJobSet10",   // 10
+                "RenJobSet11",   // 11
+                "RenJobSet12",   // 12
+                "RenderJobs",    // 13
+                "MeshProcJobs",  // 14
+                "EDGE0",         // 15
+                "EDGE1",         // 16
+                "EDGE2",         // 17
+                "RsxSync",       // 18
+                "Workload19",    // 19
+                "Workload20",    // 20
+                "Workload21",    // 21
+                "Workload22",    // 22
+                "Workload23",    // 23
+                "Workload24",    // 24
+                "Workload25",    // 25
+                "Workload26",    // 26
+                "Workload27",    // 27
+                "Workload28",    // 28
+                "Workload29",    // 29
+                "Workload30",    // 30
+                "Workload31"     // 31
             };
 
             fprintf(stderr, "\n=== [TASK4-WORKLOAD-STATUS @ %ds] ===\n", sec);
-            for (auto& w : wks) {
+            uint32_t enabled_mask = 0;
+            if (vm_base && spurs_ea) {
+                enabled_mask = __builtin_bswap32(*(const uint32_t*)(vm_base + spurs_ea + 0xB0));
+            }
+
+            for (uint32_t wid = 0; wid < 32; wid++) {
                 uint8_t ready = 0;
+                uint8_t state = 0;
+                uint32_t data_ea = 0;
+                uint32_t pm_ea = 0;
                 if (vm_base && spurs_ea) {
-                    uint32_t ready_off = (w.wid < 16) ? (0x90 + w.wid) : (0xE0 + (w.wid - 16));
+                    uint32_t ready_off = (wid < 16) ? wid : (0x10 + (wid - 16));
+                    uint32_t state_off = (wid < 16) ? (0x80 + wid) : (0xD0 + (wid - 16));
+                    uint32_t info_off  = (wid < 16) ? (0xB00 + wid * 0x20) : (0x1000 + (wid - 16) * 0x20);
+
                     ready = *(vm_base + spurs_ea + ready_off);
+                    state = *(vm_base + spurs_ea + state_off);
+                    pm_ea = (uint32_t)__builtin_bswap64(*(const uint64_t*)(vm_base + spurs_ea + info_off));
+                    data_ea = (uint32_t)__builtin_bswap64(*(const uint64_t*)(vm_base + spurs_ea + info_off + 8));
                 }
-                uint32_t pm_entries = (w.wid < 32) ? g_spurs_pm_entry_count[w.wid] : 0;
-                fprintf(stderr, "Workload '%s' (wid=%u, data_ea=0x%08X): readyCount=%u, pm_entries=%u%s\n",
-                        w.name, w.wid, w.ea, (unsigned)ready, pm_entries,
-                        (w.wid >= 9 && pm_entries > 0) ? " [WID-RUNNING]" : "");
+                uint32_t pm_entries = g_spurs_pm_entry_count[wid];
+                bool is_enabled = (enabled_mask & (0x80000000u >> wid)) != 0;
+
+                if (is_enabled || state != 0 || pm_entries > 0 || ready > 0 || pm_ea != 0) {
+                    fprintf(stderr, "Workload '%s' (wid=%u, data_ea=0x%08X): readyCount=%u, pm_entries=%u, state=%u, enabled=%d%s\n",
+                            s_known_names[wid], wid, data_ea, (unsigned)ready, pm_entries, (unsigned)state, (int)is_enabled,
+                            (pm_entries > 0) ? " [WID-RUNNING]" : "");
+                }
             }
             fprintf(stderr, "======================================\n\n");
         }
@@ -416,9 +450,18 @@ extern "C" {
     void spu_indirect_branch(spu_context* ctx);
     void spu_wws_job_pm_spu_func_00000040(spu_context* ctx);
 
+    static inline bool is_wws_job_pm(spu_context* ctx)
+    {
+        if (!ctx || !ctx->ls) return false;
+        if (ctx->image_id == 2) return true;
+        uint32_t sig = ((uint32_t)ctx->ls[0xA00] << 24) | ((uint32_t)ctx->ls[0xA01] << 16)
+                     | ((uint32_t)ctx->ls[0xA02] << 8)  | (uint32_t)ctx->ls[0xA03];
+        return sig == 0x436CF002u;
+    }
+
     static void gow_wws_job_pm_3fec0_handler(spu_context* ctx)
     {
-        if (ctx->image_id != 2) return;
+        if (!is_wws_job_pm(ctx)) return;
         // Dynamic shim at 0x3FEC0 loaded into high LS by SPURS; return to link in r79
         ctx->pc = ctx->gpr[79]._u32[0] & SPU_LS_MASK;
         if (ctx->host_depth == 0) {
@@ -428,7 +471,7 @@ extern "C" {
 
     static void gow_wws_job_pm_a2c_handler(spu_context* ctx)
     {
-        if (ctx->image_id != 2) return;
+        if (!is_wws_job_pm(ctx)) return;
 
         uint32_t saved_srr0 = ctx->srr0;
         u128 saved_gprs[128];
@@ -437,8 +480,8 @@ extern "C" {
         static int s_irq_count = 0;
         s_irq_count++;
         if (s_irq_count <= 16) {
-            fprintf(stderr, "[wws-irq] SPU img=2 IRQ #%d at 0x00A2C: r0=0x%08X r1=0x%08X srr0=0x%05X stallstat=0x%X loadJobState=%02X%02X%02X%02X\n",
-                    s_irq_count,
+            fprintf(stderr, "[wws-irq] SPU img=%d IRQ #%d at 0x00A2C: r0=0x%08X r1=0x%08X srr0=0x%05X stallstat=0x%X loadJobState=%02X%02X%02X%02X\n",
+                    ctx->image_id, s_irq_count,
                     ctx->gpr[0]._u32[0], ctx->gpr[1]._u32[0],
                     ctx->srr0, ctx->list_stall_stat,
                     ctx->ls[0x12A0], ctx->ls[0x12A1], ctx->ls[0x12A2], ctx->ls[0x12A3]);
@@ -463,8 +506,8 @@ extern "C" {
             }
         }
         if (s_irq_count <= 16) {
-            fprintf(stderr, "[wws-irq] SPU img=2 IRQ #%d complete: pc=0x%05X (srr0=0x%05X) diff_regs=%d loadJobState=%02X%02X%02X%02X\n",
-                    s_irq_count, ctx->pc, saved_srr0, diff_count,
+            fprintf(stderr, "[wws-irq] SPU img=%d IRQ #%d complete: pc=0x%05X (srr0=0x%05X) diff_regs=%d loadJobState=%02X%02X%02X%02X\n",
+                    ctx->image_id, s_irq_count, ctx->pc, saved_srr0, diff_count,
                     ctx->ls[0x12A0], ctx->ls[0x12A1], ctx->ls[0x12A2], ctx->ls[0x12A3]);
         }
     }
@@ -475,12 +518,17 @@ extern "C" {
         if (s_registered) return;
         s_registered = 1;
 
+        // Register for image 2
         spu_begin_image(2);
         spu_register_function(0x3FEC0u, gow_wws_job_pm_3fec0_handler);
         spu_register_function(0x00A2Cu, gow_wws_job_pm_a2c_handler);
-        spu_begin_image(0);
 
-        fprintf(stderr, "[ascension] Registered SPU img=2 overrides: 0x3FEC0 shim return, IRQ 0x00A2C\n");
+        // Register wildcard (image 0) so workloads running with other image IDs resolve to these handlers
+        spu_begin_image(0);
+        spu_register_function(0x3FEC0u, gow_wws_job_pm_3fec0_handler);
+        spu_register_function(0x00A2Cu, gow_wws_job_pm_a2c_handler);
+
+        fprintf(stderr, "[ascension] Registered SPU overrides (img=2, wildcard=0): 0x3FEC0 shim return, IRQ 0x00A2C\n");
     }
 
     __attribute__((constructor(101))) static void gow_spu_overrides_ctor(void)
