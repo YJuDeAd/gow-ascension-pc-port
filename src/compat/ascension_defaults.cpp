@@ -250,6 +250,16 @@ extern "C" void ascension_apply_defaults(void)
     set_default("SPU_INTERP_UNLIFTED", "1");
     set_default("SPU_DMA_LAX", "1");
 
+    // Writable guest filesystems (BUG 4):
+    std::string hdd0 = root + "/vfs";
+    std::string hdd1 = root + "/vfs/cache";
+    std::string flash = root + "/vfs/dev_flash";
+    std::string app_home = root + "/vfs/app_home";
+    set_default("PS3_HDD0_ROOT", hdd0.c_str());
+    set_default("PS3_HDD1_ROOT", hdd1.c_str());
+    set_default("PS3_DEV_FLASH", flash.c_str());
+    set_default("PS3_APP_HOME_ROOT", app_home.c_str());
+
     // VFS root check
     const char* env_vfs = getenv("PS3_VFS_ROOT");
     if (!env_vfs || !*env_vfs) {
