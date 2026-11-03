@@ -34,12 +34,14 @@ static void stub_cellSpursWorkloadFlagReceiver(ppu_context* ctx)
 
 /* cellSpursGetWorkloadFlag (0xC765B995)
  * r3 = Spurs*, r4 = guest pointer to uint32_t flag destination
- * Caller LR = 0x003E6E78. Write flag = 0 and return CELL_OK (0). */
+ * Caller LR = 0x003E6E78. Point *r4 to a valid non-zero guest address within CellSpurs. */
 static void stub_cellSpursGetWorkloadFlag(ppu_context* ctx)
 {
+    uint32_t spurs = (uint32_t)ctx->gpr[3];
     uint32_t pFlag = (uint32_t)ctx->gpr[4];
     if (pFlag) {
-        vm_write32(pFlag, 0u);
+        uint32_t flag_ea = spurs ? (spurs + 0x80u) : 0x7001AD80u;
+        vm_write32(pFlag, flag_ea);
     }
     ctx->gpr[3] = 0; // CELL_OK
 }

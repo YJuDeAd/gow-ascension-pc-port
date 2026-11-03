@@ -252,11 +252,11 @@ extern "C" void ascension_apply_defaults(void)
 
     // Writable guest filesystems (BUG 4):
     std::string hdd0 = root + "/vfs";
-    std::string hdd1 = root + "/vfs/cache";
     std::string flash = root + "/vfs/dev_flash";
     std::string app_home = root + "/vfs/app_home";
     set_default("PS3_HDD0_ROOT", hdd0.c_str());
-    set_default("PS3_HDD1_ROOT", hdd1.c_str());
+    // Clear PS3_HDD1_ROOT so /dev_hdd1 is never mounted as a writable host directory
+    _putenv("PS3_HDD1_ROOT=");
     set_default("PS3_DEV_FLASH", flash.c_str());
     set_default("PS3_APP_HOME_ROOT", app_home.c_str());
 

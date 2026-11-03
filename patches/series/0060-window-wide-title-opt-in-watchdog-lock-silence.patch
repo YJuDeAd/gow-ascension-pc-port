@@ -1,3 +1,28 @@
+diff --git a/libs/video/rsx_d3d12_backend.c b/libs/video/rsx_d3d12_backend.c
+index d5f5fa4e..4a0330a3 100644
+--- a/libs/video/rsx_d3d12_backend.c
++++ b/libs/video/rsx_d3d12_backend.c
+@@ -5122,12 +5122,16 @@ skip_dump_consider: ;
+         if (s_tt0 == 0) s_tt0 = tnow;
+         if (tnow - s_tt0 >= 1000 && s_d3d.hwnd) {
+             extern char g_rsx_title_base[128];
+-            char tb[256];
+-            snprintf(tb, sizeof(tb), "%s | FPS: %.2f | draws: %u | %ux%u",
+-                     g_rsx_title_base,
++            wchar_t wtitle[128];
++            if (MultiByteToWideChar(CP_UTF8, 0, g_rsx_title_base, -1, wtitle, 128) <= 0) {
++                wcscpy(wtitle, L"God of War: Ascension\u2122");
++            }
++            wchar_t wtb[256];
++            swprintf(wtb, 256, L"%ls | FPS: %.2f | draws: %u | %ux%u",
++                     wtitle,
+                      s_tframes * 1000.0 / (double)(tnow - s_tt0),
+                      s_dbg_last_draws, s_d3d.width, s_d3d.height);
+-            SetWindowTextA(s_d3d.hwnd, tb);
++            SetWindowTextW(s_d3d.hwnd, wtb);
+             s_tframes = 0;
+             s_tt0 = tnow;
+         }
 diff --git a/libs/video/rsx_host_window.h b/libs/video/rsx_host_window.h
 index a4b899e8..a80a6b20 100644
 --- a/libs/video/rsx_host_window.h
@@ -15,6 +40,29 @@ index a4b899e8..a80a6b20 100644
      e = getenv("PS3_WINDOW_ICON");
      if (e && *e) {
          HICON ico_b = (HICON)LoadImageA(NULL, e, IMAGE_ICON, 0, 0, LR_LOADFROMFILE | LR_DEFAULTSIZE);
+diff --git a/libs/video/rsx_null_backend.c b/libs/video/rsx_null_backend.c
+index 04e5b5ab..71f13001 100644
+--- a/libs/video/rsx_null_backend.c
++++ b/libs/video/rsx_null_backend.c
+@@ -310,10 +310,15 @@ int rsx_null_backend_pump_messages(void)
+         if (fps <= 0.0)
+             fps = (s_state.frame_count - s_state.title_frames) * 1000.0 /
+                   (double)(now - s_state.title_time);
+-        char tb[256];
+-        snprintf(tb, sizeof(tb), "%s | FPS: %.2f | draws: %u | %ux%u", s_state.title, fps,
++        wchar_t wtitle[128];
++        if (MultiByteToWideChar(CP_UTF8, 0, s_state.title ? s_state.title : "ps3recomp", -1, wtitle, 128) <= 0) {
++            wcscpy(wtitle, L"God of War: Ascension\u2122");
++        }
++        wchar_t wtb[256];
++        swprintf(wtb, 256, L"%ls | FPS: %.2f | draws: %u | %ux%u",
++                 wtitle, fps,
+                  rsx_live_draw_get_last_draws(), s_state.width, s_state.height);
+-        SetWindowTextA(s_state.hwnd, tb);
++        SetWindowTextW(s_state.hwnd, wtb);
+         s_state.title_frames = s_state.frame_count;
+         s_state.title_time = now;
+     }
 diff --git a/runtime/ppu/ppu_sysprx.cpp b/runtime/ppu/ppu_sysprx.cpp
 index f6464e70..97de5d58 100644
 --- a/runtime/ppu/ppu_sysprx.cpp
