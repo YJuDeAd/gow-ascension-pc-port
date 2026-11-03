@@ -1,0 +1,24 @@
+{
+  "name": "Skip intro",
+  "description": "Goes straight to the loading screen, without the intro screens (notices and logos). Replaces the list of screens the game reads (GAME.PSARC: /INTRO/BOOT_*.TXT) with an empty one; nothing from the game comes with the mod.",
+  "translations": {
+    "pt-BR": {
+      "name": "Pular intro",
+      "description": "Vai direto ao carregamento, sem as telas de abertura (avisos e logos). Troca a lista de telas que o jogo lê (GAME.PSARC: /INTRO/BOOT_*.TXT) por uma vazia; nada do jogo vem com o mod."
+    },
+    "es": {
+      "name": "Saltar intro",
+      "description": "Va directo a la pantalla de carga, sin las pantallas de inicio (avisos y logotipos). Reemplaza la lista de pantallas que lee el juego (GAME.PSARC: /INTRO/BOOT_*.TXT) por una vacía; el mod no trae nada del juego."
+    }
+  },
+  "psarc_patches": {
+    "GAME.PSARC": {
+      "/INTRO/BOOT_BCES01741.TXT": {"text": ""},
+      "/INTRO/BOOT_BCUS98232.TXT": {"text": ""},
+      "/INTRO/BOOT_BCAS25016.TXT": {"text": ""},
+      "/INTRO/BOOT.TXT": {"text": ""},
+      "/INTRO/BOOT0.TXT": {"text": ""},
+      "/INTRO/BOOT_EN.TXT": {"text": ""}
+    }
+  }
+}

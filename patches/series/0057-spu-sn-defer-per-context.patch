@@ -1,0 +1,88 @@
+ï»¿From 7fee16171ebca97abdb757badc44e8755f1e86a7 Mon Sep 17 00:00:00 2001
+From: YJuDeAd <robinrashi@gmail.com>
+Date: Tue, 3 Nov 2026 01:00:17 +0530
+Subject: [PATCH] fix(spu): per-context sn_defer and fallback interrupt target
+ 0x00A2C for image 2
+
+---
+ runtime/spu/spu_dma.h   |  5 ++---
+ runtime/spu/spu_drain.c | 31 +++++++++++++++++++++++++++++--
+ 2 files changed, 31 insertions(+), 5 deletions(-)
+
+diff --git a/runtime/spu/spu_dma.h b/runtime/spu/spu_dma.h
+index e6936db8..42445ae4 100644
+--- a/runtime/spu/spu_dma.h
++++ b/runtime/spu/spu_dma.h
+@@ -804,11 +804,10 @@ static inline int mfc_run_list(spu_context* spu, uint32_t elem_lsa,
+              * handler sees g_WwsJob_loadJobState still kNone and (correctly)
+              * declines the Load->Run advance, and clear-on-read ch25 eats the
+              * only stall. See spu_drain.c: g_sn_defer / SPU_SN_DEFER. */
+-            { extern void* volatile g_sn_defer_ctx;
+-              extern volatile unsigned g_sn_defer;
++            { extern void spu_sn_defer_record(void* spu_ptr, unsigned d);
+               extern unsigned spu_sn_defer_ticks(void);
+               unsigned d = spu_sn_defer_ticks();
+-              if (d) { g_sn_defer_ctx = (void*)spu; g_sn_defer = d; } }
++              if (d) spu_sn_defer_record((void*)spu, d); }
+             spu_ch_wake(spu);
+             { static int _n = 0; if (PS3_LOG_FIRST(_n, 16))
+                 fprintf(stderr, "[mfc-list] STALL img=%d tag=%u elem@0x%05X "
+diff --git a/runtime/spu/spu_drain.c b/runtime/spu/spu_drain.c
+index 89d6518a..be6b4451 100644
+--- a/runtime/spu/spu_drain.c
++++ b/runtime/spu/spu_drain.c
+@@ -313,6 +313,32 @@ void spu_img_restore(spu_context* ctx, int32_t saved_img)
+  * to the current synchronous list execution). */
+ void* volatile   g_sn_defer_ctx = 0;
+ volatile unsigned g_sn_defer     = 0;
++static volatile unsigned s_sn_defer_by_id[8] = {0};
++
++void spu_sn_defer_record(void* spu_ptr, unsigned d)
++{
++    if (!spu_ptr) return;
++    spu_context* ctx = (spu_context*)spu_ptr;
++    unsigned id = (ctx->spu_id < 8) ? ctx->spu_id : 0;
++    s_sn_defer_by_id[id] = d;
++    g_sn_defer_ctx = spu_ptr;
++    g_sn_defer = d;
++}
++
++int spu_sn_defer_is_active(spu_context* ctx)
++{
++    if (!ctx) return 0;
++    unsigned id = (ctx->spu_id < 8) ? ctx->spu_id : 0;
++    if (s_sn_defer_by_id[id] > 0) {
++        s_sn_defer_by_id[id]--;
++        return 1;
++    }
++    if (g_sn_defer && g_sn_defer_ctx == (void*)ctx) {
++        if (--g_sn_defer == 0) g_sn_defer_ctx = 0;
++        return 1;
++    }
++    return 0;
++}
+ 
+ unsigned spu_sn_defer_ticks(void)
+ {
+@@ -431,8 +457,7 @@ void (*spu_take_interrupt(spu_context* ctx,
+       for (int k = 0; k < s_n; k++)
+           if (ctx->resident_ovl == s_r[k].ovl && pc >= s_r[k].lo && pc <= s_r[k].hi) return tf; }
+     /* Stall-and-notify still settling: let the SPU run on (see above). */
+-    if (g_sn_defer && g_sn_defer_ctx == (void*)ctx) {
+-        if (--g_sn_defer == 0) g_sn_defer_ctx = 0;
++    if (spu_sn_defer_is_active(ctx)) {
+         return tf;
+     }
+     const uint8_t* v = ctx->ls;      /* vector word at LS 0, big-endian */
+@@ -444,6 +469,8 @@ void (*spu_take_interrupt(spu_context* ctx,
+         target = ((w >> 7) & 0xFFFF) << 2;
+     } else if (op9 == 0x064) {       /* br i16 (relative to LS 0) */
+         target = (((w >> 7) & 0xFFFF) << 2) & SPU_LS_MASK;
++    } else if (ctx->image_id == 2) {
++        target = 0x00A2Cu;
+     } else {
+         static int _w = 0;
+         if (PS3_LOG_FIRST(_w, 4))
+-- 
+2.48.1.windows.1
+
