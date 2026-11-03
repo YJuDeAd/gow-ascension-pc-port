@@ -1,0 +1,58 @@
+diff --git a/libs/video/rsx_host_window.h b/libs/video/rsx_host_window.h
+index a4b899e8..a80a6b20 100644
+--- a/libs/video/rsx_host_window.h
++++ b/libs/video/rsx_host_window.h
+@@ -77,6 +77,12 @@ static HWND rsx_host_window_create(const char* cls, unsigned width, unsigned hei
+                            CW_USEDEFAULT, CW_USEDEFAULT, wr.right - wr.left, wr.bottom - wr.top,
+                            NULL, NULL, GetModuleHandle(NULL), NULL);
+     if (!hwnd) return NULL;
++    if (title) {
++        wchar_t wtitle[256];
++        if (MultiByteToWideChar(CP_UTF8, 0, title, -1, wtitle, 256) > 0) {
++            SetWindowTextW(hwnd, wtitle);
++        }
++    }
+     e = getenv("PS3_WINDOW_ICON");
+     if (e && *e) {
+         HICON ico_b = (HICON)LoadImageA(NULL, e, IMAGE_ICON, 0, 0, LR_LOADFROMFILE | LR_DEFAULTSIZE);
+diff --git a/runtime/ppu/ppu_sysprx.cpp b/runtime/ppu/ppu_sysprx.cpp
+index f6464e70..97de5d58 100644
+--- a/runtime/ppu/ppu_sysprx.cpp
++++ b/runtime/ppu/ppu_sysprx.cpp
+@@ -236,7 +236,12 @@ static void sys_lwmutex_lock(ppu_context* ctx)
+              * then block. Bounded diagnostics for park hunts; uncapped while the
+              * probe window is open (g_nd_inpump). */
+             static long _bl = 0; long _b = ++_bl;
+-            if (g_nd_inpump || _b <= 40) fprintf(stderr, "[LWM-BLOCK] tid=%llu lwm=0x%08X owner=%u recur=%u tmo=%lluus\n",
++            static int s_gow_trace_locks = -1;
++            if (s_gow_trace_locks < 0) {
++                const char* e = getenv("GOW_TRACE_LOCKS");
++                s_gow_trace_locks = (e && strcmp(e, "1") == 0) ? 1 : 0;
++            }
++            if (s_gow_trace_locks && (g_nd_inpump || _b <= 40)) fprintf(stderr, "[LWM-BLOCK] tid=%llu lwm=0x%08X owner=%u recur=%u tmo=%lluus\n",
+                 (unsigned long long)ctx->thread_id, lwm, vm_read32(lwm + LWM_OWNER), vm_read32(lwm + LWM_RECUR),
+                 (unsigned long long)timeout_us);
+             if (lwm_trace()) { struct LwmSlot* sl = lwm_find(lwm);
+@@ -255,7 +260,7 @@ static void sys_lwmutex_lock(ppu_context* ctx)
+             }
+             if (lwm_trace()) fprintf(stderr, "[LWM-CONVOY] tid=%llu ACQUIRED lwm=0x%08X after waiting %lldus\n",
+                 (unsigned long long)ctx->thread_id, lwm, lwm_now_us() - _blk_start);
+-            if (g_nd_inpump || _b <= 40) fprintf(stderr, "[LWM-GOT] tid=%llu lwm=0x%08X\n", (unsigned long long)ctx->thread_id, lwm);
++            if (s_gow_trace_locks && (g_nd_inpump || _b <= 40)) fprintf(stderr, "[LWM-GOT] tid=%llu lwm=0x%08X\n", (unsigned long long)ctx->thread_id, lwm);
+         }
+     }
+     if (lwm_trace()) { struct LwmSlot* sl = lwm_find(lwm); if (sl) { sl->holder = (long)self; sl->acq_us = lwm_now_us(); sl->acq_fences = g_gcm_ref_pub_count; sl->acq_cpu_us = ppu_thread_cpu_us(self); } }
+diff --git a/runtime/ppu/tests/boot_main.cpp b/runtime/ppu/tests/boot_main.cpp
+index a294fcee..fdac54d0 100644
+--- a/runtime/ppu/tests/boot_main.cpp
++++ b/runtime/ppu/tests/boot_main.cpp
+@@ -1284,7 +1284,8 @@ int main(int argc, char** argv)
+     if (getenv("PS3_GUEST_PROF"))
+         CreateThread(NULL, 0, guest_prof_thread, NULL, 0, NULL);
+ #ifdef _WIN32
+-    CreateThread(NULL, 0, hang_watchdog, NULL, 0, NULL);
++    if (getenv("GOW_WATCHDOG") && strcmp(getenv("GOW_WATCHDOG"), "1") == 0)
++        CreateThread(NULL, 0, hang_watchdog, NULL, 0, NULL);
+     /* PS3_DEBUG=<file>: ask a running title what it is doing. */
+     { static char dbgpath[1024];
+       const char* dp = getenv("PS3_DEBUG");
