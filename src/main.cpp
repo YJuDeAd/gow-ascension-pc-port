@@ -159,10 +159,7 @@ extern "C" void cellGcm_rsx_process_fifo(void);
 extern "C" int  cellGcm_take_flip_pending_synced(void);
 extern "C" void cellGcmTickFlip(void);
 
-extern "C" int   rsx_live_draw_enabled(void);
-extern "C" int   rsx_live_draw_init(void* hwnd, uint32_t w, uint32_t h,
-                                    const uint8_t* (*guest_ptr)(void*, uint32_t, uint32_t, uint32_t),
-                                    void* user);
+#include "runtime/rsx/rsx_backend.h"
 extern "C" int   rsx_null_backend_init(uint32_t w, uint32_t h, const char* title);
 extern "C" int   rsx_null_backend_pump_messages(void);
 extern "C" void* rsx_null_backend_get_hwnd(void);
@@ -188,9 +185,6 @@ static const uint8_t* gow_live_guest_ptr(void* user, uint32_t location,
     return (const uint8_t*)vm_base + ea;
 }
 
-extern "C" void     rsx_live_draw_present(uint32_t buffer_id);
-extern "C" uint32_t rsx_live_draw_get_frames(void);
-extern "C" uint32_t rsx_live_draw_get_last_draws(void);
 extern "C" int      cellGcm_take_flip_pending(void);
 extern "C" uint32_t cellGcm_get_current_display_buffer(void);
 extern "C" uint32_t cellGcm_current_display_buffer_id(void);
@@ -781,7 +775,7 @@ static DWORD WINAPI window_message_thread(LPVOID)
     if (const char* e = getenv("GOW_RSX_W")) rsx_w = (uint32_t)strtoul(e, 0, 0);
     if (const char* e = getenv("GOW_RSX_H")) rsx_h = (uint32_t)strtoul(e, 0, 0);
 
-    const int live = rsx_live_draw_enabled();
+    const int live = ps3_rsx_backend_enabled();
     int ok = 0;
     if (live) {
         ok = (rsx_null_backend_init(rsx_w, rsx_h, "God of War: Ascension (ps3recomp)") == 0);
@@ -952,14 +946,14 @@ static DWORD WINAPI rsx_vblank_thread(LPVOID)
 
     WaitForSingleObject(s_hwnd_ready_event, INFINITE);
 
-    const int live = rsx_live_draw_enabled();
+    const int live = ps3_rsx_backend_enabled();
     int rsx_ok = 0;
     if (live && s_shared_hwnd) {
-        const int r = rsx_live_draw_init(s_shared_hwnd, rsx_w, rsx_h,
+        const int r = ps3_rsx_backend_init(s_shared_hwnd, rsx_w, rsx_h,
                                          gow_live_guest_ptr, nullptr);
         if (r == 0) {
             rsx_null_backend_suppress_present(1);
-            rsx_live_draw_present(cellGcm_current_display_buffer_id());
+            ps3_rsx_backend_request_flip(cellGcm_current_display_buffer_id());
             fprintf(stderr, "[rsx] live-draw engine up (D3D12); GDI present suppressed\n");
             rsx_ok = 1;
         } else {
@@ -1010,7 +1004,7 @@ static DWORD WINAPI rsx_vblank_thread(LPVOID)
                 }
             }
         }
-        if (live) rsx_live_draw_present(buf);
+        if (live) ps3_rsx_backend_request_flip(buf);
         else      rsx_d3d12_backend_present();
     };
 
@@ -1031,8 +1025,8 @@ static DWORD WINAPI rsx_vblank_thread(LPVOID)
             last_stats = now;
             if (live) {
                 fprintf(stderr, "[live] frames=%u last_draws=%u\n",
-                        rsx_live_draw_get_frames(),
-                        rsx_live_draw_get_last_draws());
+                        ps3_rsx_backend_get_frames(),
+                        ps3_rsx_backend_get_last_draws());
             }
             float audio_peak = 0.0f;
             if (vm_base) {
@@ -1110,6 +1104,7 @@ static LONG WINAPI vm_commit_veh(EXCEPTION_POINTERS* ep)
 int main(int argc, char** argv)
 {
     ascension_apply_defaults();
+    ps3_rsx_parse_cli_renderer(argc, argv);
 
     printf("=================================================================\n");
     printf(" God of War: Ascension (PS3) — Native x86-64 Static Recompilation\n");

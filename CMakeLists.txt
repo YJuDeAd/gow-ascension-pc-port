@@ -58,6 +58,17 @@ else()
     set_source_files_properties(${GEN_SOURCES} ${HLE_NID_TABLE} PROPERTIES COMPILE_FLAGS "-O2 -g0")
 endif()
 
+# RPCS3 RSX Dual-Renderer Architecture Option
+# Phase 1: Ps3RsxBackend runtime abstraction layer with CLI switch (--renderer=d3d12 | --renderer=rpcs3-rsx).
+# Phase 2 (Roadmap): Link RPCS3 RSX Vulkan backend subsystem (rsx_methods, VKGSRender, glslang, spirv-tools).
+option(GOW_ENABLE_RPCS3_RSX "Enable RPCS3 RSX Vulkan backend" OFF)
+if(GOW_ENABLE_RPCS3_RSX)
+    add_compile_definitions(GOW_ENABLE_RPCS3_RSX=1)
+    message(STATUS "RPCS3 RSX Vulkan backend enabled")
+else()
+    add_compile_definitions(GOW_ENABLE_RPCS3_RSX=0)
+endif()
+
 option(ASCENSION_SPU_AVX2 "Lifted SPU code built for AVX2" OFF)
 if(ASCENSION_SPU_AVX2)
     if(MSVC)
@@ -97,6 +108,7 @@ target_include_directories(gow_ascension PRIVATE
     "${PS3RECOMP_DIR}/runtime/ppu"
     "${PS3RECOMP_DIR}/runtime/spu"
     "${PS3RECOMP_DIR}/runtime/syscalls"
+    "${PS3RECOMP_DIR}"
     "${PS3RECOMP_DIR}/include"
     ${LIB_INC_DIRS}
 )
