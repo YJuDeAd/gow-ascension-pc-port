@@ -62,6 +62,7 @@ endif()
 # Phase 1: Ps3RsxBackend runtime abstraction layer with CLI switch (--renderer=d3d12 | --renderer=rpcs3-rsx).
 # Phase 2 (Roadmap): Link RPCS3 RSX Vulkan backend subsystem (rsx_methods, VKGSRender, glslang, spirv-tools).
 option(GOW_ENABLE_RPCS3_RSX "Enable RPCS3 RSX Vulkan backend" OFF)
+set(ASCENSION_RPCS3_BUILD "${CMAKE_CURRENT_SOURCE_DIR}/work/gpu-build" CACHE PATH "Build tree of ps3recomp/gpu")
 if(GOW_ENABLE_RPCS3_RSX)
     add_compile_definitions(GOW_ENABLE_RPCS3_RSX=1)
     message(STATUS "RPCS3 RSX Vulkan backend enabled")
@@ -114,6 +115,11 @@ target_include_directories(gow_ascension PRIVATE
 )
 
 target_link_libraries(gow_ascension PRIVATE "${PS3RECOMP_RUNTIME_LIB}")
+
+if(GOW_ENABLE_RPCS3_RSX)
+    include("${PS3RECOMP_DIR}/gpu/ps3rsx.cmake")
+    ps3rsx_link(gow_ascension "${ASCENSION_RPCS3_BUILD}")
+endif()
 
 if(WIN32)
     target_link_libraries(gow_ascension PRIVATE
