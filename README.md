@@ -1,6 +1,21 @@
 # God of War: Ascension (PS3) Native PC Port
 
-An x86-64 static recompilation port of God of War: Ascension for Windows. The project translates the original PlayStation 3 binary and embedded SPU workloads into native C and C++ using the [ps3recomp](https://github.com/sp00nznet/ps3recomp) toolchain.
+An x86-64 static recompilation port of **God of War: Ascension – Asian Release (`BCAS-25016`, v1.00)** for Windows. The project translates the original PlayStation 3 binary and embedded SPU workloads into native C and C++ using the [ps3recomp](https://github.com/sp00nznet/ps3recomp) toolchain.
+
+> [!IMPORTANT]
+> **Primary Target:** Asian Release (`BCAS-25016`, v1.00).  
+> **Reference Implementation:** `arnaldolima1/gow-ascension-pc` (European Release `BCES-01741`).  
+> Per `ANTIGRAVITY.md`, regional separation is strictly enforced: shared runtime components (`ps3recomp/runtime/`, `ps3recomp/libs/`) remain architecture-agnostic, while region-specific PPU lifted code, memory presets, and compatibility overrides live strictly in `src/compat/` and `src/targets/bcas25016/`. PPU function addresses, TOC pointers (`r2`), and descriptor offsets from `BCES-01741` are never blindly copied.
+
+## Architectural Highlights
+
+### Regional Target & Separation
+- **Target Identification:** `BCAS-25016` v1.00 (validated against decrypted `EBOOT.BIN` SHA-256 hash, segment boundaries, and verified SPU module fingerprints).
+- **Separation of Concerns:** Shared runtime synchronization (LV2, SPURS kernel/policy, WWS Job PM mechanics, `CellFs`/`FIOS`, audio/video decoders) lives in `ps3recomp/`, while region-specific lifted translation units and symbol maps live in `src/`.
+
+### Dual-Renderer Roadmap (Direct3D 12 + RPCS3 RSX)
+- **Direct3D 12 (`--renderer=d3d12`):** Native D3D12 command processor reading command packets from the GCM ring buffer with DXGI presentation.
+- **RPCS3 RSX (`--renderer=rpcs3-rsx`):** Follows the reference `ps3kit` modular RSX pattern (`RSX_VULKAN=1` via `ps3rsx_link()`), sharing unified virtual memory mappings (`0xC0000000` RSX local memory and `cellGcmMapMainMemory` IO ranges). Gated behind `-DGOW_ENABLE_RPCS3_RSX=ON/OFF` to keep core builds MIT-clean (GPL-2.0 when linked).
 
 ## How it works
 

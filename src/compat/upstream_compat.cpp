@@ -21,6 +21,12 @@
 
 #define GOW_WEAK __attribute__((weak))
 
+extern "C" {
+    volatile unsigned long long g_mfc_list_stall_count = 0;
+    volatile unsigned long long g_mfc_list_resume_count = 0;
+    void spu_sn_defer_record(void* spu_ptr, unsigned d) { (void)spu_ptr; (void)d; }
+}
+
 typedef struct GcmFifoBreakdown {
     volatile uint64_t lock_wait_qpc;
     volatile uint64_t parked_qpc;
@@ -92,8 +98,102 @@ static void task4_monitor_thread_func()
                     g_mfc_list_stall_count, g_mfc_list_resume_count);
         }
 
-        // 1. Log rates per second (for first 60s)
-        if (sec <= 60) {
+        // TASK 2.a: Print every 5s for 60s, ALL six lanes (including idle ones), wid 8 priorities, lane 5 poll history
+        if (sec <= 60 && (sec % 5 == 0)) {
+            fprintf(stderr, "\n=== [ALL-LANES-AUDIT @ %ds] ===\n", sec);
+            for (uint32_t lane = 0; lane < 6; lane++) {
+                spu_context* ctx = g_spu_lane_ctx[lane];
+                uint32_t wid = g_spu_lane_last_wid[lane];
+                uint64_t last_us = g_spu_lane_last_entry_us[lane];
+                double since_s = last_us ? ((double)(ps3_qpc_us() - last_us) / 1e6) : 999.0;
+                int busy = g_spu_lane_busy[lane];
+                if (ctx) {
+                    fprintf(stderr, "  Lane %u: STATE=RUNNING wid=%u img=%d pc=0x%05X depth=%u stall=(stat=0x%X mask=0x%X) time_since_entry=%.3fs\n",
+                            lane, wid, ctx->image_id, (uint32_t)ctx->pc & 0x3FFFF, ctx->host_depth,
+                            ctx->list_stall_stat, ctx->list_stall_mask, since_s);
+                } else {
+                    fprintf(stderr, "  Lane %u: STATE=%s last_wid=%u time_since_last_entry=%.3fs\n",
+                            lane, busy ? "DISPATCHING" : "IDLE", wid, since_s);
+                }
+            }
+            if (vm_base) {
+                uint32_t spurs_ea = 0x7001AD00;
+                uint8_t p[6] = {0};
+                for (int l = 0; l < 6; l++) {
+                    p[l] = *(vm_base + spurs_ea + 0xB00 + 8 * 0x20 + 0x18 + l);
+                }
+                uint8_t ready8 = *(vm_base + spurs_ea + 8);
+                uint8_t state8 = *(vm_base + spurs_ea + 0x80 + 8);
+                fprintf(stderr, "  Wid 8 Status: readyCount=%u state=%u priorities=[%u, %u, %u, %u, %u, %u]\n",
+                        ready8, state8, p[0], p[1], p[2], p[3], p[4], p[5]);
+            }
+            if (g_spu_lane_ctx[5]) {
+                spu_context* c5 = g_spu_lane_ctx[5];
+                uint32_t b_cached = (c5->ls) ? ((uint32_t)c5->ls[0x1530] << 24 | (uint32_t)c5->ls[0x1531] << 16 | (uint32_t)c5->ls[0x1532] << 8 | c5->ls[0x1533]) : 0;
+                fprintf(stderr, "  [LANE5-DIAG] pc=0x%05X depth=%u resv_valid=%d resv_ea=0x%08X atomic_stat=%u\n",
+                        (uint32_t)c5->pc & 0x3FFFF, c5->host_depth, c5->resv_valid, (uint32_t)c5->resv_ea, c5->atomic_stat);
+                fprintf(stderr, "               gpr[3]=0x%08X gpr[50]=0x%08X gpr[52]=0x%08X gpr[56]=0x%08X gpr[57]=0x%08X gpr[60]=0x%08X gpr[63]=0x%08X gpr[69]=0x%04X ls[0x1530]=0x%08X\n",
+                        c5->gpr[3]._u32[0], c5->gpr[50]._u32[0], c5->gpr[52]._u32[0],
+                        c5->gpr[56]._u32[0], c5->gpr[57]._u32[0], c5->gpr[60]._u32[0], c5->gpr[63]._u32[0],
+                        (uint32_t)c5->gpr[69]._u16[0], b_cached);
+            }
+            if (vm_base) {
+                uint32_t jl_ea = 0x009FDF80;
+                const uint32_t* jl = (const uint32_t*)(vm_base + jl_ea);
+                fprintf(stderr, "  [WID8-JL @ 0x%08X]:\n", jl_ea);
+                for (int row = 0; row < 8; row++) {
+                    fprintf(stderr, "    +0x%02X: %08X %08X %08X %08X\n",
+                            row * 16,
+                            __builtin_bswap32(jl[row*4 + 0]), __builtin_bswap32(jl[row*4 + 1]),
+                            __builtin_bswap32(jl[row*4 + 2]), __builtin_bswap32(jl[row*4 + 3]));
+                }
+                const uint32_t* jl_next = (const uint32_t*)(vm_base + jl_ea + 0x80);
+                fprintf(stderr, "  [WID8-JL @ 0x%08X + 0x80]:\n", jl_ea);
+                for (int row = 0; row < 4; row++) {
+                    fprintf(stderr, "    +0x%02X: %08X %08X %08X %08X\n",
+                            row * 16,
+                            __builtin_bswap32(jl_next[row*4 + 0]), __builtin_bswap32(jl_next[row*4 + 1]),
+                            __builtin_bswap32(jl_next[row*4 + 2]), __builtin_bswap32(jl_next[row*4 + 3]));
+                }
+                uint32_t buf0_ea = __builtin_bswap32(jl[12]); // 0x30 offset word 0
+                if (buf0_ea >= 0x10000u && buf0_ea < 0xFF000000u) {
+                    const uint32_t* b0 = (const uint32_t*)(vm_base + buf0_ea);
+                    fprintf(stderr, "  [WID8-BUF0 @ 0x%08X]:\n", buf0_ea);
+                    for (int row = 0; row < 4; row++) {
+                        fprintf(stderr, "    +0x%02X: %08X %08X %08X %08X\n",
+                                row * 16,
+                                __builtin_bswap32(b0[row*4 + 0]), __builtin_bswap32(b0[row*4 + 1]),
+                                __builtin_bswap32(b0[row*4 + 2]), __builtin_bswap32(b0[row*4 + 3]));
+                    }
+                }
+            }
+            if (g_ppu_threads[8].state != PPU_THREAD_STATE_FREE) {
+                ppu_context* pc9 = &g_ppu_threads[8].ctx;
+                uint32_t slot = (uint32_t)pc9->gpr[9];
+                uint32_t slot_val = (vm_base && slot && slot < 0xFF000000u) ? __builtin_bswap32(*(const uint32_t*)(vm_base + slot + 0x40)) : 0xDEADBEEF;
+                fprintf(stderr, "  [THREAD9-brbDriver]: lr=0x%08X r9=0x%08X [r9+0x40]=0x%08X (%d)\n",
+                        (uint32_t)pc9->lr, slot, slot_val, (int)slot_val);
+            }
+            if (g_ppu_threads[10].state != PPU_THREAD_STATE_FREE) {
+                ppu_context* pc11 = &g_ppu_threads[10].ctx;
+                fprintf(stderr, "  [THREAD11-brbClient]: lr=0x%08X r3=0x%08X r4=0x%08X r28=0x%08X\n",
+                        (uint32_t)pc11->lr, (uint32_t)pc11->gpr[3], (uint32_t)pc11->gpr[4], (uint32_t)pc11->gpr[28]);
+            }
+            fprintf(stderr, "  Lane 5 spurs_poll_select last %u calls:\n",
+                    g_spurs_poll_hist_lane5_idx < 5 ? g_spurs_poll_hist_lane5_idx : 5);
+            uint32_t total_p = g_spurs_poll_hist_lane5_idx;
+            uint32_t count_p = total_p < 5 ? total_p : 5;
+            for (uint32_t i = 0; i < count_p; i++) {
+                uint32_t slot = (total_p >= 5) ? (total_p - count_p + i) % 5 : i;
+                SpursPollHistEntry* e = &g_spurs_poll_hist_lane5[slot];
+                fprintf(stderr, "    [%u] cur=%u pick=%u ea=0x%08X (%.3fs ago)\n",
+                        i + 1, e->cur, e->pick, e->ea, (double)(ps3_qpc_us() - e->timestamp_us) / 1e6);
+            }
+            fprintf(stderr, "==============================\n\n");
+        }
+
+        // 1. Log rates every 5 seconds (for first 60s)
+        if (sec <= 60 && (sec % 5 == 0)) {
             std::lock_guard<std::mutex> lock(s_task4_mutex);
             fprintf(stderr, "\n=== [TASK4-SPURS-RATES @ %ds] ===\n", sec);
             for (auto& kv : s_task4_spurs_calls) {
@@ -449,14 +549,54 @@ extern "C" {
     void spu_register_function(uint32_t addr, void (*fn)(spu_context*));
     void spu_indirect_branch(spu_context* ctx);
     void spu_wws_job_pm_spu_func_00000040(spu_context* ctx);
+    void spu_wws_job_pm_spu_func_00001BBC(spu_context* ctx);
 
     static inline bool is_wws_job_pm(spu_context* ctx)
     {
         if (!ctx || !ctx->ls) return false;
+        extern uint8_t* vm_base;
+        uint32_t spurs_ea = ((uint32_t)ctx->ls[0x1C4] << 24) | ((uint32_t)ctx->ls[0x1C5] << 16)
+                          | ((uint32_t)ctx->ls[0x1C6] << 8)  | ctx->ls[0x1C7];
+        uint32_t wid = ((uint32_t)ctx->ls[0x1DC] << 24) | ((uint32_t)ctx->ls[0x1DD] << 16)
+                     | ((uint32_t)ctx->ls[0x1DE] << 8)  | ctx->ls[0x1DF];
+        if (vm_base && spurs_ea) {
+            uint32_t info_off = (wid < 16) ? (0xB00 + wid * 0x20) : (0x1000 + (wid - 16) * 0x20);
+            uint32_t pm_ea = (uint32_t)__builtin_bswap64(*(const uint64_t*)(vm_base + spurs_ea + info_off));
+            if (pm_ea == 0x0077CA80u) return true;
+        }
         if (ctx->image_id == 2) return true;
         uint32_t sig = ((uint32_t)ctx->ls[0xA00] << 24) | ((uint32_t)ctx->ls[0xA01] << 16)
                      | ((uint32_t)ctx->ls[0xA02] << 8)  | (uint32_t)ctx->ls[0xA03];
         return sig == 0x436CF002u;
+    }
+
+    void gow_spu_step_hook(spu_context* ctx)
+    {
+        if (!ctx) return;
+        uint32_t pc = ctx->pc & SPU_LS_MASK;
+        if (pc == 0x1AE8 || pc == 0x1AF0) {
+            if (is_wws_job_pm(ctx)) {
+                uint16_t claim = ctx->gpr[4]._u16[0];
+                uint16_t limit = ctx->gpr[70]._u16[0];
+                if (claim >= limit) {
+                    static int s_logged = 0;
+                    if (s_logged++ < 5) {
+                        fprintf(stderr, "[wws-pm] Batch complete at 0x%04X: claim=0x%04X >= limit=0x%04X, jumping to 0x1BBC\n",
+                                pc, claim, limit);
+                    }
+                    ctx->pc = 0x1BBC;
+                    memset(&ctx->gpr[3], 0, sizeof(ctx->gpr[3]));
+                    g_spu_trampoline_fn = spu_wws_job_pm_spu_func_00001BBC;
+                }
+            }
+        } else if (pc == 0x1B58) {
+            if (is_wws_job_pm(ctx)) {
+                if (ctx->gpr[69]._u16[0] == 0) {
+                    // Non-job barrier consumed: invalidate cached barrier address
+                    memset(&ctx->ls[0x1530], 0, 16);
+                }
+            }
+        }
     }
 
     static void gow_wws_job_pm_3fec0_handler(spu_context* ctx)
