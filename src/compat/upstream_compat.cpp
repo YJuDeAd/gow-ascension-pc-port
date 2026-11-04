@@ -550,6 +550,26 @@ extern "C" {
     void spu_indirect_branch(spu_context* ctx);
     void spu_wws_job_pm_spu_func_00000040(spu_context* ctx);
     void spu_wws_job_pm_spu_func_00001BBC(spu_context* ctx);
+    void spu_wrch(spu_context* ctx, uint32_t channel, u128 value);
+    void spu_ls_write128(spu_context* ctx, uint32_t lsa, u128 val);
+
+    #define SPU_W_IDX(P) (((P) & ~3) | (3 - ((P) & 3)))
+    static inline u128 gow_spu_shufb(u128 a, u128 b, u128 c) {
+        uint8_t cat[32];
+        for (int j = 0; j < 16; j++) cat[j]      = a._u8[SPU_W_IDX(j)];
+        for (int j = 0; j < 16; j++) cat[16 + j] = b._u8[SPU_W_IDX(j)];
+        u128 r;
+        for (int t = 0; t < 16; t++) {
+            uint8_t s = c._u8[SPU_W_IDX(t)];
+            uint8_t v;
+            if      ((s & 0xE0) == 0xE0) v = 0x80;
+            else if ((s & 0xC0) == 0xC0) v = 0xFF;
+            else if ((s & 0xC0) == 0x80) v = 0x00;
+            else                         v = cat[s & 0x1F];
+            r._u8[SPU_W_IDX(t)] = v;
+        }
+        return r;
+    }
 
     static inline bool is_wws_job_pm(spu_context* ctx)
     {
@@ -581,12 +601,29 @@ extern "C" {
                 if (claim >= limit) {
                     static int s_logged = 0;
                     if (s_logged++ < 5) {
-                        fprintf(stderr, "[wws-pm] Batch complete at 0x%04X: claim=0x%04X >= limit=0x%04X, jumping to 0x1BBC\n",
+                        fprintf(stderr, "[wws-pm] Batch complete at 0x%04X: claim=0x%04X >= limit=0x%04X, packing counter & exiting to 0x1BBC\n",
                                 pc, claim, limit);
                     }
+                    // Pack lane completion counter r67 into r56 before exiting so host sees full progress
+                    ctx->gpr[56] = gow_spu_shufb(ctx->gpr[67], ctx->gpr[56], ctx->gpr[65]);
+                    ctx->gpr[56]._u16[1] = ctx->gpr[72]._u16[0];
+                    spu_ls_write128(ctx, ctx->gpr[59]._u32[0] + 0xC0, ctx->gpr[56]);
+                    u128 mfc_cmd;
+                    memset(&mfc_cmd, 0, sizeof(mfc_cmd));
+                    mfc_cmd._u32[0] = 180; // PUTLLC
+                    spu_wrch(ctx, 16, ctx->gpr[50]); // MFC_LSA
+                    spu_wrch(ctx, 18, ctx->gpr[52]); // MFC_EAL
+                    spu_wrch(ctx, 21, mfc_cmd);      // MFC_Cmd
                     ctx->pc = 0x1BBC;
                     memset(&ctx->gpr[3], 0, sizeof(ctx->gpr[3]));
                     g_spu_trampoline_fn = spu_wws_job_pm_spu_func_00001BBC;
+                }
+            }
+        } else if (pc == 0x1B40) {
+            if (is_wws_job_pm(ctx)) {
+                // Ensure lane completion counter r67 is packed into r56 for non-job commands (cmd 3, 4, barriers)
+                if (ctx->gpr[69]._u16[0] == 0) {
+                    ctx->gpr[56] = gow_spu_shufb(ctx->gpr[67], ctx->gpr[56], ctx->gpr[65]);
                 }
             }
         } else if (pc == 0x1B58) {

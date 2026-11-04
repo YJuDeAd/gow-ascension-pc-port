@@ -954,7 +954,8 @@ static DWORD WINAPI rsx_vblank_thread(LPVOID)
         if (r == 0) {
             rsx_null_backend_suppress_present(1);
             ps3_rsx_backend_request_flip(cellGcm_current_display_buffer_id());
-            fprintf(stderr, "[rsx] live-draw engine up (D3D12); GDI present suppressed\n");
+            fprintf(stderr, "[rsx] active renderer engine up (%s); GDI present suppressed\n",
+                    ps3_rsx_get_backend() ? ps3_rsx_get_backend()->name : "Unknown");
             rsx_ok = 1;
         } else {
             fprintf(stderr, "[rsx] live-draw init failed (%d)\n", r);
@@ -1111,8 +1112,11 @@ int main(int argc, char** argv)
     printf("=================================================================\n\n");
 
     const char* elf_path = "vfs/PS3_GAME/USRDIR/EBOOT.ELF";
-    if (argc >= 2) {
-        elf_path = argv[1];
+    for (int i = 1; i < argc; i++) {
+        if (strncmp(argv[i], "--", 2) != 0) {
+            elf_path = argv[i];
+            break;
+        }
     }
 
 #ifdef _WIN32
