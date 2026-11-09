@@ -22,6 +22,7 @@ extern "C" {
     extern uint32_t cellGcmGetCurrentDisplayBufferId(void);
     extern unsigned ppu_boot_frames_presented(void);
     extern uint32_t cellGcm_flip_request_count(void);
+    extern uint32_t gcm_io_offset_to_ea(uint32_t io);
 }
 static void gow_barrier_watch_thread_func();
 
@@ -348,10 +349,104 @@ static void task4_monitor_thread_func()
                 uint32_t gcm_ctrl_ea = *(const uint32_t*)(vm_base + 0x009BE004);
                 gcm_ctrl_ea = __builtin_bswap32(gcm_ctrl_ea);
                 if (gcm_ctrl_ea && gcm_ctrl_ea < 0xFFFFFFF0u) {
-                    uint32_t gcm_get = *(const uint32_t*)(vm_base + gcm_ctrl_ea + 0x04);
-                    uint32_t gcm_put = *(const uint32_t*)(vm_base + gcm_ctrl_ea);
+                    uint32_t gcm_get = __builtin_bswap32(*(const uint32_t*)(vm_base + gcm_ctrl_ea + 0x04));
+                    uint32_t gcm_put = __builtin_bswap32(*(const uint32_t*)(vm_base + gcm_ctrl_ea));
                     fprintf(stderr, "  GCM FIFO ctrl (0x%08X): put=0x%08X get=0x%08X\n",
-                            gcm_ctrl_ea, __builtin_bswap32(gcm_put), __builtin_bswap32(gcm_get));
+                            gcm_ctrl_ea, gcm_put, gcm_get);
+
+                    if (sec == 10 || sec == 30) {
+                        uint32_t get_ea = gcm_io_offset_to_ea(gcm_get);
+                        int backlog = (int)(gcm_put - gcm_get);
+                        fprintf(stderr, "\n=== [TASK 2: GPU FIFO @ %ds] get_io=0x%08X put_io=0x%08X get_ea=0x%08X (backlog=%d bytes) ===\n",
+                                sec, gcm_get, gcm_put, get_ea, backlog);
+                        if (get_ea >= 0x10000 && get_ea < 0xFF000000) {
+                            fprintf(stderr, "  Raw 64 bytes at GET (0x%08X):\n", get_ea);
+                            for (int r = 0; r < 4; r++) {
+                                const uint32_t* p = (const uint32_t*)(vm_base + get_ea + r * 16);
+                                fprintf(stderr, "    +0x%02X: %08X %08X %08X %08X\n",
+                                        r * 16,
+                                        __builtin_bswap32(p[0]), __builtin_bswap32(p[1]),
+                                        __builtin_bswap32(p[2]), __builtin_bswap32(p[3]));
+                            }
+                            uint32_t w0 = __builtin_bswap32(*(const uint32_t*)(vm_base + get_ea));
+                            uint32_t w1 = __builtin_bswap32(*(const uint32_t*)(vm_base + get_ea + 4));
+                            uint32_t w2 = __builtin_bswap32(*(const uint32_t*)(vm_base + get_ea + 8));
+                            uint32_t w3 = __builtin_bswap32(*(const uint32_t*)(vm_base + get_ea + 12));
+                            uint32_t m0 = w0 & 0x3FFFFu;
+                            uint32_t cnt0 = (w0 >> 18) & 0x7FFu;
+                            fprintf(stderr, "  Decoded Method 0: header=0x%08X (method=0x%X, count=%u), arg=0x%08X\n",
+                                    w0, m0, cnt0, w1);
+                            if (m0 == 0x0064 || m0 == 0x1D6C || m0 == 0x1D68) {
+                                uint32_t sema_offset = w1;
+                                uint32_t m2 = w2 & 0x3FFFFu;
+                                uint32_t exp_val = w3;
+                                uint32_t label_ea = 0x20000000u + (sema_offset & 0xFFFFu);
+                                uint32_t cur_val = (label_ea < 0xFFFFFFF0u) ? *(const uint32_t*)(vm_base + label_ea) : 0;
+                                fprintf(stderr, "  Decoded Method 1: header=0x%08X (method=0x%X), sema_offset=0x%X exp_val=0x%08X\n",
+                                        w2, m2, sema_offset, exp_val);
+                                fprintf(stderr, "  SEMAPHORE STATUS: label_ea=0x%08X, expected=0x%08X, current_val=0x%08X (bswap: 0x%08X)\n",
+                                        label_ea, exp_val, cur_val, __builtin_bswap32(cur_val));
+                            }
+                        }
+                    }
+                }
+            }
+
+            if (vm_base && (sec == 10 || sec == 30)) {
+                uint32_t desc_base = 0x71632600u;
+                fprintf(stderr, "\n=== [TASK 3: RENJOBSET10 QUEUES DUMP @ %ds] desc_base=0x%08X ===\n",
+                        sec, desc_base);
+                if (desc_base >= 0x10000 && desc_base < 0xFF000000) {
+                    fprintf(stderr, "  Raw 128 bytes at desc_base (0x%08X):\n", desc_base);
+                    for (int r = 0; r < 8; r++) {
+                        const uint32_t* p = (const uint32_t*)(vm_base + desc_base + r * 16);
+                        fprintf(stderr, "    +0x%02X: %08X %08X %08X %08X\n",
+                                r * 16,
+                                __builtin_bswap32(p[0]), __builtin_bswap32(p[1]),
+                                __builtin_bswap32(p[2]), __builtin_bswap32(p[3]));
+                    }
+
+                    bool found_cmd4_target = false;
+                    for (uint32_t q = 0; q < 4; q++) {
+                        uint32_t bset_ea = desc_base + 0x40 + q * 16;
+                        uint32_t buf_ea = __builtin_bswap32(*(const uint32_t*)(vm_base + desc_base + 0x30 + q * 4));
+                        const uint16_t* bset_hw = (const uint16_t*)(vm_base + bset_ea);
+                        uint16_t lim = __builtin_bswap16(bset_hw[0]);
+                        uint16_t clm = __builtin_bswap16(bset_hw[1]);
+                        uint16_t l0 = __builtin_bswap16(bset_hw[2]);
+                        uint16_t l1 = __builtin_bswap16(bset_hw[3]);
+                        uint16_t l2 = __builtin_bswap16(bset_hw[4]);
+                        uint16_t l3 = __builtin_bswap16(bset_hw[5]);
+                        uint16_t l4 = __builtin_bswap16(bset_hw[6]);
+                        uint16_t l5 = __builtin_bswap16(bset_hw[7]);
+                        fprintf(stderr, "  Queue %u: buf_tbl=0x%08X bset=0x%08X [lim=%u clm=%u lanes={%u,%u,%u,%u,%u,%u}]\n",
+                                q, buf_ea, bset_ea, lim, clm, l0, l1, l2, l3, l4, l5);
+                        if (buf_ea >= 0x10000 && buf_ea < 0xFF000000) {
+                            const uint32_t* packets = (const uint32_t*)(vm_base + buf_ea);
+                            for (int p = 0; p < 32; p++) {
+                                uint32_t w0 = __builtin_bswap32(packets[p * 2 + 0]);
+                                uint32_t w1 = __builtin_bswap32(packets[p * 2 + 1]);
+                                if (w0 == 0 && w1 == 0) {
+                                    fprintf(stderr, "    Packet %2d: [NULL TERMINATOR {00000000, 00000000}]\n", p);
+                                    break;
+                                }
+                                uint16_t cmd = (uint16_t)(w0 >> 16);
+                                uint16_t sub = (uint16_t)(w0 & 0xFFFF);
+                                const char* cmd_name = (cmd == 1) ? "JOB" : (cmd == 2) ? "BARRIER" : (cmd == 3) ? "RSX_FENCE" : (cmd == 4) ? "DEP_DEC (cmd 4)" : "OTHER";
+                                fprintf(stderr, "    Packet %2d: {cmd=0x%04X (%s), sub=0x%04X, ea=0x%08X}\n",
+                                        p, cmd, cmd_name, sub, w1);
+                                if (cmd == 4 && w1 == 0x71600484u) {
+                                    found_cmd4_target = true;
+                                    fprintf(stderr, "      --> [MATCH] Queue %u packet %d contains cmd 4 targeting 0x71600484!\n", q, p);
+                                }
+                            }
+                        }
+                    }
+                    if (!found_cmd4_target) {
+                        fprintf(stderr, "  [TASK 3 VERDICT] No queue in RenJobSet10 contains a cmd 4 targeting 0x71600484!\n");
+                    }
+                } else {
+                    fprintf(stderr, "  [TASK 3] desc_base not yet initialized (0x%08X)\n", desc_base);
                 }
             }
 

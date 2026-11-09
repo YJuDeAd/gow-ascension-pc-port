@@ -2,7 +2,8 @@
 param(
     [int]$Runs = 10,
     [int]$Seconds = 60,
-    [string]$LogDir = "build\logs\task1_revert"
+    [string]$LogDir = "build\logs\task1_revert",
+    [string]$Renderer = "d3d12"
 )
 
 $ErrorActionPreference = "Stop"
@@ -39,7 +40,9 @@ for ($i = 1; $i -le $Runs; $i++) {
     $outLog = Join-Path $LogDir ("run_{0}_stdout.log" -f $pad)
     $errLog = Join-Path $LogDir ("run_{0}_stderr.log" -f $pad)
 
-    $p = Start-Process -FilePath $exe -ArgumentList $elf -PassThru -RedirectStandardOutput $outLog -RedirectStandardError $errLog
+    $env:GOW_RENDERER = $Renderer
+    $argsList = @($elf, ("--renderer={0}" -f $Renderer))
+    $p = Start-Process -FilePath $exe -ArgumentList $argsList -PassThru -RedirectStandardOutput $outLog -RedirectStandardError $errLog
 
     $elapsed = 0
     $capped = $false

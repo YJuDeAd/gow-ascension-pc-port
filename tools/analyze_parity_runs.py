@@ -65,6 +65,7 @@ def parse_run_log(run_dir, run_num):
     re_wid_audit = re.compile(r"wid=(\d+).*?pm_entries=(\d+).*?jobs_completed=(\d+)")
     re_main_poll = re.compile(r"\[MAIN-POLL-00466E28\] mgr_ea=0x([0-9A-Fa-f]+) desc_base=0x([0-9A-Fa-f]+) hdr=0x([0-9A-Fa-f]+) target_val=(\d+) min_val=(\d+)")
     re_desc_row = re.compile(r"\+0x70:\s+([0-9A-Fa-f]{4})([0-9A-Fa-f]{4})\s+([0-9A-Fa-f]{4})([0-9A-Fa-f]{4})\s+([0-9A-Fa-f]{4})([0-9A-Fa-f]{4})\s+([0-9A-Fa-f]{4})([0-9A-Fa-f]{4})")
+    re_gcm = re.compile(r"GCM FIFO ctrl.*?: put=(0x[0-9A-Fa-f]+) get=(0x[0-9A-Fa-f]+)")
 
     main_lr = None
     time_series_gp = {}
@@ -74,6 +75,14 @@ def parse_run_log(run_dir, run_num):
     q3_target = None
     q3_counters = None
     in_desc_base = False
+    gcm_put = "-"
+    gcm_get = "-"
+
+    for line in err_lines:
+        m_gcm = re_gcm.search(line)
+        if m_gcm:
+            gcm_put = m_gcm.group(1)
+            gcm_get = m_gcm.group(2)
 
     for line in err_lines:
         m_ld = re_livedraw.search(line)
@@ -221,6 +230,8 @@ def parse_run_log(run_dir, run_num):
         "wid10_jobs_done": wid10_jobs_done,
         "q3_counters": q3_counters,
         "q3_target": q3_target,
+        "gcm_get": gcm_get,
+        "gcm_put": gcm_put,
         "main_lr": main_lr,
         "lr_history": lr_history
     }
@@ -247,6 +258,15 @@ def print_report(run_dir):
         # q3_counters: hw 1..7 are +2..+0xE (claim, L0..L5)
         q3_str = f"[{','.join(str(x) for x in r['q3_counters'][1:])} / {r['q3_target']}]"
         print(f"| Run {r['run']} | `{r['err_file']}` | `{lr_hist}` | `{w8}` | `{w10}` | `{q3_str}` | {r['max_groups']} | {r['max_presents']} | {r['checkpoint']} |")
+
+    # Task 5 Table Format
+    print(f"\n--- TASK 5 TABLE FORMAT ---")
+    print(f"| Run | Log File | Main LR History (10s..60s) | GCM FIFO (get / put) | WID 8 pm_entries | True Presents (TELEMETRY) | Checkpoint Reached |")
+    print(f"|---|---|---|---|---|---|---|")
+    for r in runs:
+        lr_hist = f"{r['lr_history'][10]}->{r['lr_history'][20]}->{r['lr_history'][30]}->{r['lr_history'][40]}->{r['lr_history'][50]}->{r['lr_history'][60]}"
+        gcm_str = f"{r['gcm_get']} / {r['gcm_put']}"
+        print(f"| Run {r['run']} | `{r['err_file']}` | `{lr_hist}` | `{gcm_str}` | {r['wid8_pm_entries']} | {r['max_presents']} | {r['checkpoint']} |")
 
     # Save summary json
     summary_path = os.path.join(run_dir, "summary.json")
