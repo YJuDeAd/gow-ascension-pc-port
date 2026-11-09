@@ -236,10 +236,7 @@ def parse_logs(stdout_path, stderr_path):
     flips_mean = round(sum(flips_list) / len(flips_list), 2) if flips_list else 0.0
 
     ld_frames = re.findall(r"\[live-draw\] frame (\d+)", stderr_content)
-    if ld_frames:
-        ld_cnt = int(ld_frames[-1])
-        if ld_cnt > total_presents:
-            total_presents = ld_cnt
+    max_ld_frame = int(ld_frames[-1]) if ld_frames else 0
     if not flips_list:
         flips_cmd = len(re.findall(r"_cellGcmSetFlipCommand", stderr_content))
         if flips_cmd > 0:

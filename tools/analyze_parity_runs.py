@@ -1,6 +1,25 @@
 import os
 import re
 import json
+import sys
+
+def read_file_safely(path):
+    if not os.path.exists(path):
+        return []
+    with open(path, "rb") as f:
+        raw = f.read()
+    if raw.startswith(b"\xff\xfe") or raw.startswith(b"\xfe\xff"):
+        try:
+            return raw.decode("utf-16", errors="replace").splitlines(keepends=True)
+        except Exception:
+            pass
+    try:
+        return raw.decode("utf-8").splitlines(keepends=True)
+    except UnicodeDecodeError:
+        try:
+            return raw.decode("utf-16", errors="replace").splitlines(keepends=True)
+        except Exception:
+            return raw.decode("latin-1", errors="replace").splitlines(keepends=True)
 
 def parse_run_log(run_dir, run_num):
     pad = f"{run_num:02d}"
@@ -12,14 +31,8 @@ def parse_run_log(run_dir, run_num):
     if not os.path.exists(err_path):
         return None
 
-    with open(err_path, "r", encoding="utf-8", errors="ignore") as f:
-        err_lines = f.readlines()
-    
-    out_lines = []
-    if os.path.exists(out_path):
-        with open(out_path, "r", encoding="utf-8", errors="ignore") as f:
-            out_lines = f.readlines()
-
+    err_lines = read_file_safely(err_path)
+    out_lines = read_file_safely(out_path)
     combined = err_lines + out_lines
 
     # NOSPACE_EXIT
@@ -31,20 +44,36 @@ def parse_run_log(run_dir, run_num):
     audio_port_start = any("PortStart" in l or "cellAudioPortStart" in l for l in combined)
 
     # Crash
-    crash = any("FATAL" in l or "Access Violation" in l or "Crash handler" in l or "Segmentation fault" in l for l in combined)
+    crash = any("FATAL" in l or "Access Violation" in l or "Crash handler" in l or "Segmentation fault" in l or "[CRASH]" in l for l in combined)
 
     max_frame = 0
     max_groups = 0
     max_presents = 0
+    wid8_pm_entries = 0
+    wid8_jobs_done = 0
+    wid10_pm_entries = 0
+    wid10_jobs_done = 0
 
     re_livedraw = re.compile(r"\[live-draw\] frame (\d+).*?groups\[seen=\d+\s+exec=(\d+)")
-    re_flip = re.compile(r"\[live-draw\] flip (\d+)")
-    re_watchdog_lr = re.compile(r"\[WATCHDOG\]\s+guest-tid 1\s+lr=(0x[0-9A-Fa-f]+)")
-    re_pm_end = re.compile(r"\[pm-end\] lane (\d+).*?halted=(\d+).*?depth=(\d+)")
-    re_wait_signal = re.compile(r"sleeping (\d+)s in WAIT_SIGNAL")
+    re_telem = re.compile(r"\[TELEMETRY 5s\] wall=([0-9.]+)s \| dl_head=\d+.*?presents=([0-9.]+)/s \[buf0=(\d+), buf1=(\d+)\](?: \| total_presents=(\d+))?")
+    re_pres_qpc = re.compile(r"\[present-qpc\] preserved (\d+) successful presents")
+    re_stage = re.compile(r"\[STAGE\]\s+t=(\d+)\s+main_lr=(0x[0-9A-Fa-f]+)\s+main_last_hle=([^\s]+)\s+live_draws=(\d+)\s+presents=(\d+)")
+    re_boot_diag = re.compile(r"\[BOOT-DIAG @ (\d+)s\] lr=(0x[0-9A-Fa-f]+)")
+    re_thread_audit = re.compile(r"=== \[TASK4-THREAD-AUDIT @ (\d+)s\] ===")
+    re_thread_main = re.compile(r"Thread tid=1 \[main\]:.*?lr=(0x[0-9A-Fa-f]+)")
+    re_wid8 = re.compile(r"Workload 'BrBDblBufWrkld' \(wid=8.*?\):.*?pm_entries=(\d+)")
+    re_wid_audit = re.compile(r"wid=(\d+).*?pm_entries=(\d+).*?jobs_completed=(\d+)")
+    re_main_poll = re.compile(r"\[MAIN-POLL-00466E28\] mgr_ea=0x([0-9A-Fa-f]+) desc_base=0x([0-9A-Fa-f]+) hdr=0x([0-9A-Fa-f]+) target_val=(\d+) min_val=(\d+)")
+    re_desc_row = re.compile(r"\+0x70:\s+([0-9A-Fa-f]{4})([0-9A-Fa-f]{4})\s+([0-9A-Fa-f]{4})([0-9A-Fa-f]{4})\s+([0-9A-Fa-f]{4})([0-9A-Fa-f]{4})\s+([0-9A-Fa-f]{4})([0-9A-Fa-f]{4})")
 
     main_lr = None
-    pm_end_depth2000 = False
+    time_series_gp = {}
+    time_series_lr = {}
+    cur_audit_sec = None
+
+    q3_target = None
+    q3_counters = None
+    in_desc_base = False
 
     for line in err_lines:
         m_ld = re_livedraw.search(line)
@@ -56,43 +85,122 @@ def parse_run_log(run_dir, run_num):
             if groups > max_groups:
                 max_groups = groups
 
-        m_fl = re_flip.search(line)
-        if m_fl:
-            fl = int(m_fl.group(1))
-            if fl > max_presents:
-                max_presents = fl
+        m_tel = re_telem.search(line)
+        if m_tel:
+            w_sec = int(round(float(m_tel.group(1))))
+            if m_tel.group(4):
+                pres = int(m_tel.group(4))
+            else:
+                pres = int(m_tel.group(2)) + int(m_tel.group(3))
+            if pres > max_presents:
+                max_presents = pres
+            time_series_gp[w_sec] = (max_groups, pres)
 
-        m_w = re_watchdog_lr.search(line)
-        if m_w:
-            main_lr = m_w.group(1)
+        m_qpc = re_pres_qpc.search(line)
+        if m_qpc:
+            qpc_pres = int(m_qpc.group(1))
+            if qpc_pres > max_presents:
+                max_presents = qpc_pres
 
-        m_pm = re_pm_end.search(line)
-        if m_pm and int(m_pm.group(3)) == 2000:
-            pm_end_depth2000 = True
+        m_stg = re_stage.search(line)
+        if m_stg:
+            s_sec = int(m_stg.group(1))
+            s_lr = m_stg.group(2).upper()
+            s_pres = int(m_stg.group(5))
+            if s_pres > max_presents:
+                max_presents = s_pres
+            time_series_gp[s_sec] = (max_groups, s_pres)
+            time_series_lr[s_sec] = s_lr
+            main_lr = s_lr
 
-    if not main_lr and any("func_0061B918" in l for l in err_lines):
-        main_lr = "0x0061B9FC"
+        m_bd = re_boot_diag.search(line)
+        if m_bd:
+            b_sec = int(m_bd.group(1))
+            b_lr = m_bd.group(2).upper()
+            time_series_lr[b_sec] = b_lr
+            main_lr = b_lr
 
-    max_presents = max(max_presents, max_frame)
+        m_ta = re_thread_audit.search(line)
+        if m_ta:
+            cur_audit_sec = int(m_ta.group(1))
 
-    # In these runs, the frame sequence finishes before 30s, so groups/presents stabilize
-    gp_10 = (max_groups, max_presents)
-    gp_20 = (max_groups, max_presents)
-    gp_30 = (max_groups, max_presents)
-    gp_45 = (max_groups, max_presents)
+        if cur_audit_sec is not None:
+            m_tm = re_thread_main.search(line)
+            if m_tm:
+                tm_lr = m_tm.group(1).upper()
+                time_series_lr[cur_audit_sec] = tm_lr
+                main_lr = tm_lr
+                cur_audit_sec = None
 
-    # Main thread LR history
-    lr_history = {s: (main_lr if main_lr else "-") for s in [10, 20, 30, 45]}
+        m_w8 = re_wid8.search(line)
+        if m_w8:
+            w8_cnt = int(m_w8.group(1))
+            if w8_cnt > wid8_pm_entries:
+                wid8_pm_entries = w8_cnt
 
-    # Determine milestone
+        m_wa = re_wid_audit.search(line)
+        if m_wa:
+            wid = int(m_wa.group(1))
+            pm = int(m_wa.group(2))
+            jobs = int(m_wa.group(3))
+            if wid == 8:
+                if pm > wid8_pm_entries: wid8_pm_entries = pm
+                if jobs > wid8_jobs_done: wid8_jobs_done = jobs
+            elif wid == 10:
+                if pm > wid10_pm_entries: wid10_pm_entries = pm
+                if jobs > wid10_jobs_done: wid10_jobs_done = jobs
+
+        m_poll = re_main_poll.search(line)
+        if m_poll:
+            q3_target = int(m_poll.group(4))
+
+        if "[DESC-BASE @" in line:
+            in_desc_base = True
+        elif in_desc_base and ("[" in line and "+0x" not in line):
+            in_desc_base = False
+
+        if in_desc_base:
+            m_drow = re_desc_row.search(line)
+            if m_drow:
+                # +0x70 is bset[3] (halfword 0=limit, halfword 1=claim, halfwords 2..7=L0..L5)
+                # groups: 1=lim, 2=clm, 3=L0, 4=L1, 5=L2, 6=L3, 7=L4, 8=L5
+                hw = [int(m_drow.group(k), 16) for k in range(1, 9)]
+                q3_counters = hw
+
+    def get_at_sec(ts_dict, target_sec, default_val):
+        if not ts_dict:
+            return default_val
+        closest = None
+        for s in sorted(ts_dict.keys()):
+            if s <= target_sec:
+                closest = ts_dict[s]
+            else:
+                break
+        return closest if closest is not None else default_val
+
+    lr_history = {
+        10: get_at_sec(time_series_lr, 10, main_lr if main_lr else "-"),
+        20: get_at_sec(time_series_lr, 20, main_lr if main_lr else "-"),
+        30: get_at_sec(time_series_lr, 30, main_lr if main_lr else "-"),
+        40: get_at_sec(time_series_lr, 40, main_lr if main_lr else "-"),
+        50: get_at_sec(time_series_lr, 50, main_lr if main_lr else "-"),
+        60: get_at_sec(time_series_lr, 60, main_lr if main_lr else "-"),
+    }
+
+    # Determine checkpoint reached
     if any("Santa Monica" in l or "SMS_LOGO" in l for l in combined) or max_frame >= 800:
-        milestone = f"Santa Monica Studio Logo (frame {max_frame}, groups {max_groups})"
+        checkpoint = f"Santa Monica Studio Logo (frame {max_frame})"
     elif any("Sony Computer Entertainment" in l or "SCEA" in l for l in combined) or max_frame >= 200:
-        milestone = f"Sony / Legal Splash (frame {max_frame}, groups {max_groups})"
-    elif audio_port_start or max_frame > 0:
-        milestone = f"Boot / Intro Audio Playing (frame {max_frame}, groups {max_groups})"
+        checkpoint = f"Sony / Legal Splash (frame {max_frame})"
+    elif audio_port_start or max_frame > 0 or max_presents > 0:
+        checkpoint = f"Intro FMV / Audio Playing (frame {max_frame})"
     else:
-        milestone = f"Early Init (frame {max_frame})"
+        checkpoint = f"Early Init (frame {max_frame})"
+
+    if not q3_counters:
+        q3_counters = [0, 0, 0, 0, 0, 0, 0, 0]
+    if q3_target is None:
+        q3_target = 1
 
     return {
         "run": pad,
@@ -103,21 +211,22 @@ def parse_run_log(run_dir, run_num):
         "sail_calls": sail_calls,
         "audio_port_start": audio_port_start,
         "crash": crash,
-        "milestone": milestone,
+        "checkpoint": checkpoint,
         "max_frame": max_frame,
         "max_groups": max_groups,
         "max_presents": max_presents,
+        "wid8_pm_entries": wid8_pm_entries,
+        "wid8_jobs_done": wid8_jobs_done,
+        "wid10_pm_entries": wid10_pm_entries,
+        "wid10_jobs_done": wid10_jobs_done,
+        "q3_counters": q3_counters,
+        "q3_target": q3_target,
         "main_lr": main_lr,
-        "pm_end_depth2000": pm_end_depth2000,
-        "gp_10": gp_10,
-        "gp_20": gp_20,
-        "gp_30": gp_30,
-        "gp_45": gp_45,
         "lr_history": lr_history
     }
 
 def print_report(run_dir):
-    print(f"=== Parity Runs Analysis Report ({run_dir}) ===")
+    print(f"\n==================== Parity Runs Analysis Report ({run_dir}) ====================")
     runs = []
     for i in range(1, 11):
         r = parse_run_log(run_dir, i)
@@ -128,39 +237,23 @@ def print_report(run_dir):
         print(f"No run logs found in {run_dir}!")
         return
 
-    # Table 1: High level summary
-    print(f"{'Run':<4} | {'Log Files':<35} | {'NOSPACE':<8} | {'AudioStart':<10} | {'Vdec':<5} | {'Sail':<5} | {'Crash':<6} | {'Milestone Reached'}")
-    print("-" * 125)
+    # Master Task 2 Table
+    print(f"\n| Run | Log File | Main LR (10s..60s) | WID 8 (pm/job) | WID 10 (pm/job) | Queue-3 (+2..+E / tgt) | Groups | Presents | Checkpoint Reached |")
+    print(f"|---|---|---|---|---|---|---|---|---|")
     for r in runs:
-        logs_str = f"{r['err_file']} / {r['out_file']}"
-        print(f"{r['run']:<4} | {logs_str:<35} | {str(r['nospace']):<8} | {str(r['audio_port_start']):<10} | {r['vdec_calls']:<5} | {r['sail_calls']:<5} | {str(r['crash']):<6} | {r['milestone']}")
-
-    # Table 2: Groups & Presents at 10s, 20s, 30s, 45s
-    print(f"\n--- Groups / Presents at 10s, 20s, 30s, 45s ---")
-    print(f"{'Run':<4} | {'@10s (G/P)':<16} | {'@20s (G/P)':<16} | {'@30s (G/P)':<16} | {'@45s (G/P)':<16} | {'Final Max (G/P)'}")
-    print("-" * 95)
-    for r in runs:
-        def fmt_gp(gp):
-            return f"{gp[0]} / {gp[1]}"
-        print(f"{r['run']:<4} | {fmt_gp(r['gp_10']):<16} | {fmt_gp(r['gp_20']):<16} | {fmt_gp(r['gp_30']):<16} | {fmt_gp(r['gp_45']):<16} | {r['max_groups']} / {r['max_presents']}")
-
-    # Table 3: Main Thread LR every 10s
-    print(f"\n--- Main Thread LR History ---")
-    secs = [10, 20, 30, 45]
-    header_secs = " | ".join(f"{s:3d}s" for s in secs)
-    print(f"{'Run':<4} | {header_secs}")
-    print("-" * (7 + len(header_secs)))
-    for r in runs:
-        lrs = [r["lr_history"].get(s, "   -      ") for s in secs]
-        print(f"{r['run']:<4} | {' | '.join(lrs)}")
+        lr_hist = f"{r['lr_history'][10]}->{r['lr_history'][20]}->{r['lr_history'][30]}->{r['lr_history'][40]}->{r['lr_history'][50]}->{r['lr_history'][60]}"
+        w8 = f"{r['wid8_pm_entries']}/{r['wid8_jobs_done']}"
+        w10 = f"{r['wid10_pm_entries']}/{r['wid10_jobs_done']}"
+        # q3_counters: hw 1..7 are +2..+0xE (claim, L0..L5)
+        q3_str = f"[{','.join(str(x) for x in r['q3_counters'][1:])} / {r['q3_target']}]"
+        print(f"| Run {r['run']} | `{r['err_file']}` | `{lr_hist}` | `{w8}` | `{w10}` | `{q3_str}` | {r['max_groups']} | {r['max_presents']} | {r['checkpoint']} |")
 
     # Save summary json
     summary_path = os.path.join(run_dir, "summary.json")
     with open(summary_path, "w", encoding="utf-8") as f:
         json.dump(runs, f, indent=2)
-    print(f"\nDetailed summary JSON saved to: {summary_path}")
+    print(f"\nDetailed summary JSON saved to: {summary_path}\n")
 
 if __name__ == "__main__":
-    import sys
-    d = sys.argv[1] if len(sys.argv) > 1 else "build/logs/parity_10_fixed"
+    d = sys.argv[1] if len(sys.argv) > 1 else "build/logs/task2_unhooked"
     print_report(d)
