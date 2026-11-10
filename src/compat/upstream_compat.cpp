@@ -24,6 +24,20 @@ extern "C" {
     extern uint32_t cellGcm_flip_request_count(void);
     extern uint32_t gcm_io_offset_to_ea(uint32_t io);
 }
+
+struct SpursPollHistEntry {
+    uint32_t cur;
+    uint32_t pick;
+    uint32_t ea;
+    uint64_t timestamp_us;
+};
+static spu_context* g_spu_lane_ctx[8] = {0};
+static uint32_t g_spu_lane_last_wid[8] = {0};
+static uint64_t g_spu_lane_last_entry_us[8] = {0};
+static int g_spu_lane_busy[8] = {0};
+static SpursPollHistEntry g_spurs_poll_hist_lane5[5] = {0};
+static uint32_t g_spurs_poll_hist_lane5_idx = 0;
+
 static void gow_barrier_watch_thread_func();
 
 

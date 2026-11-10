@@ -94,6 +94,7 @@ add_executable(gow_ascension
     "${CMAKE_CURRENT_SOURCE_DIR}/src/compat/upstream_compat.cpp"
     # PSN offline stubs
     "${CMAKE_CURRENT_SOURCE_DIR}/src/compat/psn_stubs.cpp"
+    "${PS3RECOMP_DIR}/runtime/rsx/rsx_backend.c"
     ${PS3RECOMP_SCAFFOLD}
     ${HLE_NID_TABLE}
     ${GEN_SOURCES}
