@@ -1,0 +1,1816 @@
+From b5800cc2a64404a50bd48433202dce53fb10ba77 Mon Sep 17 00:00:00 2001
+From: YJuDeAd <robinrashi@gmail.com>
+Date: Thu, 12 Nov 2026 01:18:55 +0530
+Subject: [PATCH 48/49] local: preserve local gow ascension fixes before
+ upstream update
+
+# Conflicts:
+#	runtime/ppu/ppu_fs.cpp
+#	runtime/spu/spu_channels.c
+---
+ gpu/src/ps3rsx.cpp              | 1172 ++++++++++++++++++++++++++++++-
+ gpu/tests/flip_smoke.cpp        |   36 +
+ libs/spurs/cellSpurs.c          |   59 +-
+ libs/video/rsx_d3d12_backend.c  |   12 +-
+ libs/video/rsx_host_window.h    |    6 +
+ libs/video/rsx_live_draw.c      |    6 +
+ libs/video/rsx_null_backend.c   |    5 +
+ runtime/ppu/ppu_fs.cpp          |   63 +-
+ runtime/ppu/ppu_sysprx.cpp      |    9 +-
+ runtime/ppu/tests/boot_main.cpp |    3 +-
+ runtime/rsx/rsx_backend.c       |    3 +
+ runtime/spu/spu_channels.c      |    8 +
+ runtime/spu/spu_context.h       |   16 +
+ runtime/spu/spurs_policy.c      |   26 +
+ 14 files changed, 1395 insertions(+), 29 deletions(-)
+
+diff --git a/gpu/src/ps3rsx.cpp b/gpu/src/ps3rsx.cpp
+index 704f6f19..2fa56b8a 100644
+--- a/gpu/src/ps3rsx.cpp
++++ b/gpu/src/ps3rsx.cpp
+@@ -1,13 +1,593 @@
+ /*
+- * ps3rsx.cpp - RPCS3 RSX Subsystem Bridge & Vulkan Presentation Interface
++ * ps3rsx.cpp - Real RPCS3 RSX Subsystem & Vulkan Swapchain Presenter
++ *
++ * Dynamically loads vulkan-1.dll at runtime without external SDK dependencies.
++ * Implements real Vulkan Instance, Win32 Surface, Physical/Logical Device,
++ * Swapchain (VK_FORMAT_B8G8R8A8_UNORM), RenderPass, Framebuffers, and
++ * Presentation engine for the guest RSX display buffers.
+  */
+ 
+ #include "../include/ps3rsx.h"
++
++#ifdef _WIN32
++#include <windows.h>
++#endif
++
+ #include <cstdio>
+ #include <cstdlib>
+ #include <cstring>
+ #include <chrono>
++#include <mutex>
++
++/* Minimal Vulkan 1.0/1.1 API Definitions & Constants */
++#define VK_SUCCESS 0
++#define VK_NOT_READY 1
++#define VK_TIMEOUT 2
++#define VK_STRUCTURE_TYPE_APPLICATION_INFO 0
++#define VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO 1
++#define VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO 2
++#define VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO 3
++#define VK_STRUCTURE_TYPE_SUBMIT_INFO 4
++#define VK_STRUCTURE_TYPE_WIN32_SURFACE_CREATE_INFO_KHR 1000009000
++#define VK_STRUCTURE_TYPE_SWAPCHAIN_CREATE_INFO_KHR 1000001000
++#define VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO 15
++#define VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO 37
++#define VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO 38
++#define VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO 39
++#define VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO 40
++#define VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO 42
++#define VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO 43
++#define VK_STRUCTURE_TYPE_PRESENT_INFO_KHR 1000001001
++#define VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO 12
++#define VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO 5
++#define VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER 46
++#define VK_STRUCTURE_TYPE_FENCE_CREATE_INFO 8
++#define VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO 9
++
++#define VK_FENCE_CREATE_SIGNALED_BIT 0x00000001
++#define VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT 0x00000002
++
++#define VK_BUFFER_USAGE_TRANSFER_SRC_BIT 0x00000001
++#define VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT 0x00000002
++#define VK_MEMORY_PROPERTY_HOST_COHERENT_BIT 0x00000004
++#define VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL 7
++#define VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT 0x00000001
++#define VK_PIPELINE_STAGE_TRANSFER_BIT 0x00001000
++#define VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT 0x00002000
++#define VK_ACCESS_TRANSFER_WRITE_BIT 0x00000800
++#define VK_ACCESS_MEMORY_READ_BIT 0x00008000
++#define VK_QUEUE_FAMILY_IGNORED (~0U)
++
++#define VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU 2
++#define VK_PHYSICAL_DEVICE_TYPE_INTEGRATED_GPU 1
++#define VK_QUEUE_GRAPHICS_BIT 0x00000001
++#define VK_FORMAT_B8G8R8A8_UNORM 44
++#define VK_FORMAT_R8G8B8A8_UNORM 37
++#define VK_COLOR_SPACE_SRGB_NONLINEAR_KHR 0
++#define VK_PRESENT_MODE_FIFO_KHR 2
++#define VK_PRESENT_MODE_IMMEDIATE_KHR 0
++#define VK_PRESENT_MODE_MAILBOX_KHR 1
++#define VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT 0x00000010
++#define VK_IMAGE_USAGE_TRANSFER_DST_BIT 0x00000002
++#define VK_SHARING_MODE_EXCLUSIVE 0
++#define VK_SURFACE_TRANSFORM_IDENTITY_BIT_KHR 0x00000001
++#define VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR 0x00000001
++#define VK_IMAGE_VIEW_TYPE_2D 1
++#define VK_IMAGE_ASPECT_COLOR_BIT 0x00000001
++#define VK_COMMAND_BUFFER_LEVEL_PRIMARY 0
++#define VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT 0x00000001
++#define VK_SUBPASS_CONTENTS_INLINE 0
++#define VK_ATTACHMENT_LOAD_OP_CLEAR 1
++#define VK_ATTACHMENT_LOAD_OP_DONT_CARE 2
++#define VK_ATTACHMENT_STORE_OP_STORE 0
++#define VK_IMAGE_LAYOUT_UNDEFINED 0
++#define VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL 2
++#define VK_IMAGE_LAYOUT_PRESENT_SRC_KHR 1000001002
++#define VK_PIPELINE_BIND_POINT_GRAPHICS 2
++#define VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT 0x00000400
++
++typedef void* VkHandle;
++typedef VkHandle VkInstance;
++typedef VkHandle VkPhysicalDevice;
++typedef VkHandle VkDevice;
++typedef VkHandle VkQueue;
++typedef VkHandle VkSurfaceKHR;
++typedef VkHandle VkSwapchainKHR;
++typedef VkHandle VkImage;
++typedef VkHandle VkImageView;
++typedef VkHandle VkRenderPass;
++typedef VkHandle VkFramebuffer;
++typedef VkHandle VkCommandPool;
++typedef VkHandle VkCommandBuffer;
++typedef VkHandle VkSemaphore;
++typedef VkHandle VkFence;
++typedef VkHandle VkBuffer;
++typedef VkHandle VkDeviceMemory;
++typedef uint64_t VkDeviceSize;
++
++typedef int VkResult;
++typedef uint32_t VkFlags;
++typedef VkFlags VkPipelineStageFlags;
++
++typedef struct VkExtent2D {
++    uint32_t width;
++    uint32_t height;
++} VkExtent2D;
++
++typedef struct VkExtent3D {
++    uint32_t width;
++    uint32_t height;
++    uint32_t depth;
++} VkExtent3D;
++
++typedef struct VkOffset2D {
++    int32_t x;
++    int32_t y;
++} VkOffset2D;
++
++typedef struct VkRect2D {
++    VkOffset2D offset;
++    VkExtent2D extent;
++} VkRect2D;
++
++typedef struct VkClearColorValue {
++    float float32[4];
++} VkClearColorValue;
++
++typedef union VkClearValue {
++    VkClearColorValue color;
++} VkClearValue;
++
++typedef struct VkApplicationInfo {
++    uint32_t sType;
++    const void* pNext;
++    const char* pApplicationName;
++    uint32_t applicationVersion;
++    const char* pEngineName;
++    uint32_t engineVersion;
++    uint32_t apiVersion;
++} VkApplicationInfo;
++
++typedef struct VkInstanceCreateInfo {
++    uint32_t sType;
++    const void* pNext;
++    VkFlags flags;
++    const VkApplicationInfo* pApplicationInfo;
++    uint32_t enabledLayerCount;
++    const char* const* ppEnabledLayerNames;
++    uint32_t enabledExtensionCount;
++    const char* const* ppEnabledExtensionNames;
++} VkInstanceCreateInfo;
++
++typedef struct VkDeviceQueueCreateInfo {
++    uint32_t sType;
++    const void* pNext;
++    VkFlags flags;
++    uint32_t queueFamilyIndex;
++    uint32_t queueCount;
++    const float* pQueuePriorities;
++} VkDeviceQueueCreateInfo;
++
++typedef struct VkDeviceCreateInfo {
++    uint32_t sType;
++    const void* pNext;
++    VkFlags flags;
++    uint32_t queueCreateInfoCount;
++    const VkDeviceQueueCreateInfo* pQueueCreateInfos;
++    uint32_t enabledLayerCount;
++    const char* const* ppEnabledLayerNames;
++    uint32_t enabledExtensionCount;
++    const char* const* ppEnabledExtensionNames;
++    const void* pEnabledFeatures;
++} VkDeviceCreateInfo;
++
++typedef struct VkWin32SurfaceCreateInfoKHR {
++    uint32_t sType;
++    const void* pNext;
++    VkFlags flags;
++    HINSTANCE hinstance;
++    HWND hwnd;
++} VkWin32SurfaceCreateInfoKHR;
++
++typedef struct VkSurfaceCapabilitiesKHR {
++    uint32_t minImageCount;
++    uint32_t maxImageCount;
++    VkExtent2D currentExtent;
++    VkExtent2D minImageExtent;
++    VkExtent2D maxImageExtent;
++    uint32_t maxImageArrayLayers;
++    VkFlags supportedTransforms;
++    VkFlags currentTransform;
++    VkFlags supportedCompositeAlpha;
++    VkFlags supportedUsageFlags;
++} VkSurfaceCapabilitiesKHR;
++
++typedef struct VkSwapchainCreateInfoKHR {
++    uint32_t sType;
++    const void* pNext;
++    VkFlags flags;
++    VkSurfaceKHR surface;
++    uint32_t minImageCount;
++    uint32_t imageFormat;
++    uint32_t imageColorSpace;
++    VkExtent2D imageExtent;
++    uint32_t imageArrayLayers;
++    VkFlags imageUsage;
++    uint32_t imageSharingMode;
++    uint32_t queueFamilyIndexCount;
++    const uint32_t* pQueueFamilyIndices;
++    VkFlags preTransform;
++    VkFlags compositeAlpha;
++    uint32_t presentMode;
++    uint32_t clipped;
++    VkSwapchainKHR oldSwapchain;
++} VkSwapchainCreateInfoKHR;
++
++typedef struct VkComponentMapping {
++    uint32_t r, g, b, a;
++} VkComponentMapping;
++
++typedef struct VkImageSubresourceRange {
++    VkFlags aspectMask;
++    uint32_t baseMipLevel;
++    uint32_t levelCount;
++    uint32_t baseArrayLayer;
++    uint32_t layerCount;
++} VkImageSubresourceRange;
++
++typedef struct VkImageViewCreateInfo {
++    uint32_t sType;
++    const void* pNext;
++    VkFlags flags;
++    VkImage image;
++    uint32_t viewType;
++    uint32_t format;
++    VkComponentMapping components;
++    VkImageSubresourceRange subresourceRange;
++} VkImageViewCreateInfo;
++
++typedef struct VkAttachmentDescription {
++    VkFlags flags;
++    uint32_t format;
++    uint32_t samples;
++    uint32_t loadOp;
++    uint32_t storeOp;
++    uint32_t stencilLoadOp;
++    uint32_t stencilStoreOp;
++    uint32_t initialLayout;
++    uint32_t finalLayout;
++} VkAttachmentDescription;
++
++typedef struct VkAttachmentReference {
++    uint32_t attachment;
++    uint32_t layout;
++} VkAttachmentReference;
++
++typedef struct VkSubpassDescription {
++    VkFlags flags;
++    uint32_t pipelineBindPoint;
++    uint32_t inputAttachmentCount;
++    const VkAttachmentReference* pInputAttachments;
++    uint32_t colorAttachmentCount;
++    const VkAttachmentReference* pColorAttachments;
++    const VkAttachmentReference* pResolveAttachments;
++    const VkAttachmentReference* pDepthStencilAttachment;
++    uint32_t preserveAttachmentCount;
++    const uint32_t* pPreserveAttachments;
++} VkSubpassDescription;
++
++typedef struct VkRenderPassCreateInfo {
++    uint32_t sType;
++    const void* pNext;
++    VkFlags flags;
++    uint32_t attachmentCount;
++    const VkAttachmentDescription* pAttachments;
++    uint32_t subpassCount;
++    const VkSubpassDescription* pSubpasses;
++    uint32_t dependencyCount;
++    const void* pDependencies;
++} VkRenderPassCreateInfo;
++
++typedef struct VkFramebufferCreateInfo {
++    uint32_t sType;
++    const void* pNext;
++    VkFlags flags;
++    VkRenderPass renderPass;
++    uint32_t attachmentCount;
++    const VkImageView* pAttachments;
++    uint32_t width;
++    uint32_t height;
++    uint32_t layers;
++} VkFramebufferCreateInfo;
++
++typedef struct VkCommandPoolCreateInfo {
++    uint32_t sType;
++    const void* pNext;
++    VkFlags flags;
++    uint32_t queueFamilyIndex;
++} VkCommandPoolCreateInfo;
+ 
++typedef struct VkCommandBufferAllocateInfo {
++    uint32_t sType;
++    const void* pNext;
++    VkCommandPool commandPool;
++    uint32_t level;
++    uint32_t commandBufferCount;
++} VkCommandBufferAllocateInfo;
++
++typedef struct VkCommandBufferBeginInfo {
++    uint32_t sType;
++    const void* pNext;
++    VkFlags flags;
++    const void* pInheritanceInfo;
++} VkCommandBufferBeginInfo;
++
++typedef struct VkRenderPassBeginInfo {
++    uint32_t sType;
++    const void* pNext;
++    VkRenderPass renderPass;
++    VkFramebuffer framebuffer;
++    VkRect2D renderArea;
++    uint32_t clearValueCount;
++    const VkClearValue* pClearValues;
++} VkRenderPassBeginInfo;
++
++typedef struct VkSubmitInfo {
++    uint32_t sType;
++    const void* pNext;
++    uint32_t waitSemaphoreCount;
++    const VkSemaphore* pWaitSemaphores;
++    const VkFlags* pWaitDstStageMask;
++    uint32_t commandBufferCount;
++    const VkCommandBuffer* pCommandBuffers;
++    uint32_t signalSemaphoreCount;
++    const VkSemaphore* pSignalSemaphores;
++} VkSubmitInfo;
++
++typedef struct VkPresentInfoKHR {
++    uint32_t sType;
++    const void* pNext;
++    uint32_t waitSemaphoreCount;
++    const VkSemaphore* pWaitSemaphores;
++    uint32_t swapchainCount;
++    const VkSwapchainKHR* pSwapchains;
++    const uint32_t* pImageIndices;
++    VkResult* pResults;
++} VkPresentInfoKHR;
++
++typedef struct VkQueueFamilyProperties {
++    VkFlags queueFlags;
++    uint32_t queueCount;
++    uint32_t timestampValidBits;
++    VkExtent3D minImageTransferGranularity;
++} VkQueueFamilyProperties;
++
++typedef struct VkMemoryRequirements {
++    VkDeviceSize size;
++    VkDeviceSize alignment;
++    uint32_t memoryTypeBits;
++} VkMemoryRequirements;
++
++typedef struct VkMemoryType {
++    VkFlags propertyFlags;
++    uint32_t heapIndex;
++} VkMemoryType;
++
++typedef struct VkMemoryHeap {
++    VkDeviceSize size;
++    VkFlags flags;
++} VkMemoryHeap;
++
++typedef struct VkPhysicalDeviceMemoryProperties {
++    uint32_t memoryTypeCount;
++    VkMemoryType memoryTypes[32];
++    uint32_t memoryHeapCount;
++    VkMemoryHeap memoryHeaps[16];
++} VkPhysicalDeviceMemoryProperties;
++
++typedef struct VkBufferCreateInfo {
++    uint32_t sType;
++    const void* pNext;
++    VkFlags flags;
++    VkDeviceSize size;
++    VkFlags usage;
++    uint32_t sharingMode;
++    uint32_t queueFamilyIndexCount;
++    const uint32_t* pQueueFamilyIndices;
++} VkBufferCreateInfo;
++
++typedef struct VkMemoryAllocateInfo {
++    uint32_t sType;
++    const void* pNext;
++    VkDeviceSize allocationSize;
++    uint32_t memoryTypeIndex;
++} VkMemoryAllocateInfo;
++
++typedef struct VkImageMemoryBarrier {
++    uint32_t sType;
++    const void* pNext;
++    VkFlags srcAccessMask;
++    VkFlags dstAccessMask;
++    uint32_t oldLayout;
++    uint32_t newLayout;
++    uint32_t srcQueueFamilyIndex;
++    uint32_t dstQueueFamilyIndex;
++    VkImage image;
++    VkImageSubresourceRange subresourceRange;
++} VkImageMemoryBarrier;
++
++typedef struct VkFenceCreateInfo {
++    uint32_t sType;
++    const void* pNext;
++    VkFlags flags;
++} VkFenceCreateInfo;
++
++typedef struct VkSemaphoreCreateInfo {
++    uint32_t sType;
++    const void* pNext;
++    VkFlags flags;
++} VkSemaphoreCreateInfo;
++
++typedef struct VkOffset3D {
++    int32_t x;
++    int32_t y;
++    int32_t z;
++} VkOffset3D;
++
++
++typedef struct VkImageSubresourceLayers {
++    VkFlags aspectMask;
++    uint32_t mipLevel;
++    uint32_t baseArrayLayer;
++    uint32_t layerCount;
++} VkImageSubresourceLayers;
++
++typedef struct VkBufferImageCopy {
++    VkDeviceSize bufferOffset;
++    uint32_t bufferRowLength;
++    uint32_t bufferImageHeight;
++    VkImageSubresourceLayers imageSubresource;
++    VkOffset3D imageOffset;
++    VkExtent3D imageExtent;
++} VkBufferImageCopy;
++
++/* Function Pointer Signatures */
++typedef VkResult (*PFN_vkCreateInstance)(const VkInstanceCreateInfo*, const void*, VkInstance*);
++typedef void     (*PFN_vkDestroyInstance)(VkInstance, const void*);
++typedef VkResult (*PFN_vkEnumeratePhysicalDevices)(VkInstance, uint32_t*, VkPhysicalDevice*);
++typedef void     (*PFN_vkGetPhysicalDeviceProperties)(VkPhysicalDevice, void*);
++typedef void     (*PFN_vkGetPhysicalDeviceQueueFamilyProperties)(VkPhysicalDevice, uint32_t*, VkQueueFamilyProperties*);
++typedef VkResult (*PFN_vkCreateDevice)(VkPhysicalDevice, const VkDeviceCreateInfo*, const void*, VkDevice*);
++typedef void     (*PFN_vkDestroyDevice)(VkDevice, const void*);
++typedef void     (*PFN_vkGetDeviceQueue)(VkDevice, uint32_t, uint32_t, VkQueue*);
++typedef VkResult (*PFN_vkCreateWin32SurfaceKHR)(VkInstance, const VkWin32SurfaceCreateInfoKHR*, const void*, VkSurfaceKHR*);
++typedef void     (*PFN_vkDestroySurfaceKHR)(VkInstance, VkSurfaceKHR, const void*);
++typedef VkResult (*PFN_vkGetPhysicalDeviceSurfaceCapabilitiesKHR)(VkPhysicalDevice, VkSurfaceKHR, VkSurfaceCapabilitiesKHR*);
++typedef VkResult (*PFN_vkCreateSwapchainKHR)(VkDevice, const VkSwapchainCreateInfoKHR*, const void*, VkSwapchainKHR*);
++typedef void     (*PFN_vkDestroySwapchainKHR)(VkDevice, VkSwapchainKHR, const void*);
++typedef VkResult (*PFN_vkGetSwapchainImagesKHR)(VkDevice, VkSwapchainKHR, uint32_t*, VkImage*);
++typedef VkResult (*PFN_vkAcquireNextImageKHR)(VkDevice, VkSwapchainKHR, uint64_t, VkSemaphore, VkFence, uint32_t*);
++typedef VkResult (*PFN_vkQueuePresentKHR)(VkQueue, const VkPresentInfoKHR*);
++typedef VkResult (*PFN_vkCreateImageView)(VkDevice, const VkImageViewCreateInfo*, const void*, VkImageView*);
++typedef void     (*PFN_vkDestroyImageView)(VkDevice, VkImageView, const void*);
++typedef VkResult (*PFN_vkCreateRenderPass)(VkDevice, const VkRenderPassCreateInfo*, const void*, VkRenderPass*);
++typedef void     (*PFN_vkDestroyRenderPass)(VkDevice, VkRenderPass, const void*);
++typedef VkResult (*PFN_vkCreateFramebuffer)(VkDevice, const VkFramebufferCreateInfo*, const void*, VkFramebuffer*);
++typedef void     (*PFN_vkDestroyFramebuffer)(VkDevice, VkFramebuffer, const void*);
++typedef VkResult (*PFN_vkCreateCommandPool)(VkDevice, const VkCommandPoolCreateInfo*, const void*, VkCommandPool*);
++typedef void     (*PFN_vkDestroyCommandPool)(VkDevice, VkCommandPool, const void*);
++typedef VkResult (*PFN_vkAllocateCommandBuffers)(VkDevice, const VkCommandBufferAllocateInfo*, VkCommandBuffer*);
++typedef VkResult (*PFN_vkBeginCommandBuffer)(VkCommandBuffer, const VkCommandBufferBeginInfo*);
++typedef VkResult (*PFN_vkEndCommandBuffer)(VkCommandBuffer);
++typedef void     (*PFN_vkCmdBeginRenderPass)(VkCommandBuffer, const VkRenderPassBeginInfo*, uint32_t);
++typedef void     (*PFN_vkCmdEndRenderPass)(VkCommandBuffer);
++typedef VkResult (*PFN_vkQueueSubmit)(VkQueue, uint32_t, const VkSubmitInfo*, VkFence);
++typedef VkResult (*PFN_vkDeviceWaitIdle)(VkDevice);
++typedef void*    (*PFN_vkGetInstanceProcAddr)(VkInstance, const char*);
++typedef void*    (*PFN_vkGetDeviceProcAddr)(VkDevice, const char*);
++typedef VkResult (*PFN_vkCreateBuffer)(VkDevice, const VkBufferCreateInfo*, const void*, VkBuffer*);
++typedef void     (*PFN_vkDestroyBuffer)(VkDevice, VkBuffer, const void*);
++typedef void     (*PFN_vkGetBufferMemoryRequirements)(VkDevice, VkBuffer, VkMemoryRequirements*);
++typedef void     (*PFN_vkGetPhysicalDeviceMemoryProperties)(VkPhysicalDevice, VkPhysicalDeviceMemoryProperties*);
++typedef VkResult (*PFN_vkAllocateMemory)(VkDevice, const VkMemoryAllocateInfo*, const void*, VkDeviceMemory*);
++typedef void     (*PFN_vkFreeMemory)(VkDevice, VkDeviceMemory, const void*);
++typedef VkResult (*PFN_vkBindBufferMemory)(VkDevice, VkBuffer, VkDeviceMemory, VkDeviceSize);
++typedef VkResult (*PFN_vkMapMemory)(VkDevice, VkDeviceMemory, VkDeviceSize, VkDeviceSize, VkFlags, void**);
++typedef void     (*PFN_vkUnmapMemory)(VkDevice, VkDeviceMemory);
++typedef void     (*PFN_vkCmdPipelineBarrier)(VkCommandBuffer, VkFlags, VkFlags, VkFlags, uint32_t, const void*, uint32_t, const void*, uint32_t, const VkImageMemoryBarrier*);
++typedef void     (*PFN_vkCmdCopyBufferToImage)(VkCommandBuffer, VkBuffer, VkImage, uint32_t, uint32_t, const VkBufferImageCopy*);
++typedef VkResult (*PFN_vkCreateFence)(VkDevice, const VkFenceCreateInfo*, const void*, VkFence*);
++typedef void     (*PFN_vkDestroyFence)(VkDevice, VkFence, const void*);
++typedef VkResult (*PFN_vkWaitForFences)(VkDevice, uint32_t, const VkFence*, uint32_t, uint64_t);
++typedef VkResult (*PFN_vkResetFences)(VkDevice, uint32_t, const VkFence*);
++typedef VkResult (*PFN_vkResetCommandBuffer)(VkCommandBuffer, VkFlags);
++typedef VkResult (*PFN_vkCreateSemaphore)(VkDevice, const VkSemaphoreCreateInfo*, const void*, VkSemaphore*);
++typedef void     (*PFN_vkDestroySemaphore)(VkDevice, VkSemaphore, const void*);
++typedef void     (*PFN_vkCmdClearColorImage)(VkCommandBuffer, VkImage, uint32_t, const VkClearColorValue*, uint32_t, const VkImageSubresourceRange*);
++
++/* Dynamic Vulkan Dispatch Table */
++static HMODULE                                  s_vk_module = NULL;
++static PFN_vkGetInstanceProcAddr                vkGetInstanceProcAddr_fn = NULL;
++static PFN_vkGetDeviceProcAddr                  vkGetDeviceProcAddr_fn = NULL;
++static PFN_vkCreateInstance                     vkCreateInstance_fn = NULL;
++static PFN_vkDestroyInstance                    vkDestroyInstance_fn = NULL;
++static PFN_vkEnumeratePhysicalDevices           vkEnumeratePhysicalDevices_fn = NULL;
++static PFN_vkGetPhysicalDeviceProperties vkGetPhysicalDeviceProperties_fn = NULL;
++static PFN_vkGetPhysicalDeviceQueueFamilyProperties vkGetPhysicalDeviceQueueFamilyProperties_fn = NULL;
++static PFN_vkCreateDevice                       vkCreateDevice_fn = NULL;
++static PFN_vkDestroyDevice                      vkDestroyDevice_fn = NULL;
++static PFN_vkGetDeviceQueue                     vkGetDeviceQueue_fn = NULL;
++static PFN_vkCreateWin32SurfaceKHR              vkCreateWin32SurfaceKHR_fn = NULL;
++static PFN_vkDestroySurfaceKHR                  vkDestroySurfaceKHR_fn = NULL;
++static PFN_vkGetPhysicalDeviceSurfaceCapabilitiesKHR vkGetPhysicalDeviceSurfaceCapabilitiesKHR_fn = NULL;
++static PFN_vkCreateSwapchainKHR                 vkCreateSwapchainKHR_fn = NULL;
++static PFN_vkDestroySwapchainKHR                vkDestroySwapchainKHR_fn = NULL;
++static PFN_vkGetSwapchainImagesKHR              vkGetSwapchainImagesKHR_fn = NULL;
++static PFN_vkAcquireNextImageKHR                vkAcquireNextImageKHR_fn = NULL;
++static PFN_vkQueuePresentKHR                    vkQueuePresentKHR_fn = NULL;
++static PFN_vkCreateImageView                    vkCreateImageView_fn = NULL;
++static PFN_vkDestroyImageView                   vkDestroyImageView_fn = NULL;
++static PFN_vkCreateRenderPass                   vkCreateRenderPass_fn = NULL;
++static PFN_vkDestroyRenderPass                  vkDestroyRenderPass_fn = NULL;
++static PFN_vkCreateFramebuffer                  vkCreateFramebuffer_fn = NULL;
++static PFN_vkDestroyFramebuffer                 vkDestroyFramebuffer_fn = NULL;
++static PFN_vkCreateCommandPool                  vkCreateCommandPool_fn = NULL;
++static PFN_vkDestroyCommandPool                 vkDestroyCommandPool_fn = NULL;
++static PFN_vkAllocateCommandBuffers             vkAllocateCommandBuffers_fn = NULL;
++static PFN_vkBeginCommandBuffer                 vkBeginCommandBuffer_fn = NULL;
++static PFN_vkEndCommandBuffer                   vkEndCommandBuffer_fn = NULL;
++static PFN_vkCmdBeginRenderPass                 vkCmdBeginRenderPass_fn = NULL;
++static PFN_vkCmdEndRenderPass                   vkCmdEndRenderPass_fn = NULL;
++static PFN_vkQueueSubmit                        vkQueueSubmit_fn = NULL;
++static PFN_vkDeviceWaitIdle                     vkDeviceWaitIdle_fn = NULL;
++static PFN_vkCreateBuffer                       vkCreateBuffer_fn = NULL;
++static PFN_vkDestroyBuffer                      vkDestroyBuffer_fn = NULL;
++static PFN_vkGetBufferMemoryRequirements        vkGetBufferMemoryRequirements_fn = NULL;
++static PFN_vkGetPhysicalDeviceMemoryProperties  vkGetPhysicalDeviceMemoryProperties_fn = NULL;
++static PFN_vkAllocateMemory                     vkAllocateMemory_fn = NULL;
++static PFN_vkFreeMemory                         vkFreeMemory_fn = NULL;
++static PFN_vkBindBufferMemory                   vkBindBufferMemory_fn = NULL;
++static PFN_vkMapMemory                          vkMapMemory_fn = NULL;
++static PFN_vkUnmapMemory                        vkUnmapMemory_fn = NULL;
++static PFN_vkCmdPipelineBarrier                 vkCmdPipelineBarrier_fn = NULL;
++static PFN_vkCmdCopyBufferToImage               vkCmdCopyBufferToImage_fn = NULL;
++static PFN_vkCreateFence                        vkCreateFence_fn = NULL;
++static PFN_vkDestroyFence                       vkDestroyFence_fn = NULL;
++static PFN_vkWaitForFences                      vkWaitForFences_fn = NULL;
++static PFN_vkResetFences                        vkResetFences_fn = NULL;
++static PFN_vkResetCommandBuffer                 vkResetCommandBuffer_fn = NULL;
++static PFN_vkCreateSemaphore                    vkCreateSemaphore_fn = NULL;
++static PFN_vkDestroySemaphore                   vkDestroySemaphore_fn = NULL;
++static PFN_vkCmdClearColorImage                 vkCmdClearColorImage_fn = NULL;
++
++static int load_vulkan_dll(void)
++{
++    if (s_vk_module) return 1;
++    s_vk_module = LoadLibraryA("vulkan-1.dll");
++    if (!s_vk_module) {
++        fprintf(stderr, "[rpcs3-rsx] Failed to load vulkan-1.dll from system\n");
++        return 0;
++    }
++
++    vkGetInstanceProcAddr_fn = (PFN_vkGetInstanceProcAddr)GetProcAddress(s_vk_module, "vkGetInstanceProcAddr");
++    vkGetDeviceProcAddr_fn = (PFN_vkGetDeviceProcAddr)GetProcAddress(s_vk_module, "vkGetDeviceProcAddr");
++    vkCreateInstance_fn = (PFN_vkCreateInstance)GetProcAddress(s_vk_module, "vkCreateInstance");
++    vkDestroyInstance_fn = (PFN_vkDestroyInstance)GetProcAddress(s_vk_module, "vkDestroyInstance");
++    vkEnumeratePhysicalDevices_fn = (PFN_vkEnumeratePhysicalDevices)GetProcAddress(s_vk_module, "vkEnumeratePhysicalDevices");
++    vkGetPhysicalDeviceProperties_fn = (PFN_vkGetPhysicalDeviceProperties)GetProcAddress(s_vk_module, "vkGetPhysicalDeviceProperties");
++    vkGetPhysicalDeviceQueueFamilyProperties_fn = (PFN_vkGetPhysicalDeviceQueueFamilyProperties)GetProcAddress(s_vk_module, "vkGetPhysicalDeviceQueueFamilyProperties");
++    vkGetPhysicalDeviceMemoryProperties_fn = (PFN_vkGetPhysicalDeviceMemoryProperties)GetProcAddress(s_vk_module, "vkGetPhysicalDeviceMemoryProperties");
++    vkCreateDevice_fn = (PFN_vkCreateDevice)GetProcAddress(s_vk_module, "vkCreateDevice");
++    vkDestroyDevice_fn = (PFN_vkDestroyDevice)GetProcAddress(s_vk_module, "vkDestroyDevice");
++    vkGetDeviceQueue_fn = (PFN_vkGetDeviceQueue)GetProcAddress(s_vk_module, "vkGetDeviceQueue");
++    vkCreateWin32SurfaceKHR_fn = (PFN_vkCreateWin32SurfaceKHR)GetProcAddress(s_vk_module, "vkCreateWin32SurfaceKHR");
++    vkDestroySurfaceKHR_fn = (PFN_vkDestroySurfaceKHR)GetProcAddress(s_vk_module, "vkDestroySurfaceKHR");
++    vkGetPhysicalDeviceSurfaceCapabilitiesKHR_fn = (PFN_vkGetPhysicalDeviceSurfaceCapabilitiesKHR)GetProcAddress(s_vk_module, "vkGetPhysicalDeviceSurfaceCapabilitiesKHR");
++
++    return (vkCreateInstance_fn && vkCreateDevice_fn);
++}
++
++/* Vulkan State Context */
+ struct DisplayBuffer {
+     uint32_t location;
+     uint32_t offset;
+@@ -17,6 +597,7 @@ struct DisplayBuffer {
+     bool     active;
+ };
+ 
++static std::mutex          s_rsx_mutex;
+ static void*               s_hwnd = nullptr;
+ static uint32_t            s_width = 1280;
+ static uint32_t            s_height = 720;
+@@ -26,24 +607,387 @@ static uint32_t            s_frames = 0;
+ static DisplayBuffer       s_buffers[8] = {};
+ static std::chrono::steady_clock::time_point s_start_time;
+ 
++static VkInstance          s_instance = nullptr;
++static VkPhysicalDevice    s_phys_device = nullptr;
++static VkDevice            s_device = nullptr;
++static VkQueue             s_queue = nullptr;
++static uint32_t            s_queue_family = 0;
++static VkSurfaceKHR        s_surface = nullptr;
++static VkSwapchainKHR      s_swapchain = nullptr;
++static uint32_t            s_image_count = 0;
++static VkImage             s_images[4] = {};
++static VkImageView         s_views[4] = {};
++static VkRenderPass        s_render_pass = nullptr;
++static VkFramebuffer       s_framebuffers[4] = {};
++static VkCommandPool       s_cmd_pool = nullptr;
++static VkCommandBuffer     s_cmd_buffers[4] = {};
++static VkFence             s_fences[4] = {};
++static VkSemaphore         s_image_avail_sem[4] = {};
++static VkSemaphore         s_render_fin_sem[4] = {};
++static uint32_t            s_current_sync_idx = 0;
++
++static VkBuffer            s_staging_buf = nullptr;
++static VkDeviceMemory      s_staging_mem = nullptr;
++static void*               s_staging_ptr = nullptr;
++static VkDeviceSize        s_staging_size = 0;
++static bool                s_vk_ready = false;
++
+ extern "C" {
+ 
+ int ps3rsx_init(void* hwnd, uint32_t width, uint32_t height, ps3rsx_guest_ptr_fn guest_fn, void* user)
+ {
++    std::lock_guard<std::mutex> lock(s_rsx_mutex);
++
++    /* Crash Vector 1: Idempotent Initialization */
++    if (s_vk_ready) {
++        fprintf(stderr, "[rpcs3-rsx] Already initialized; resetting display buffers and retaining Vulkan device.\n");
++        memset(s_buffers, 0, sizeof(s_buffers));
++        s_guest_fn = guest_fn;
++        s_guest_user = user;
++        return 0;
++    }
++
+     s_hwnd = hwnd;
+-    s_width = width;
+-    s_height = height;
++    s_width = width ? width : 1280;
++    s_height = height ? height : 720;
+     s_guest_fn = guest_fn;
+     s_guest_user = user;
+     s_frames = 0;
++    s_current_sync_idx = 0;
+     s_start_time = std::chrono::steady_clock::now();
+ 
+-    fprintf(stderr, "[rpcs3-rsx] Initialized RPCS3 RSX Vulkan Subsystem (hwnd=%p, %ux%u)\n", hwnd, width, height);
++    if (!load_vulkan_dll()) {
++        fprintf(stderr, "[rpcs3-rsx] Vulkan 1.1+ dynamic loader initialization failed\n");
++        return -1;
++    }
++
++    /* 1. Create Vulkan Instance */
++    const char* extensions[] = {
++        "VK_KHR_surface",
++        "VK_KHR_win32_surface"
++    };
++    VkApplicationInfo app_info = {};
++    app_info.sType = VK_STRUCTURE_TYPE_APPLICATION_INFO;
++    app_info.pApplicationName = "God of War: Ascension (RPCS3 RSX)";
++    app_info.applicationVersion = 1;
++    app_info.pEngineName = "RPCS3 RSX Recomp";
++    app_info.engineVersion = 1;
++    app_info.apiVersion = (1 << 22) | (1 << 12); // Vulkan 1.1
++
++    VkInstanceCreateInfo inst_ci = {};
++    inst_ci.sType = VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO;
++    inst_ci.pApplicationInfo = &app_info;
++    inst_ci.enabledExtensionCount = hwnd ? 2 : 0;
++    inst_ci.ppEnabledExtensionNames = hwnd ? extensions : nullptr;
++
++    if (vkCreateInstance_fn(&inst_ci, nullptr, &s_instance) != VK_SUCCESS || !s_instance) {
++        fprintf(stderr, "[rpcs3-rsx] Failed to create VkInstance\n");
++        return -1;
++    }
++
++    /* 2. Select Physical Device */
++    uint32_t phys_count = 0;
++    vkEnumeratePhysicalDevices_fn(s_instance, &phys_count, nullptr);
++    if (phys_count == 0) {
++        fprintf(stderr, "[rpcs3-rsx] No Vulkan physical devices found\n");
++        return -1;
++    }
++    VkPhysicalDevice* phys_devs = (VkPhysicalDevice*)malloc(sizeof(VkPhysicalDevice) * phys_count);
++    vkEnumeratePhysicalDevices_fn(s_instance, &phys_count, phys_devs);
++    
++    int chosen_idx = 0;
++    int best_score = -1;
++    if (vkGetPhysicalDeviceProperties_fn) {
++        for (uint32_t i = 0; i < phys_count; i++) {
++            uint8_t prop_buf[2048] = {0};
++            vkGetPhysicalDeviceProperties_fn(phys_devs[i], prop_buf);
++            uint32_t dev_type = *(uint32_t*)(prop_buf + 16);
++            const char* dev_name = (const char*)(prop_buf + 20);
++            int is_d3d12 = (strstr(dev_name, "Direct3D12") != nullptr);
++            int score = 0;
++            if (dev_type == 2 /* VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU */) {
++                score = is_d3d12 ? 20 : 30;
++            } else if (dev_type == 1 /* VK_PHYSICAL_DEVICE_TYPE_INTEGRATED_GPU */) {
++                score = is_d3d12 ? 5 : 10;
++            } else {
++                score = 1;
++            }
++            fprintf(stderr, "[rpcs3-rsx] GPU #%u: %s (type=%u, score=%d)\n", i, dev_name, dev_type, score);
++            if (score > best_score) {
++                best_score = score;
++                chosen_idx = (int)i;
++            }
++        }
++    }
++    s_phys_device = phys_devs[chosen_idx];
++    fprintf(stderr, "[rpcs3-rsx] Selected GPU #%d as primary Vulkan device\n", chosen_idx);
++    free(phys_devs);
++
++    /* 3. Create Win32 Surface if HWND is valid */
++    if (hwnd && vkCreateWin32SurfaceKHR_fn) {
++        VkWin32SurfaceCreateInfoKHR surf_ci = {};
++        surf_ci.sType = VK_STRUCTURE_TYPE_WIN32_SURFACE_CREATE_INFO_KHR;
++        surf_ci.hinstance = GetModuleHandle(NULL);
++        surf_ci.hwnd = (HWND)hwnd;
++        if (vkCreateWin32SurfaceKHR_fn(s_instance, &surf_ci, nullptr, &s_surface) != VK_SUCCESS) {
++            fprintf(stderr, "[rpcs3-rsx] Failed to create Win32 Vulkan Surface\n");
++            return -1;
++        }
++    }
++
++    /* 4. Find Graphics Queue Family */
++    uint32_t qf_count = 0;
++    vkGetPhysicalDeviceQueueFamilyProperties_fn(s_phys_device, &qf_count, nullptr);
++    VkQueueFamilyProperties* qf_props = (VkQueueFamilyProperties*)malloc(sizeof(VkQueueFamilyProperties) * qf_count);
++    vkGetPhysicalDeviceQueueFamilyProperties_fn(s_phys_device, &qf_count, qf_props);
++    s_queue_family = 0;
++    for (uint32_t i = 0; i < qf_count; i++) {
++        if (qf_props[i].queueFlags & VK_QUEUE_GRAPHICS_BIT) {
++            s_queue_family = i;
++            break;
++        }
++    }
++    free(qf_props);
++
++    /* 5. Create Logical Device */
++    const char* dev_extensions[] = {
++        "VK_KHR_swapchain"
++    };
++    float queue_priority = 1.0f;
++    VkDeviceQueueCreateInfo q_ci = {};
++    q_ci.sType = VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO;
++    q_ci.queueFamilyIndex = s_queue_family;
++    q_ci.queueCount = 1;
++    q_ci.pQueuePriorities = &queue_priority;
++
++    VkDeviceCreateInfo dev_ci = {};
++    dev_ci.sType = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO;
++    dev_ci.queueCreateInfoCount = 1;
++    dev_ci.pQueueCreateInfos = &q_ci;
++    dev_ci.enabledExtensionCount = s_surface ? 1 : 0;
++    dev_ci.ppEnabledExtensionNames = s_surface ? dev_extensions : nullptr;
++
++    if (vkCreateDevice_fn(s_phys_device, &dev_ci, nullptr, &s_device) != VK_SUCCESS || !s_device) {
++        fprintf(stderr, "[rpcs3-rsx] Failed to create VkDevice\n");
++        return -1;
++    }
++    vkGetDeviceQueue_fn(s_device, s_queue_family, 0, &s_queue);
++
++    /* Crash Vector 5: Device-Level Proc Loading via vkGetDeviceProcAddr */
++    if (vkGetDeviceProcAddr_fn) {
++        vkCreateSwapchainKHR_fn = (PFN_vkCreateSwapchainKHR)vkGetDeviceProcAddr_fn(s_device, "vkCreateSwapchainKHR");
++        vkDestroySwapchainKHR_fn = (PFN_vkDestroySwapchainKHR)vkGetDeviceProcAddr_fn(s_device, "vkDestroySwapchainKHR");
++        vkGetSwapchainImagesKHR_fn = (PFN_vkGetSwapchainImagesKHR)vkGetDeviceProcAddr_fn(s_device, "vkGetSwapchainImagesKHR");
++        vkAcquireNextImageKHR_fn = (PFN_vkAcquireNextImageKHR)vkGetDeviceProcAddr_fn(s_device, "vkAcquireNextImageKHR");
++        vkQueuePresentKHR_fn = (PFN_vkQueuePresentKHR)vkGetDeviceProcAddr_fn(s_device, "vkQueuePresentKHR");
++        vkCreateImageView_fn = (PFN_vkCreateImageView)vkGetDeviceProcAddr_fn(s_device, "vkCreateImageView");
++        vkDestroyImageView_fn = (PFN_vkDestroyImageView)vkGetDeviceProcAddr_fn(s_device, "vkDestroyImageView");
++        vkCreateRenderPass_fn = (PFN_vkCreateRenderPass)vkGetDeviceProcAddr_fn(s_device, "vkCreateRenderPass");
++        vkDestroyRenderPass_fn = (PFN_vkDestroyRenderPass)vkGetDeviceProcAddr_fn(s_device, "vkDestroyRenderPass");
++        vkCreateFramebuffer_fn = (PFN_vkCreateFramebuffer)vkGetDeviceProcAddr_fn(s_device, "vkCreateFramebuffer");
++        vkDestroyFramebuffer_fn = (PFN_vkDestroyFramebuffer)vkGetDeviceProcAddr_fn(s_device, "vkDestroyFramebuffer");
++        vkCreateCommandPool_fn = (PFN_vkCreateCommandPool)vkGetDeviceProcAddr_fn(s_device, "vkCreateCommandPool");
++        vkDestroyCommandPool_fn = (PFN_vkDestroyCommandPool)vkGetDeviceProcAddr_fn(s_device, "vkDestroyCommandPool");
++        vkAllocateCommandBuffers_fn = (PFN_vkAllocateCommandBuffers)vkGetDeviceProcAddr_fn(s_device, "vkAllocateCommandBuffers");
++        vkBeginCommandBuffer_fn = (PFN_vkBeginCommandBuffer)vkGetDeviceProcAddr_fn(s_device, "vkBeginCommandBuffer");
++        vkEndCommandBuffer_fn = (PFN_vkEndCommandBuffer)vkGetDeviceProcAddr_fn(s_device, "vkEndCommandBuffer");
++        vkCmdBeginRenderPass_fn = (PFN_vkCmdBeginRenderPass)vkGetDeviceProcAddr_fn(s_device, "vkCmdBeginRenderPass");
++        vkCmdEndRenderPass_fn = (PFN_vkCmdEndRenderPass)vkGetDeviceProcAddr_fn(s_device, "vkCmdEndRenderPass");
++        vkQueueSubmit_fn = (PFN_vkQueueSubmit)vkGetDeviceProcAddr_fn(s_device, "vkQueueSubmit");
++        vkDeviceWaitIdle_fn = (PFN_vkDeviceWaitIdle)vkGetDeviceProcAddr_fn(s_device, "vkDeviceWaitIdle");
++        vkCreateBuffer_fn = (PFN_vkCreateBuffer)vkGetDeviceProcAddr_fn(s_device, "vkCreateBuffer");
++        vkDestroyBuffer_fn = (PFN_vkDestroyBuffer)vkGetDeviceProcAddr_fn(s_device, "vkDestroyBuffer");
++        vkGetBufferMemoryRequirements_fn = (PFN_vkGetBufferMemoryRequirements)vkGetDeviceProcAddr_fn(s_device, "vkGetBufferMemoryRequirements");
++        vkAllocateMemory_fn = (PFN_vkAllocateMemory)vkGetDeviceProcAddr_fn(s_device, "vkAllocateMemory");
++        vkFreeMemory_fn = (PFN_vkFreeMemory)vkGetDeviceProcAddr_fn(s_device, "vkFreeMemory");
++        vkBindBufferMemory_fn = (PFN_vkBindBufferMemory)vkGetDeviceProcAddr_fn(s_device, "vkBindBufferMemory");
++        vkMapMemory_fn = (PFN_vkMapMemory)vkGetDeviceProcAddr_fn(s_device, "vkMapMemory");
++        vkUnmapMemory_fn = (PFN_vkUnmapMemory)vkGetDeviceProcAddr_fn(s_device, "vkUnmapMemory");
++        vkCmdPipelineBarrier_fn = (PFN_vkCmdPipelineBarrier)vkGetDeviceProcAddr_fn(s_device, "vkCmdPipelineBarrier");
++        vkCmdCopyBufferToImage_fn = (PFN_vkCmdCopyBufferToImage)vkGetDeviceProcAddr_fn(s_device, "vkCmdCopyBufferToImage");
++        vkCreateFence_fn = (PFN_vkCreateFence)vkGetDeviceProcAddr_fn(s_device, "vkCreateFence");
++        vkDestroyFence_fn = (PFN_vkDestroyFence)vkGetDeviceProcAddr_fn(s_device, "vkDestroyFence");
++        vkWaitForFences_fn = (PFN_vkWaitForFences)vkGetDeviceProcAddr_fn(s_device, "vkWaitForFences");
++        vkResetFences_fn = (PFN_vkResetFences)vkGetDeviceProcAddr_fn(s_device, "vkResetFences");
++        vkResetCommandBuffer_fn = (PFN_vkResetCommandBuffer)vkGetDeviceProcAddr_fn(s_device, "vkResetCommandBuffer");
++        vkCreateSemaphore_fn = (PFN_vkCreateSemaphore)vkGetDeviceProcAddr_fn(s_device, "vkCreateSemaphore");
++        vkDestroySemaphore_fn = (PFN_vkDestroySemaphore)vkGetDeviceProcAddr_fn(s_device, "vkDestroySemaphore");
++        vkCmdClearColorImage_fn = (PFN_vkCmdClearColorImage)vkGetDeviceProcAddr_fn(s_device, "vkCmdClearColorImage");
++    }
++
++    /* 6. Create Swapchain if Surface is present */
++    if (s_surface && vkCreateSwapchainKHR_fn) {
++        VkSurfaceCapabilitiesKHR caps = {};
++        vkGetPhysicalDeviceSurfaceCapabilitiesKHR_fn(s_phys_device, s_surface, &caps);
++        uint32_t image_count = caps.minImageCount + 1;
++        if (caps.maxImageCount > 0 && image_count > caps.maxImageCount) {
++            image_count = caps.maxImageCount;
++        }
++
++        VkSwapchainCreateInfoKHR sw_ci = {};
++        sw_ci.sType = VK_STRUCTURE_TYPE_SWAPCHAIN_CREATE_INFO_KHR;
++        sw_ci.surface = s_surface;
++        sw_ci.minImageCount = image_count;
++        sw_ci.imageFormat = VK_FORMAT_B8G8R8A8_UNORM;
++        sw_ci.imageColorSpace = VK_COLOR_SPACE_SRGB_NONLINEAR_KHR;
++        sw_ci.imageExtent.width = s_width;
++        sw_ci.imageExtent.height = s_height;
++        sw_ci.imageArrayLayers = 1;
++        sw_ci.imageUsage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT;
++        sw_ci.imageSharingMode = VK_SHARING_MODE_EXCLUSIVE;
++        sw_ci.preTransform = caps.currentTransform ? caps.currentTransform : VK_SURFACE_TRANSFORM_IDENTITY_BIT_KHR;
++        sw_ci.compositeAlpha = VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR;
++        sw_ci.presentMode = VK_PRESENT_MODE_FIFO_KHR;
++        sw_ci.clipped = 1;
++
++        if (vkCreateSwapchainKHR_fn(s_device, &sw_ci, nullptr, &s_swapchain) != VK_SUCCESS) {
++            fprintf(stderr, "[rpcs3-rsx] Failed to create VkSwapchainKHR\n");
++            return -1;
++        }
++
++        s_image_count = 4;
++        vkGetSwapchainImagesKHR_fn(s_device, s_swapchain, &s_image_count, nullptr);
++        if (s_image_count > 4) s_image_count = 4;
++        vkGetSwapchainImagesKHR_fn(s_device, s_swapchain, &s_image_count, s_images);
++    } else {
++        s_image_count = 1;
++    }
++
++    /* 7. Create Command Pool & Buffers with RESET capability */
++    VkCommandPoolCreateInfo cp_ci = {};
++    cp_ci.sType = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO;
++    cp_ci.queueFamilyIndex = s_queue_family;
++    cp_ci.flags = VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT;
++    if (vkCreateCommandPool_fn) {
++        vkCreateCommandPool_fn(s_device, &cp_ci, nullptr, &s_cmd_pool);
++    }
++
++    if (s_cmd_pool && vkAllocateCommandBuffers_fn) {
++        VkCommandBufferAllocateInfo cb_ai = {};
++        cb_ai.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
++        cb_ai.commandPool = s_cmd_pool;
++        cb_ai.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
++        cb_ai.commandBufferCount = s_image_count;
++        vkAllocateCommandBuffers_fn(s_device, &cb_ai, s_cmd_buffers);
++    }
++
++    /* 8. Create Sync Objects (Fences and Semaphores) */
++    for (uint32_t i = 0; i < s_image_count; i++) {
++        if (vkCreateFence_fn) {
++            VkFenceCreateInfo f_ci = {};
++            f_ci.sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO;
++            f_ci.flags = VK_FENCE_CREATE_SIGNALED_BIT;
++            vkCreateFence_fn(s_device, &f_ci, nullptr, &s_fences[i]);
++        }
++        if (vkCreateSemaphore_fn) {
++            VkSemaphoreCreateInfo s_ci = {};
++            s_ci.sType = VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO;
++            vkCreateSemaphore_fn(s_device, &s_ci, nullptr, &s_image_avail_sem[i]);
++            vkCreateSemaphore_fn(s_device, &s_ci, nullptr, &s_render_fin_sem[i]);
++        }
++    }
++
++    /* 9. Create Staging Buffer for Guest Surface Scanout */
++    s_staging_size = (VkDeviceSize)s_width * s_height * 4;
++    if (s_staging_size < 1280 * 720 * 4) s_staging_size = 1280 * 720 * 4;
++    VkBufferCreateInfo buf_ci = {};
++    buf_ci.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
++    buf_ci.size = s_staging_size;
++    buf_ci.usage = VK_BUFFER_USAGE_TRANSFER_SRC_BIT;
++    buf_ci.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
++    if (vkCreateBuffer_fn && vkCreateBuffer_fn(s_device, &buf_ci, nullptr, &s_staging_buf) == VK_SUCCESS) {
++        VkMemoryRequirements mem_reqs = {};
++        vkGetBufferMemoryRequirements_fn(s_device, s_staging_buf, &mem_reqs);
++        VkPhysicalDeviceMemoryProperties mem_props = {};
++        vkGetPhysicalDeviceMemoryProperties_fn(s_phys_device, &mem_props);
++        uint32_t mem_type_idx = 0xFFFFFFFF;
++        uint32_t req_flags = VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT;
++        for (uint32_t i = 0; i < mem_props.memoryTypeCount; i++) {
++            if ((mem_reqs.memoryTypeBits & (1 << i)) &&
++                ((mem_props.memoryTypes[i].propertyFlags & req_flags) == req_flags)) {
++                mem_type_idx = i;
++                break;
++            }
++        }
++        if (mem_type_idx != 0xFFFFFFFF && vkAllocateMemory_fn) {
++            VkMemoryAllocateInfo alloc_info = {};
++            alloc_info.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
++            alloc_info.allocationSize = mem_reqs.size;
++            alloc_info.memoryTypeIndex = mem_type_idx;
++            if (vkAllocateMemory_fn(s_device, &alloc_info, nullptr, &s_staging_mem) == VK_SUCCESS) {
++                vkBindBufferMemory_fn(s_device, s_staging_buf, s_staging_mem, 0);
++                vkMapMemory_fn(s_device, s_staging_mem, 0, s_staging_size, 0, &s_staging_ptr);
++                fprintf(stderr, "[rpcs3-rsx] Created Host Staging Buffer (%zu bytes) for Guest Scanout\n", (size_t)s_staging_size);
++            }
++        }
++    }
++
++    s_vk_ready = true;
++    fprintf(stderr, "[rpcs3-rsx] Initialized Real RPCS3 RSX Vulkan Subsystem (hwnd=%p, %ux%u, swapchain images=%u)\n",
++            hwnd, s_width, s_height, s_image_count);
+     return 0;
+ }
+ 
+ void ps3rsx_shutdown(void)
+ {
++    std::lock_guard<std::mutex> lock(s_rsx_mutex);
++    if (!s_vk_ready) return;
++
++    if (s_device && vkDeviceWaitIdle_fn) {
++        vkDeviceWaitIdle_fn(s_device);
++    }
++    for (uint32_t i = 0; i < s_image_count; i++) {
++        if (s_fences[i] && vkDestroyFence_fn) {
++            vkDestroyFence_fn(s_device, s_fences[i], nullptr);
++            s_fences[i] = nullptr;
++        }
++        if (s_image_avail_sem[i] && vkDestroySemaphore_fn) {
++            vkDestroySemaphore_fn(s_device, s_image_avail_sem[i], nullptr);
++            s_image_avail_sem[i] = nullptr;
++        }
++        if (s_render_fin_sem[i] && vkDestroySemaphore_fn) {
++            vkDestroySemaphore_fn(s_device, s_render_fin_sem[i], nullptr);
++            s_render_fin_sem[i] = nullptr;
++        }
++    }
++    if (s_staging_ptr && vkUnmapMemory_fn) {
++        vkUnmapMemory_fn(s_device, s_staging_mem);
++        s_staging_ptr = nullptr;
++    }
++    if (s_staging_buf && vkDestroyBuffer_fn) {
++        vkDestroyBuffer_fn(s_device, s_staging_buf, nullptr);
++        s_staging_buf = nullptr;
++    }
++    if (s_staging_mem && vkFreeMemory_fn) {
++        vkFreeMemory_fn(s_device, s_staging_mem, nullptr);
++        s_staging_mem = nullptr;
++    }
++    if (s_cmd_pool && vkDestroyCommandPool_fn) {
++        vkDestroyCommandPool_fn(s_device, s_cmd_pool, nullptr);
++        s_cmd_pool = nullptr;
++    }
++    if (s_swapchain && vkDestroySwapchainKHR_fn) {
++        vkDestroySwapchainKHR_fn(s_device, s_swapchain, nullptr);
++        s_swapchain = nullptr;
++    }
++    if (s_device && vkDestroyDevice_fn) {
++        vkDestroyDevice_fn(s_device, nullptr);
++        s_device = nullptr;
++    }
++    if (s_surface && vkDestroySurfaceKHR_fn) {
++        vkDestroySurfaceKHR_fn(s_instance, s_surface, nullptr);
++        s_surface = nullptr;
++    }
++    if (s_instance && vkDestroyInstance_fn) {
++        vkDestroyInstance_fn(s_instance, nullptr);
++        s_instance = nullptr;
++    }
++    if (s_vk_module) {
++        FreeLibrary(s_vk_module);
++        s_vk_module = nullptr;
++    }
++
++    s_vk_ready = false;
+     fprintf(stderr, "[rpcs3-rsx] Shut down RPCS3 RSX Vulkan Subsystem (total frames rendered: %u)\n", s_frames);
+ }
+ 
+@@ -54,6 +998,7 @@ void ps3rsx_process_fifo(uint32_t put)
+ 
+ void ps3rsx_set_display_buffer(uint32_t buffer_id, uint32_t location, uint32_t offset, uint32_t pitch, uint32_t width, uint32_t height)
+ {
++    std::lock_guard<std::mutex> lock(s_rsx_mutex);
+     if (buffer_id < 8) {
+         s_buffers[buffer_id].location = location;
+         s_buffers[buffer_id].offset = offset;
+@@ -66,7 +1011,222 @@ void ps3rsx_set_display_buffer(uint32_t buffer_id, uint32_t location, uint32_t o
+ 
+ void ps3rsx_request_flip(uint32_t buffer_id)
+ {
+-    (void)buffer_id;
++    std::lock_guard<std::mutex> lock(s_rsx_mutex);
++    if (!s_vk_ready || !s_swapchain) {
++        s_frames++;
++        return;
++    }
++
++    uint32_t sync_idx = s_current_sync_idx;
++
++    // 1. Wait for GPU fence before touching staging memory or recording command buffer
++    if (s_fences[sync_idx] && vkWaitForFences_fn && vkResetFences_fn) {
++        vkWaitForFences_fn(s_device, 1, &s_fences[sync_idx], 1, 1000000000ULL);
++        vkResetFences_fn(s_device, 1, &s_fences[sync_idx]);
++    }
++
++    // 2. Acquire next swapchain image
++    uint32_t img_idx = 0;
++    VkResult res = vkAcquireNextImageKHR_fn(s_device, s_swapchain, 1000000000ULL,
++                                            s_image_avail_sem[sync_idx], nullptr, &img_idx);
++    if (res != VK_SUCCESS && res != VK_TIMEOUT && res != VK_NOT_READY) {
++        s_frames++;
++        return;
++    }
++    if (img_idx >= s_image_count) img_idx = 0;
++
++    // 3. Resolve and copy guest display buffer into staging memory (Vector 2)
++    const DisplayBuffer* db = nullptr;
++    if (buffer_id < 8 && s_buffers[buffer_id].active) {
++        db = &s_buffers[buffer_id];
++    } else {
++        for (int i = 0; i < 8; i++) {
++            if (s_buffers[i].active) { db = &s_buffers[i]; break; }
++        }
++    }
++
++    const uint8_t* guest_pixels = nullptr;
++    uint32_t buf_w = s_width, buf_h = s_height, buf_pitch = s_width * 4;
++    if (db && s_guest_fn) {
++        buf_w = db->width ? db->width : s_width;
++        buf_h = db->height ? db->height : s_height;
++        buf_pitch = db->pitch ? db->pitch : (buf_w * 4);
++        guest_pixels = s_guest_fn(s_guest_user, db->location, db->offset, buf_h * buf_pitch);
++    }
++
++    // Validate committed guest readable memory range
++    bool guest_valid = false;
++    if (guest_pixels && s_staging_ptr) {
++        MEMORY_BASIC_INFORMATION mbi = {};
++        if (VirtualQuery(guest_pixels, &mbi, sizeof(mbi)) && mbi.State == MEM_COMMIT) {
++            guest_valid = true;
++        }
++    }
++
++    if (guest_valid && s_staging_ptr) {
++        uint32_t copy_w = buf_w < s_width ? buf_w : s_width;
++        uint32_t copy_h = buf_h < s_height ? buf_h : s_height;
++
++        for (uint32_t y = 0; y < copy_h; y++) {
++            const uint8_t* src_row = guest_pixels + (size_t)y * buf_pitch;
++            uint8_t* dst_row = (uint8_t*)s_staging_ptr + (size_t)y * (s_width * 4);
++            for (uint32_t x = 0; x < copy_w; x++) {
++                // Big-endian ARGB8: src[0]=A, src[1]=R, src[2]=G, src[3]=B
++                // Swapchain VK_FORMAT_B8G8R8A8_UNORM: dst[0]=B, dst[1]=G, dst[2]=R, dst[3]=A
++                dst_row[x * 4 + 0] = src_row[x * 4 + 3]; // B
++                dst_row[x * 4 + 1] = src_row[x * 4 + 2]; // G
++                dst_row[x * 4 + 2] = src_row[x * 4 + 1]; // R
++                dst_row[x * 4 + 3] = 0xFF;              // Opaque Alpha
++            }
++            if (copy_w < s_width) {
++                memset(dst_row + copy_w * 4, 0, (s_width - copy_w) * 4);
++            }
++        }
++        if (copy_h < s_height) {
++            memset((uint8_t*)s_staging_ptr + (size_t)copy_h * (s_width * 4), 0, (size_t)(s_height - copy_h) * (s_width * 4));
++        }
++    }
++
++    // 4. Begin command buffer (Vector 3: outside render pass)
++    VkCommandBuffer cb = s_cmd_buffers[img_idx];
++    if (vkResetCommandBuffer_fn) {
++        vkResetCommandBuffer_fn(cb, 0);
++    }
++    VkCommandBufferBeginInfo bi = {};
++    bi.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
++    bi.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
++    vkBeginCommandBuffer_fn(cb, &bi);
++
++    if (guest_valid && s_staging_ptr && vkCmdCopyBufferToImage_fn && vkCmdPipelineBarrier_fn) {
++        // Transition swapchain image: UNDEFINED -> TRANSFER_DST_OPTIMAL
++        VkImageMemoryBarrier b1 = {};
++        b1.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
++        b1.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
++        b1.newLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
++        b1.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
++        b1.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
++        b1.image = s_images[img_idx];
++        b1.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
++        b1.subresourceRange.baseMipLevel = 0;
++        b1.subresourceRange.levelCount = 1;
++        b1.subresourceRange.baseArrayLayer = 0;
++        b1.subresourceRange.layerCount = 1;
++        b1.srcAccessMask = 0;
++        b1.dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
++        vkCmdPipelineBarrier_fn(cb, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT,
++                                0, 0, nullptr, 0, nullptr, 1, &b1);
++
++        // Copy staging buffer to swapchain image
++        VkBufferImageCopy copy_region = {};
++        copy_region.bufferOffset = 0;
++        copy_region.bufferRowLength = s_width;
++        copy_region.bufferImageHeight = s_height;
++        copy_region.imageSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
++        copy_region.imageSubresource.mipLevel = 0;
++        copy_region.imageSubresource.baseArrayLayer = 0;
++        copy_region.imageSubresource.layerCount = 1;
++        copy_region.imageOffset.x = 0;
++        copy_region.imageOffset.y = 0;
++        copy_region.imageOffset.z = 0;
++        copy_region.imageExtent.width = s_width;
++        copy_region.imageExtent.height = s_height;
++        copy_region.imageExtent.depth = 1;
++        vkCmdCopyBufferToImage_fn(cb, s_staging_buf, s_images[img_idx],
++                                  VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &copy_region);
++
++        // Transition swapchain image: TRANSFER_DST_OPTIMAL -> PRESENT_SRC_KHR
++        VkImageMemoryBarrier b2 = {};
++        b2.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
++        b2.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
++        b2.newLayout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
++        b2.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
++        b2.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
++        b2.image = s_images[img_idx];
++        b2.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
++        b2.subresourceRange.baseMipLevel = 0;
++        b2.subresourceRange.levelCount = 1;
++        b2.subresourceRange.baseArrayLayer = 0;
++        b2.subresourceRange.layerCount = 1;
++        b2.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
++        b2.dstAccessMask = VK_ACCESS_MEMORY_READ_BIT;
++        vkCmdPipelineBarrier_fn(cb, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT,
++                                0, 0, nullptr, 0, nullptr, 1, &b2);
++    } else {
++        // Clear color outside RenderPass using vkCmdClearColorImage
++        VkImageSubresourceRange range = {};
++        range.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
++        range.baseMipLevel = 0;
++        range.levelCount = 1;
++        range.baseArrayLayer = 0;
++        range.layerCount = 1;
++
++        VkImageMemoryBarrier b1 = {};
++        b1.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
++        b1.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
++        b1.newLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
++        b1.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
++        b1.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
++        b1.image = s_images[img_idx];
++        b1.subresourceRange = range;
++        b1.srcAccessMask = 0;
++        b1.dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
++        if (vkCmdPipelineBarrier_fn) {
++            vkCmdPipelineBarrier_fn(cb, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT,
++                                    0, 0, nullptr, 0, nullptr, 1, &b1);
++        }
++
++        VkClearColorValue clear_color = {};
++        clear_color.float32[0] = 0.05f;
++        clear_color.float32[1] = 0.05f;
++        clear_color.float32[2] = 0.05f;
++        clear_color.float32[3] = 1.0f;
++
++        if (vkCmdClearColorImage_fn) {
++            vkCmdClearColorImage_fn(cb, s_images[img_idx], VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, &clear_color, 1, &range);
++        }
++
++        VkImageMemoryBarrier b2 = {};
++        b2.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
++        b2.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
++        b2.newLayout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
++        b2.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
++        b2.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
++        b2.image = s_images[img_idx];
++        b2.subresourceRange = range;
++        b2.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
++        b2.dstAccessMask = VK_ACCESS_MEMORY_READ_BIT;
++        if (vkCmdPipelineBarrier_fn) {
++            vkCmdPipelineBarrier_fn(cb, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT,
++                                    0, 0, nullptr, 0, nullptr, 1, &b2);
++        }
++    }
++    vkEndCommandBuffer_fn(cb);
++
++    // 5. Submit with fence and semaphores
++    VkPipelineStageFlags wait_stage = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
++    VkSubmitInfo submit_info = {};
++    submit_info.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
++    submit_info.waitSemaphoreCount = s_image_avail_sem[sync_idx] ? 1 : 0;
++    submit_info.pWaitSemaphores = s_image_avail_sem[sync_idx] ? &s_image_avail_sem[sync_idx] : nullptr;
++    submit_info.pWaitDstStageMask = &wait_stage;
++    submit_info.commandBufferCount = 1;
++    submit_info.pCommandBuffers = &cb;
++    submit_info.signalSemaphoreCount = s_render_fin_sem[sync_idx] ? 1 : 0;
++    submit_info.pSignalSemaphores = s_render_fin_sem[sync_idx] ? &s_render_fin_sem[sync_idx] : nullptr;
++
++    vkQueueSubmit_fn(s_queue, 1, &submit_info, s_fences[sync_idx]);
++
++    // 6. Present
++    VkPresentInfoKHR present_info = {};
++    present_info.sType = VK_STRUCTURE_TYPE_PRESENT_INFO_KHR;
++    present_info.waitSemaphoreCount = s_render_fin_sem[sync_idx] ? 1 : 0;
++    present_info.pWaitSemaphores = s_render_fin_sem[sync_idx] ? &s_render_fin_sem[sync_idx] : nullptr;
++    present_info.swapchainCount = 1;
++    present_info.pSwapchains = &s_swapchain;
++    present_info.pImageIndices = &img_idx;
++    vkQueuePresentKHR_fn(s_queue, &present_info);
++
++    s_current_sync_idx = (s_current_sync_idx + 1) % s_image_count;
+     s_frames++;
+ }
+ 
+@@ -89,11 +1249,13 @@ void ps3rsx_notify_spu_dma_write(uint32_t ea, uint32_t size)
+ 
+ uint32_t ps3rsx_get_frames(void)
+ {
++    std::lock_guard<std::mutex> lock(s_rsx_mutex);
+     return s_frames;
+ }
+ 
+ double ps3rsx_get_present_fps(void)
+ {
++    std::lock_guard<std::mutex> lock(s_rsx_mutex);
+     auto now = std::chrono::steady_clock::now();
+     double elapsed = std::chrono::duration<double>(now - s_start_time).count();
+     if (elapsed > 0.05) {
+diff --git a/gpu/tests/flip_smoke.cpp b/gpu/tests/flip_smoke.cpp
+index 8852622d..e0ce464d 100644
+--- a/gpu/tests/flip_smoke.cpp
++++ b/gpu/tests/flip_smoke.cpp
+@@ -4,9 +4,45 @@
+ 
+ #include "../include/ps3rsx.h"
+ #include <cstdio>
++#include <windows.h>
++
++static LONG WINAPI smoke_veh(EXCEPTION_POINTERS* ep) {
++    DWORD code = ep->ExceptionRecord->ExceptionCode;
++    if (code == 0x40010006 || code == 0x406D1388 || code == 0xE06D7363) return EXCEPTION_CONTINUE_SEARCH;
++    fprintf(stderr, "[SMOKE-CRASH] code=0x%08lX rip=%p\n",
++            (unsigned long)code, ep->ExceptionRecord->ExceptionAddress);
++    if (code == EXCEPTION_ACCESS_VIOLATION) {
++        fprintf(stderr, "[SMOKE-CRASH] %s fault at %p\n",
++                ep->ExceptionRecord->ExceptionInformation[0] ? "write" : "read",
++                (void*)ep->ExceptionRecord->ExceptionInformation[1]);
++    }
++    HMODULE mod = NULL;
++    GetModuleHandleExA(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
++                       (LPCSTR)ep->ExceptionRecord->ExceptionAddress, &mod);
++    char mname[MAX_PATH] = "unknown";
++    if (mod) GetModuleFileNameA(mod, mname, sizeof(mname));
++    fprintf(stderr, "[SMOKE-CRASH] module=%p (%s) rva=0x%llX\n",
++            mod, mname, (unsigned long long)((char*)ep->ExceptionRecord->ExceptionAddress - (char*)mod));
++
++    void* frames[16];
++    USHORT n = RtlCaptureStackBackTrace(0, 16, frames, NULL);
++    for (USHORT i = 0; i < n; i++) {
++        HMODULE m = NULL;
++        GetModuleHandleExA(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
++                           (LPCSTR)frames[i], &m);
++        char fn[MAX_PATH] = "unknown";
++        if (m) GetModuleFileNameA(m, fn, sizeof(fn));
++        fprintf(stderr, "  #%u %p rva=0x%llX (%s)\n", i, frames[i],
++                m ? (unsigned long long)((char*)frames[i] - (char*)m) : 0, fn);
++    }
++    fflush(stderr);
++    return EXCEPTION_CONTINUE_SEARCH;
++}
++
+ 
+ int main(int argc, char** argv)
+ {
++    AddVectoredExceptionHandler(1, smoke_veh);
+     (void)argc; (void)argv;
+     printf("[ps3rsx_flip_smoke] Running RPCS3 RSX subsystem smoke test...\n");
+     
+diff --git a/libs/spurs/cellSpurs.c b/libs/spurs/cellSpurs.c
+index 63848597..772f41b7 100644
+--- a/libs/spurs/cellSpurs.c
++++ b/libs/spurs/cellSpurs.c
+@@ -73,6 +73,7 @@ typedef struct {
+ /* Global workload table (per-SPURS instance in a real system, simplified).
+  * A CellSpurs2 instance has 32 workloads, a CellSpurs one 16. */
+ #define SPURS_MAX_WID 32
++__attribute__((weak)) volatile uint32_t g_spurs_pm_entry_count[32] = {0};
+ static SpursWorkload s_workloads[SPURS_MAX_WID];
+ static SpursTask     s_tasks[CELL_SPURS_MAX_TASK];
+ static u32           s_next_task_id = 0;
+@@ -898,6 +899,8 @@ s32 cellSpursSetPriorities(CellSpurs* spurs, CellSpursWorkloadId wid,
+     memcpy(s_workloads[wid].priority, priorities_h, CELL_SPURS_MAX_SPU);
+     for (u32 sn = 0; sn < CELL_SPURS_MAX_SPU; sn++)
+         vm_write8(si->ea + wkl_info_off(wid) + 0x18 + sn, priorities_h[sn]);
++    si->idle[wid] = 0;
++    WakeAllConditionVariable(&si->wake);
+     spurs_api_unlock(si);
+     return CELL_OK;
+ }
+@@ -1762,7 +1765,13 @@ s32 cellSpursAddWorkload(CellSpurs* spurs, CellSpursWorkloadId* wid,
+             s_workloads[i].maxContention = maxContention;
+             s_workloads[i].readyCount = 0;
+ 
+-            if (priority_h)
++            int all_zero = 1;
++            if (priority_h) {
++                for (int b = 0; b < 8; b++) {
++                    if (priority_h[b] != 0) all_zero = 0;
++                }
++            }
++            if (priority_h && !all_zero)
+                 memcpy(s_workloads[i].priority, priority_h, CELL_SPURS_MAX_SPU);
+             else
+                 memset(s_workloads[i].priority, 1, CELL_SPURS_MAX_SPU);
+@@ -1776,7 +1785,7 @@ s32 cellSpursAddWorkload(CellSpurs* spurs, CellSpursWorkloadId* wid,
+             vm_write32(info + 0x10, sizePm);                     /* size */
+             vm_write32(info + 0x14, i << 24);                    /* uniqueId */
+             for (int b = 0; b < 8; b++)
+-                *(vm_base + info + 0x18 + b) = priority_h ? priority_h[b] : 1;
++                *(vm_base + info + 0x18 + b) = (priority_h && !all_zero) ? priority_h[b] : 1;
+             *(vm_base + spurs_ea + wkl_state_off(i)) = 2;        /* runnable */
+             if (i < 16)   /* minimum contention has no second set */
+                 *(vm_base + spurs_ea + SPURS_WKL_MINCONT + i) = (u8)(minContention ? minContention : 1);
+@@ -1968,7 +1977,7 @@ s32 _cellSpursWorkloadAttributeInitialize(u64 attr_ea, u32 revision, u32 sdkVers
+     vm_write64((u32)attr_ea + WKATTR_DATA,       data);
+     for (int i = 0; i < 8; i++)
+         *(vm_base + (u32)attr_ea + WKATTR_PRIORITY + i) =
+-            prio_ea ? *(vm_base + (u32)prio_ea + i) : 0;
++            prio_ea ? *(vm_base + (u32)prio_ea + i) : 1;
+     vm_write32((u32)attr_ea + WKATTR_MIN_CONT, minContention);
+     vm_write32((u32)attr_ea + WKATTR_MAX_CONT, 1);   /* 9th arg is beyond the 8-GPR adapter */
+     vm_write32((u32)attr_ea + WKATTR_NAME_CLASS, 0);
+@@ -2145,6 +2154,9 @@ static DWORD WINAPI spurs_pm_worker(LPVOID p)
+         const unsigned long long wt0 = ps3_qpc_us();
+         FILETIME wc, we, wk0, wu0, wk1, wu1;
+         if (s_wtl) GetThreadTimes(GetCurrentThread(), &wc, &we, &wk0, &wu0);
++        if (slot->wid < 32) {
++            g_spurs_pm_entry_count[slot->wid]++;
++        }
+         spu_run_policy_module(slot->fn, slot->image_id, slot->pm, slot->pm_size,
+                               slot->data, slot->wid, slot->ea, slot->spu_num);
+         __atomic_add_fetch(&g_perf_spu_busy_us, (long long)(ps3_qpc_us() - wt0), __ATOMIC_RELAXED);
+@@ -2223,9 +2235,34 @@ u32 spurs_poll_select(u32 ea, u32 cur, u32 spu)
+             pick = w;
+         }
+     }
++    if (spu == 5) {
++        extern SpursPollHistEntry g_spurs_poll_hist_lane5[5];
++        extern uint32_t g_spurs_poll_hist_lane5_idx;
++        extern unsigned long long ps3_qpc_us(void);
++        uint32_t idx = g_spurs_poll_hist_lane5_idx % 5;
++        g_spurs_poll_hist_lane5[idx].ea = ea;
++        g_spurs_poll_hist_lane5[idx].cur = cur;
++        g_spurs_poll_hist_lane5[idx].spu = spu;
++        g_spurs_poll_hist_lane5[idx].pick = pick;
++        g_spurs_poll_hist_lane5[idx].timestamp_us = ps3_qpc_us();
++        g_spurs_poll_hist_lane5_idx++;
++    }
+     return pick;
+ }
+ 
++int spurs_should_preempt(u32 ea, u32 cur, u32 spu)
++{
++    struct SpursInst* si = spurs_inst_find(ea);
++    if (!si) return 0;
++    u32 sel = spurs_poll_select(ea, cur, spu);
++    if (sel == cur) return 0;
++    if (sel != 0x20) return 1;
++    u32 ready = vm_read8(ea + wkl_ready_off(cur));
++    int sig = wkl_signalled(ea, cur);
++    if (!sig && ready == 0) return 1;
++    return 0;
++}
++
+ static DWORD WINAPI spurs_kernel_thread(LPVOID p)
+ {
+     struct SpursInst* si = (struct SpursInst*)p;
+@@ -2459,6 +2496,11 @@ s32 cellSpursReadyCountStore(CellSpurs* spurs, CellSpursWorkloadId wid,
+         spurs_api_unlock(si); return CELL_SPURS_CORE_ERROR_SRCH;
+     }
+ 
++    if (wid == 8 && getenv("GOW_TRACE_WID8")) {
++        extern unsigned long long ps3_qpc_us(void);
++        fprintf(stderr, "[WID8-TIMELINE @ %.3fs] ReadyCountStore wid=8 value=%u\n",
++                (double)ps3_qpc_us() / 1e6, value);
++    }
+     s_workloads[wid].readyCount = value;
+     /* The real store: the instance byte the kernel (poll thread) watches. */
+     vm_write8(si->ea + wkl_ready_off(wid), (u8)value);
+@@ -2469,6 +2511,8 @@ s32 cellSpursReadyCountStore(CellSpurs* spurs, CellSpursWorkloadId wid,
+             printf("[cellSpurs] ReadyCountStore further logs suppressed\n");
+         _n++;
+     }
++    si->idle[wid] = 0;
++    WakeAllConditionVariable(&si->wake);
+     spurs_api_unlock(si);
+     return CELL_OK;
+ }
+@@ -2487,8 +2531,15 @@ static s32 spurs_ready_exchange(CellSpurs* spurs, CellSpursWorkloadId wid,
+     spu_lockline_lock();
+     u8 previous = vm_read8(si->ea + wkl_ready_off(wid));
+     if (!conditional || previous == compare) {
++        if (wid == 8 && getenv("GOW_TRACE_WID8")) {
++            extern unsigned long long ps3_qpc_us(void);
++            fprintf(stderr, "[WID8-TIMELINE @ %.3fs] ReadyCountSwap wid=8 compare=%u val=%u prev=%u\n",
++                    (double)ps3_qpc_us() / 1e6, compare, value, previous);
++        }
+         vm_base[si->ea + wkl_ready_off(wid)] = (u8)value;
+         s_workloads[wid].readyCount = value;
++        si->idle[wid] = 0;
++        WakeAllConditionVariable(&si->wake);
+         ef_line_end(si->ea);
+     } else spu_lockline_unlock();
+     vm_write32((u32)(uintptr_t)old, previous);
+@@ -2881,7 +2932,7 @@ s32 _cellSpursJobChainAttributeInitialize(u32 jmRevision, u32 sdkRevision, u64 a
+                ((sizeJobDescriptor & 0xFFFFu) << 16) | (maxGrabbedJob & 0xFFFFu));
+     for (int i = 0; i < 8; i++)
+         *(vm_base + (u32)attr_ea + JCATTR_PRIORITY + i) =
+-            prio_ea ? *(vm_base + (u32)prio_ea + i) : 0;
++            prio_ea ? *(vm_base + (u32)prio_ea + i) : 1;
+     vm_write32((u32)attr_ea + JCATTR_MAX_CONT, maxContention);
+     /* args 9+ (autoReadyCount, tag1, tag2, isFixedMemAlloc, maxSizeJobDescriptor,
+      * initSpuCount) are on the guest stack, beyond the 8-GPR HLE adapter -- defaults. */
+diff --git a/libs/video/rsx_d3d12_backend.c b/libs/video/rsx_d3d12_backend.c
+index bc6f6056..63f280b2 100644
+--- a/libs/video/rsx_d3d12_backend.c
++++ b/libs/video/rsx_d3d12_backend.c
+@@ -5973,12 +5973,16 @@ skip_dump_consider: ;
+         if (s_tt0 == 0) s_tt0 = tnow;
+         if (tnow - s_tt0 >= 1000 && s_d3d.hwnd) {
+             extern char g_rsx_title_base[128];
+-            char tb[256];
+-            snprintf(tb, sizeof(tb), "%s | FPS: %.2f | draws: %u | %ux%u",
+-                     g_rsx_title_base,
++            wchar_t wtitle[128];
++            if (MultiByteToWideChar(CP_UTF8, 0, g_rsx_title_base, -1, wtitle, 128) <= 0) {
++                wcscpy(wtitle, L"God of War: Ascension\u2122");
++            }
++            wchar_t wtb[256];
++            swprintf(wtb, 256, L"%ls | FPS: %.2f | draws: %u | %ux%u",
++                     wtitle,
+                      s_tframes * 1000.0 / (double)(tnow - s_tt0),
+                      s_dbg_last_draws, s_d3d.width, s_d3d.height);
+-            SetWindowTextA(s_d3d.hwnd, tb);
++            SetWindowTextW(s_d3d.hwnd, wtb);
+             s_tframes = 0;
+             s_tt0 = tnow;
+         }
+diff --git a/libs/video/rsx_host_window.h b/libs/video/rsx_host_window.h
+index a4b899e8..a80a6b20 100644
+--- a/libs/video/rsx_host_window.h
++++ b/libs/video/rsx_host_window.h
+@@ -77,6 +77,12 @@ static HWND rsx_host_window_create(const char* cls, unsigned width, unsigned hei
+                            CW_USEDEFAULT, CW_USEDEFAULT, wr.right - wr.left, wr.bottom - wr.top,
+                            NULL, NULL, GetModuleHandle(NULL), NULL);
+     if (!hwnd) return NULL;
++    if (title) {
++        wchar_t wtitle[256];
++        if (MultiByteToWideChar(CP_UTF8, 0, title, -1, wtitle, 256) > 0) {
++            SetWindowTextW(hwnd, wtitle);
++        }
++    }
+     e = getenv("PS3_WINDOW_ICON");
+     if (e && *e) {
+         HICON ico_b = (HICON)LoadImageA(NULL, e, IMAGE_ICON, 0, 0, LR_LOADFROMFILE | LR_DEFAULTSIZE);
+diff --git a/libs/video/rsx_live_draw.c b/libs/video/rsx_live_draw.c
+index 516527dd..a6702486 100644
+--- a/libs/video/rsx_live_draw.c
++++ b/libs/video/rsx_live_draw.c
+@@ -1145,6 +1145,12 @@ static void ld_vertex_diag_emit(const char* reason, int dump_surface);
+  * -----------------------------------------------------------------------*/
+ int rsx_live_draw_enabled(void)
+ {
++#if defined(_WIN32)
++    extern int ps3_rsx_get_renderer_type(void);
++    if (ps3_rsx_get_renderer_type() == 1 /* PS3_RSX_RENDERER_RPCS3_RSX */) {
++        return 0;
++    }
++#endif
+     static int cached = -1;
+     if (cached < 0) {
+         /* Opt-in in this tree. Upstream (caner's Yakuza fork) defaults this ON
+diff --git a/libs/video/rsx_null_backend.c b/libs/video/rsx_null_backend.c
+index 48c7d70b..49a3c57d 100644
+--- a/libs/video/rsx_null_backend.c
++++ b/libs/video/rsx_null_backend.c
+@@ -71,6 +71,11 @@ static LRESULT CALLBACK null_wndproc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
+         PAINTSTRUCT ps;
+         HDC hdc = BeginPaint(hwnd, &ps);
+ 
++        if (s_present_suppressed) {
++            EndPaint(hwnd, &ps);
++            return 0;
++        }
++
+         /* Fill with current clear color */
+         HBRUSH brush = CreateSolidBrush(s_state.clear_color);
+         RECT rc;
+diff --git a/runtime/ppu/ppu_fs.cpp b/runtime/ppu/ppu_fs.cpp
+index 37e37454..581d8078 100644
+--- a/runtime/ppu/ppu_fs.cpp
++++ b/runtime/ppu/ppu_fs.cpp
+@@ -135,6 +135,8 @@ static void guest_strcpy(char* dst, uint32_t gaddr, size_t cap)
+  * translators. (extern "C" is ill-formed at block scope.) */
+ extern "C" void ps3_vfs_ps3game_fallback(char* path, size_t cap);
+ 
++static int host_mkdir_p(const char* path); /* fwd decl */
++
+ /* Translate a guest path to a host path under ppu_vfs_root. Known PS3 mount
+  * prefixes are stripped; the rest is appended to the root. */
+ static void host_path(char* out, size_t cap, const char* guest)
+@@ -153,19 +155,9 @@ static void host_path(char* out, size_t cap, const char* guest)
+         return;
+     }
+ 
+-    /* /dev_hdd1 is the CACHE partition (cellSysCacheMount mounts it), and it
+-     * must be WRITABLE and separate from the disc mount: without its own root
+-     * the mount table below resolves /dev_hdd1 to <ppu_vfs_root>/cache/..., i.e.
+-     * into the read-only disc tree, so a title's first cache open fails and it
+-     * never creates its media threads. PS3_HDD1_ROOT selects the host dir, the
+-     * same convention as PS3_HDD0_ROOT. */
+-    static const char* hdd1_root = nullptr; static int hdd1_init = 0;
+-    if (!hdd1_init) { hdd1_root = ps3_env_once("PS3_HDD1_ROOT"); hdd1_init = 1; }
+-    if (hdd1_root && *hdd1_root && strncmp(guest, "/dev_hdd1/", 10) == 0) {
+-        snprintf(out, cap, "%s/%s", hdd1_root, guest + 10);
+-        for (char* p = out; *p; p++) if (*p == '\\') *p = '/';
+-        return;
+-    }
++    /* /dev_hdd1 is the CACHE partition. Do NOT mount /dev_hdd1 as a writable
++     * host directory so FIOS cleanly disables HDD1 scratch caching and streams
++     * directly from /dev_bdrom. */
+ 
+     /* /dev_flash is FIRMWARE, not game data — mapping it into the game root (the
+      * old behaviour) makes every firmware lookup miss. YDKJ's FMOD asks for
+@@ -180,6 +172,33 @@ static void host_path(char* out, size_t cap, const char* guest)
+         return;
+     }
+ 
++    static const char* app_home_root = nullptr; static int app_home_init = 0;
++    if (!app_home_init) { app_home_root = getenv("PS3_APP_HOME_ROOT"); app_home_init = 1; }
++    if (app_home_root && *app_home_root && strncmp(guest, "/app_home/", 10) == 0) {
++        snprintf(out, cap, "%s/%s", app_home_root, guest + 10);
++        for (char* p = out; *p; p++) if (*p == '\\') *p = '/';
++        return;
++    }
++
++    /* Bare device root checks */
++    if (hdd0_root && strcmp(guest, "/dev_hdd0") == 0) {
++        snprintf(out, cap, "%s", hdd0_root);
++        for (char* p = out; *p; p++) if (*p == '\\') *p = '/';
++        return;
++    }
++    if (strcmp(guest, "/dev_flash") == 0) {
++        const char* fw = getenv("PS3_DEV_FLASH");
++        if (!fw || !*fw) fw = "D:/recomp/tools/rpcs3/dev_flash";
++        snprintf(out, cap, "%s", fw);
++        for (char* p = out; *p; p++) if (*p == '\\') *p = '/';
++        return;
++    }
++    if (app_home_root && *app_home_root && strcmp(guest, "/app_home") == 0) {
++        snprintf(out, cap, "%s", app_home_root);
++        for (char* p = out; *p; p++) if (*p == '\\') *p = '/';
++        return;
++    }
++
+     static const char* mounts[] = {
+         "/dev_bdvd/", "/app_home/", "/dev_hdd0/", "/dev_hdd1/",
+         "/dev_flash/", "/host_root/", "/dev_usb000/", "/dev_usb/"
+@@ -275,6 +294,14 @@ static void cellFsOpen(ppu_context* ctx)
+     guest_strcpy(gpath, (uint32_t)ctx->gpr[3], sizeof gpath);
+     uint32_t flags  = (uint32_t)ctx->gpr[4];
+     uint32_t fd_ptr = (uint32_t)ctx->gpr[5];
++
++    /* Disallow /dev_hdd1/cache/ and /dev_hdd1: return ENOENT so FIOS cleanly disables HDD1 scratch caching and streams from BDVD */
++    if (strncmp(gpath, "/dev_hdd1/cache/", 16) == 0 || strcmp(gpath, "/dev_hdd1/cache") == 0 ||
++        strncmp(gpath, "/dev_hdd1/", 10) == 0 || strcmp(gpath, "/dev_hdd1") == 0) {
++        ctx->gpr[3] = (uint64_t)(int64_t)CELL_FS_ENOENT;
++        return;
++    }
++
+     host_path(hpath, sizeof hpath, gpath);
+ 
+     /* NPDRM: see the note in sys_fs.c -- an EDAT is decrypted once into a cache
+@@ -308,6 +335,16 @@ static void cellFsOpen(ppu_context* ctx)
+             return;
+         }
+     }
++    if ((flags & CELL_FS_O_CREAT) && strncmp(gpath, "/dev_hdd0/", 10) == 0) {
++        char parent[1100];
++        snprintf(parent, sizeof parent, "%s", hpath);
++        char* last_slash = strrchr(parent, '/');
++        if (!last_slash) last_slash = strrchr(parent, '\\');
++        if (last_slash && last_slash != parent) {
++            *last_slash = '\0';
++            host_mkdir_p(parent);
++        }
++    }
+     int hfd = open(hpath, oflags | O_BINARY, 0666);
+     if (hfd < 0) {
+         fprintf(stderr, "[fs] open FAIL '%s' -> '%s' (flags=0x%X)\n", gpath, hpath, flags);
+diff --git a/runtime/ppu/ppu_sysprx.cpp b/runtime/ppu/ppu_sysprx.cpp
+index 19db50a6..68196bfe 100644
+--- a/runtime/ppu/ppu_sysprx.cpp
++++ b/runtime/ppu/ppu_sysprx.cpp
+@@ -283,7 +283,12 @@ static void sys_lwmutex_lock(ppu_context* ctx)
+              * then block. Bounded diagnostics for park hunts; uncapped while the
+              * probe window is open (g_nd_inpump). */
+             static long _bl = 0; long _b = ++_bl;
+-            if (g_nd_inpump || _b <= 40) fprintf(stderr, "[LWM-BLOCK] tid=%llu lwm=0x%08X owner=%u recur=%u tmo=%lluus\n",
++            static int s_gow_trace_locks = -1;
++            if (s_gow_trace_locks < 0) {
++                const char* e = getenv("GOW_TRACE_LOCKS");
++                s_gow_trace_locks = (e && strcmp(e, "1") == 0) ? 1 : 0;
++            }
++            if (s_gow_trace_locks && (g_nd_inpump || _b <= 40)) fprintf(stderr, "[LWM-BLOCK] tid=%llu lwm=0x%08X owner=%u recur=%u tmo=%lluus\n",
+                 (unsigned long long)ctx->thread_id, lwm, vm_read32(lwm + LWM_OWNER), vm_read32(lwm + LWM_RECUR),
+                 (unsigned long long)timeout_us);
+             if (lwm_trace()) { struct LwmSlot* sl = lwm_find(lwm);
+@@ -300,7 +305,7 @@ static void sys_lwmutex_lock(ppu_context* ctx)
+             }
+             if (lwm_trace()) fprintf(stderr, "[LWM-CONVOY] tid=%llu ACQUIRED lwm=0x%08X after waiting %lldus\n",
+                 (unsigned long long)ctx->thread_id, lwm, lwm_now_us() - _blk_start);
+-            if (g_nd_inpump || _b <= 40) fprintf(stderr, "[LWM-GOT] tid=%llu lwm=0x%08X\n", (unsigned long long)ctx->thread_id, lwm);
++            if (s_gow_trace_locks && (g_nd_inpump || _b <= 40)) fprintf(stderr, "[LWM-GOT] tid=%llu lwm=0x%08X\n", (unsigned long long)ctx->thread_id, lwm);
+         }
+     }
+     if (lwm_trace()) { struct LwmSlot* sl = lwm_find(lwm); if (sl) { sl->holder = (long)self; sl->acq_us = lwm_now_us(); sl->acq_fences = g_gcm_ref_pub_count; sl->acq_cpu_us = ppu_thread_cpu_us(self); } }
+diff --git a/runtime/ppu/tests/boot_main.cpp b/runtime/ppu/tests/boot_main.cpp
+index 9f5131c9..929e80e6 100644
+--- a/runtime/ppu/tests/boot_main.cpp
++++ b/runtime/ppu/tests/boot_main.cpp
+@@ -480,7 +480,8 @@ static DWORD WINAPI vblank_ticker(LPVOID)
+                                          rsx_live_guest_ptr, nullptr) == 0) {
+             s_rsx_live = 1;
+             rsx_null_backend_suppress_present(1);
+-            fprintf(stderr, "[rsx] live-draw engine up (D3D12); GDI present suppressed\n");
++            fprintf(stderr, "[rsx] live-draw engine up (%s); GDI present suppressed\n",
++                    ps3_rsx_get_backend() ? ps3_rsx_get_backend()->name : "unknown");
+         } else {
+             fprintf(stderr, "[rsx] live-draw init FAILED -- falling back to the D3D12 backend\n");
+             rsx_ok = (rsx_backend_init(rsx_w, rsx_h, _title) == 0);
+diff --git a/runtime/rsx/rsx_backend.c b/runtime/rsx/rsx_backend.c
+index 727e6656..86ce2f85 100644
+--- a/runtime/rsx/rsx_backend.c
++++ b/runtime/rsx/rsx_backend.c
+@@ -158,6 +158,9 @@ int ps3_rsx_parse_cli_renderer(int argc, char** argv)
+ /* Dispatchers */
+ int ps3_rsx_backend_enabled(void)
+ {
++    if (g_rsx_backend && g_rsx_backend->type == PS3_RSX_RENDERER_RPCS3_RSX) {
++        return 1;
++    }
+     return rsx_live_draw_enabled();
+ }
+ 
+diff --git a/runtime/spu/spu_channels.c b/runtime/spu/spu_channels.c
+index 319c3430..8756a240 100644
+--- a/runtime/spu/spu_channels.c
++++ b/runtime/spu/spu_channels.c
+@@ -334,11 +334,16 @@ int spu_run_with_halt(void (*entry)(spu_context*), spu_context* ctx)
+     case 1:
+         halted = 1;
+         g_spu_trampoline_fn = 0;
++        ctx->drain_frame = NULL;
++        ctx->irq_frame = NULL;
++        ctx->host_depth = 0;
+         break;
+     case 2:
+         /* A one-way guest stack reset invalidates every lifted host caller.
+          * Re-enter its target with the same guest state on the driver stack. */
+         ctx->host_depth = 0;
++        ctx->drain_frame = NULL;
++        ctx->irq_frame = NULL;
+         g_spu_trampoline_fn = 0;
+         spu_indirect_branch(ctx);
+         SPU_DRAIN(ctx);
+@@ -366,6 +371,9 @@ int spu_run_with_halt(void (*entry)(spu_context*), spu_context* ctx)
+     yz_lockstep_unregister(ctx);   /* leave the ring; hand the token onward */
+     s_spu_halt_armed = outer_armed;
+     if (outer_armed) memcpy(s_spu_halt_env, outer_env, sizeof(jmp_buf));
++    ctx->drain_frame = NULL;
++    ctx->irq_frame = NULL;
++    ctx->host_depth = 0;
+     spu_float_mode_leave(fpcr_outer);
+     return halted;
+ }
+diff --git a/runtime/spu/spu_context.h b/runtime/spu/spu_context.h
+index 0be4e5ab..fbe08dc3 100644
+--- a/runtime/spu/spu_context.h
++++ b/runtime/spu/spu_context.h
+@@ -389,6 +389,7 @@ typedef struct spu_context {
+      * handler's frames and its return address then missed every drain on the
+      * way up (drain-mismatch return_pc=0xA90 pc=0x2D28, once per job). */
+     void*    irq_frame;
++    void*    drain_frame;
+ 
+     /* Parked DMA-list commands (stall-and-notify), keyed PER TAG GROUP. A
+      * GETL/PUTL that transfers a list element with the stall-and-notify bit
+@@ -1103,6 +1104,21 @@ void spu_direct_init(void);
+  * host-frame return as SPU_RET, publishing the register actually branched. */
+ #define SPU_RET_REG(ctx, n) do {                                       (ctx)->pc = (ctx)->gpr[n]._u32[0];                             if ((ctx)->host_depth == 0)                                        g_spu_trampoline_fn = spu_indirect_branch;                 return;                                                    } while (0)
+ 
++typedef struct {
++    uint32_t ea;
++    uint32_t cur;
++    uint32_t spu;
++    uint32_t pick;
++    uint64_t timestamp_us;
++} SpursPollHistEntry;
++
++extern spu_context* g_spu_lane_ctx[8];
++extern uint64_t g_spu_lane_last_entry_us[8];
++extern uint32_t g_spu_lane_last_wid[8];
++extern int g_spu_lane_busy[8];
++extern SpursPollHistEntry g_spurs_poll_hist_lane5[5];
++extern uint32_t g_spurs_poll_hist_lane5_idx;
++
+ #ifdef __cplusplus
+ } /* extern "C" */
+ #endif
+diff --git a/runtime/spu/spurs_policy.c b/runtime/spu/spurs_policy.c
+index 549c7d04..c25a88dc 100644
+--- a/runtime/spu/spurs_policy.c
++++ b/runtime/spu/spurs_policy.c
+@@ -33,6 +33,14 @@
+ #include "ps3emu/log_first.h"
+ 
+ extern int spu_run_with_halt(void (*)(spu_context*), spu_context*);
++spu_context* g_spu_lane_ctx[8] = {0};
++uint64_t g_spu_lane_last_entry_us[8] = {0};
++uint32_t g_spu_lane_last_wid[8] = {0};
++int g_spu_lane_busy[8] = {0};
++SpursPollHistEntry g_spurs_poll_hist_lane5[5] = {0};
++uint32_t g_spurs_poll_hist_lane5_idx = 0;
++extern unsigned long long ps3_qpc_us(void);
++
+ 
+ /* SpursKernelContext.tempArea (LS 0x100..0x17F) holds the first 128 bytes of
+  * the CellSpurs instance: the kernel copies them there each time it selects a
+@@ -257,6 +265,16 @@ int spu_run_policy_module(spu_lifted_entry_fn entry, int image_id,
+     ctx->spu_id      = spu_num;
+     ctx->image_id    = image_id;
+     ctx->policy_mode = 1;
++    g_spu_lane_ctx[spu_num] = ctx;
++    g_spu_lane_last_entry_us[spu_num] = ps3_qpc_us();
++    g_spu_lane_last_wid[spu_num] = wid;
++    g_spu_lane_busy[spu_num] = 1;
++    if (wid == 8 && getenv("GOW_TRACE_WID8")) {
++        static uint32_t s_w8_count = 0;
++        s_w8_count++;
++        fprintf(stderr, "[WID8-TIMELINE @ %.3fs] PM-ENTRY #%u on lane %u data=0x%016llX\n",
++                (double)ps3_qpc_us() / 1e6, s_w8_count, spu_num, (unsigned long long)wkl_data);
++    }
+ 
+     /* PM image at its load base (first entry only -- LS persists). */
+     if (first)
+@@ -589,6 +607,14 @@ int spu_run_policy_module(spu_lifted_entry_fn entry, int image_id,
+     { extern void spu_evlog(const spu_context*, const char*, uint32_t, uint32_t);
+       spu_evlog(ctx, "RUN-end polls/exited", g_spurs_pm_polls, g_spurs_pm_exited); }
+     int result = g_spurs_pm_exited ? 0 : -2;
++    if (wid == 8 && getenv("GOW_TRACE_WID8")) {
++        static uint32_t s_w8_exit_count = 0;
++        s_w8_exit_count++;
++        fprintf(stderr, "[WID8-TIMELINE @ %.3fs] PM-EXIT #%u on lane %u result=%d polls=%u exited=%u\n",
++                (double)ps3_qpc_us() / 1e6, s_w8_exit_count, spu_num, result, g_spurs_pm_polls, g_spurs_pm_exited);
++    }
++    g_spu_lane_ctx[spu_num] = NULL;
++    g_spu_lane_busy[spu_num] = 0;
+     policy_slot_release(resident);
+     return result;
+ }
+-- 
+2.48.1.windows.1
+

@@ -1,0 +1,270 @@
+From 1457acc5ff939adccb4ce9dea6569a04ace4d96b Mon Sep 17 00:00:00 2001
+From: YJuDeAd <robinrashi@gmail.com>
+Date: Thu, 12 Nov 2026 01:13:52 +0530
+Subject: [PATCH 43/49] feat(parity): apply reference patches 0045-0048 and
+ parity KEEP items
+
+# Conflicts:
+#	libs/spurs/cellSpurs.c
+#	libs/system/cellSaveData.c
+#	runtime/spu/spu_channels.c
+#	runtime/spu/spurs_job.c
+---
+ libs/spurs/cellSpurs.c          | 62 +++++++++++++++++++++++++++------
+ libs/system/cellSaveData.c      |  4 +--
+ libs/video/cellGcmSys.c         |  9 ++++-
+ runtime/ppu/tests/boot_main.cpp |  2 ++
+ runtime/spu/spu_channels.c      |  2 +-
+ runtime/spu/spu_context.h       |  7 ++++
+ runtime/spu/spurs_job.c         |  5 +--
+ runtime/spu/spurs_policy.c      |  1 +
+ 8 files changed, 76 insertions(+), 16 deletions(-)
+
+diff --git a/libs/spurs/cellSpurs.c b/libs/spurs/cellSpurs.c
+index 9230b725..63848597 100644
+--- a/libs/spurs/cellSpurs.c
++++ b/libs/spurs/cellSpurs.c
+@@ -2120,6 +2120,14 @@ static DWORD WINAPI spurs_pm_worker(LPVOID p)
+     struct SpursInst* si = slot->instance;
+ #ifdef _WIN32
+     { ULONG g = 256 * 1024; SetThreadStackGuarantee(&g); }
++    {
++        static int s_pin = -1;
++        if (s_pin < 0) { const char* e = getenv("SPURS_PIN"); s_pin = e && *e == '1'; }
++        if (s_pin) {
++            DWORD_PTR mask = (DWORD_PTR)1 << (slot->spu_num + 1);
++            SetThreadAffinityMask(GetCurrentThread(), mask);
++        }
++    }
+ #endif
+     ps3_tprof_thread('S', (uint32_t)slot->spu_num);
+     AcquireSRWLockExclusive(&si->lock);
+@@ -2232,18 +2240,19 @@ static DWORD WINAPI spurs_kernel_thread(LPVOID p)
+     static int s_spin = -1;
+     if (s_spin < 0) { const char* e = getenv("SPURS_KERNEL_SPIN"); s_spin = e && *e == '1'; }
+     while (!si->stopping) {
+-        /* A request line committed during the last pass: look again now. Such a
+-         * pass serves only requested workloads and leaves pass_no alone, so the
+-         * idle back-off probes keep their cadence however often SPUs write the
+-         * line (a probed policy module that writes it cannot feed itself more
+-         * probes). Every 16th kick pass in a row is a full one, so a steady
+-         * stream of commits cannot starve the probes either. */
+         int kick_pass = 0;
+         if (__atomic_exchange_n(&si->kick, 0, __ATOMIC_ACQ_REL)) {
+             kick_pass = ++kick_run < 16;
+         } else {
+             if (s_spin) { ReleaseSRWLockExclusive(&si->lock); SwitchToThread(); AcquireSRWLockExclusive(&si->lock); }
+-            else SleepConditionVariableSRW(&si->wake, &si->lock, 1, 0);
++            else {
++                int any_busy = 0;
++                for (u32 k = 0; k < si->nspus; k++) {
++                    if (si->slots[k].busy) { any_busy = 1; break; }
++                }
++                DWORD wait_ms = any_busy ? 1 : 10;
++                SleepConditionVariableSRW(&si->wake, &si->lock, wait_ms, 0);
++            }
+             /* This full pass reads the line after any commit that woke it. */
+             (void)__atomic_exchange_n(&si->kick, 0, __ATOMIC_ACQ_REL);
+         }
+@@ -3737,17 +3746,28 @@ s32 cellSpursGetWorkloadInfo(u64 spurs_ea, u32 wid, u64 info_ea)
+     vm_write32(base + 0x10, (u32)(uintptr_t)w->pm);              /* policyModule (32-bit EA) */
+     vm_write32(base + 0x14, w->sizePm);                          /* sizePolicyModule */
+     /* nameClass/nameInstance (0x18/0x1C): not tracked -> left 0 by the zero above. */
+-
+     u32 se = (u32)spurs_ea;
+     const struct SpursInst* si = spurs_inst_find(se);
+     const int is2 = si && si->is2;
+-    *(vm_base + base + 0x20) = wkl_count_get(se, SPURS_WKL_CURCONT, wid, is2); /* contention */
++    AcquireSRWLockExclusive(&s_workload_registry_lock);
++    u8 cur_cont = wkl_count_get(se, SPURS_WKL_CURCONT, wid, is2);
++    u8 ready_cnt = *(vm_base + se + wkl_ready_off(wid));
++
++    if (wid == 9 || !w->in_use || !w->started || w->readyCount == 0) {
++        ready_cnt = 0;
++        cur_cont = 0;
++        *(vm_base + se + wkl_ready_off(wid)) = 0;
++        if (wid < 16) *(vm_base + se + SPURS_WKL_CURCONT + wid) = 0;
++    }
++
++    *(vm_base + base + 0x20) = cur_cont;                                   /* contention */
+     *(vm_base + base + 0x21) = (u8)w->minContention;                       /* minContention */
+     *(vm_base + base + 0x22) = (u8)w->maxContention;                       /* maxContention */
+-    *(vm_base + base + 0x23) = *(vm_base + se + wkl_ready_off(wid));       /* readyCount   */
++    *(vm_base + base + 0x23) = ready_cnt;                                  /* readyCount */
+     /* idleSpuRequest; a CellSpurs2 uses those bytes for readyCount2. */
+     *(vm_base + base + 0x24) = is2 ? 0 : *(vm_base + se + SPURS_WKL_IDLE2 + wid);
+     *(vm_base + base + 0x25) = (vm_read16(se + wkl_signal_off(wid)) & wkl_signal_bit(wid)) ? 1 : 0;
++    ReleaseSRWLockExclusive(&s_workload_registry_lock);
+     return CELL_OK;
+ }
+ 
+@@ -3755,6 +3775,17 @@ s32 cellSpursShutdownWorkload(u64 spurs_ea, u32 wid)
+ {
+     static int _n = 0;
+     if (PS3_LOG_FIRST(_n, 8)) printf("[cellSpurs] ShutdownWorkload(wid=%u)\n", wid);
++    if (wid < SPURS_MAX_WID) {
++        AcquireSRWLockExclusive(&s_workload_registry_lock);
++        s_workloads[wid].readyCount = 0;
++        s_workloads[wid].started = 0;
++        if (spurs_ea && vm_base) {
++            u32 se = (u32)spurs_ea;
++            *(vm_base + se + wkl_ready_off(wid)) = 0;
++            if (wid < 16) *(vm_base + se + SPURS_WKL_CURCONT + wid) = 0;
++        }
++        ReleaseSRWLockExclusive(&s_workload_registry_lock);
++    }
+     return CELL_OK;
+ }
+ 
+@@ -3762,6 +3793,17 @@ s32 cellSpursWaitForWorkloadShutdown(u64 spurs_ea, u32 wid)
+ {
+     static int _n = 0;
+     if (PS3_LOG_FIRST(_n, 8)) printf("[cellSpurs] WaitForWorkloadShutdown(wid=%u)\n", wid);
++    if (wid < SPURS_MAX_WID) {
++        AcquireSRWLockExclusive(&s_workload_registry_lock);
++        s_workloads[wid].readyCount = 0;
++        s_workloads[wid].started = 0;
++        if (spurs_ea && vm_base) {
++            u32 se = (u32)spurs_ea;
++            *(vm_base + se + wkl_ready_off(wid)) = 0;
++            if (wid < 16) *(vm_base + se + SPURS_WKL_CURCONT + wid) = 0;
++        }
++        ReleaseSRWLockExclusive(&s_workload_registry_lock);
++    }
+     return CELL_OK;
+ }
+ 
+diff --git a/libs/system/cellSaveData.c b/libs/system/cellSaveData.c
+index 1fb1b120..05d0554c 100644
+--- a/libs/system/cellSaveData.c
++++ b/libs/system/cellSaveData.c
+@@ -279,7 +279,7 @@ static s32 dispatch_func_file(uint32_t func_opd, uint32_t* userdata_ea,
+ static void marshal_statget_init(uint32_t addr, int is_new, const char* dirName,
+                                   s32 sizeKB, u32 fileNum)
+ {
+-    vm_write32(addr + 0,    1024 * 1024);    /* hddFreeSizeKB = 1 GB */
++    vm_write32(addr + 0,    10 * 1024 * 1024);    /* hddFreeSizeKB = 10 GB */
+     vm_write32(addr + 4,    is_new ? 1 : 0); /* isNewData */
+     vm_write64(addr + 8,    0);              /* dir.st_atime */
+     vm_write64(addr + 16,   0);              /* dir.st_mtime */
+@@ -906,7 +906,7 @@ static s32 savedata_execute_run(const char* dirName, int is_save,
+ 
+     CellSaveDataStatGet statGet;
+     memset(&statGet, 0, sizeof(statGet));
+-    statGet.hddFreeSizeKB = 1024 * 1024; /* report 1GB free */
++    statGet.hddFreeSizeKB = 10 * 1024 * 1024; /* report 10GB free */
+     statGet.isNewData = is_new ? 1 : 0;
+     strncpy(statGet.dir.dirName, dirName, CELL_SAVEDATA_DIRNAME_SIZE - 1);
+ 
+diff --git a/libs/video/cellGcmSys.c b/libs/video/cellGcmSys.c
+index 32e1f080..d74b3f18 100644
+--- a/libs/video/cellGcmSys.c
++++ b/libs/video/cellGcmSys.c
+@@ -507,7 +507,8 @@ static IoMapping* find_mapping_by_ea(u32 ea)
+ static IoMapping* find_mapping_by_io(u32 io)
+ {
+     for (int i = 0; i < CELL_GCM_MAX_IO_MAPPINGS; i++) {
+-        if (s_io_mappings[i].active && s_io_mappings[i].io == io)
++        if (s_io_mappings[i].active && (s_io_mappings[i].io == io ||
++            (io >= s_io_mappings[i].io && io < s_io_mappings[i].io + s_io_mappings[i].size)))
+             return &s_io_mappings[i];
+     }
+     return NULL;
+@@ -4036,8 +4037,14 @@ s32 cellGcmUnmapEaIoAddress(u32 ea)
+ 
+     clear_offset_table(mapping->ea, mapping->io, mapping->size);
+     mapping->active = 0;
++    mapping->ea = 0;
++    mapping->io = 0;
++    mapping->size = 0;
+     s_io_mapping_count--;
+ 
++    if (s_offset_tables_published)
++        gcm_publish_offset_tables();
++
+     return CELL_OK;
+ }
+ 
+diff --git a/runtime/ppu/tests/boot_main.cpp b/runtime/ppu/tests/boot_main.cpp
+index 997059db..9223dcfd 100644
+--- a/runtime/ppu/tests/boot_main.cpp
++++ b/runtime/ppu/tests/boot_main.cpp
+@@ -163,7 +163,9 @@ char* __cdecl cached_getenv(const char* name)
+     return (char*)val;
+ }
+ }
++#ifdef _MSC_VER
+ extern "C" char* (__cdecl* __imp_getenv)(const char*) = cached_getenv;
++#endif
+ 
+ /* Last-chance crash reporter: vm_base accesses are bounds-guarded, so a real
+  * access violation means a HOST pointer deref (e.g. a bad function pointer or a
+diff --git a/runtime/spu/spu_channels.c b/runtime/spu/spu_channels.c
+index 45b65882..319c3430 100644
+--- a/runtime/spu/spu_channels.c
++++ b/runtime/spu/spu_channels.c
+@@ -3796,7 +3796,7 @@ void spu_indirect_branch(spu_context* ctx)
+     if (ctx->image_id == 2 &&
+         ((ctx->pc >= 0x3700 && ctx->pc < 0x3FE80) ||
+          (ctx->pc < 0xA00 && ctx->pc != SPURS_PM_EXIT_TO_KERNEL_LS &&
+-          ctx->pc != SPURS_PM_SELECT_WORKLOAD_LS))) {
++          ctx->pc != SPURS_PM_SELECT_WORKLOAD_LS && ctx->pc != 0x9D4u))) {
+         static int _n = 0;
+         if (_n < 12) {
+             _n++;
+diff --git a/runtime/spu/spu_context.h b/runtime/spu/spu_context.h
+index f456304b..0be4e5ab 100644
+--- a/runtime/spu/spu_context.h
++++ b/runtime/spu/spu_context.h
+@@ -495,6 +495,13 @@ static inline void spu_context_init(spu_context* ctx, uint32_t spu_id)
+     ctx->status = SPU_STATUS_STOPPED;
+ }
+ 
++static inline uint32_t spu_ctx_lane(const spu_context* ctx)
++{
++    if (!ctx) return 0;
++    if (ctx->spu_id < 8) return ctx->spu_id;
++    return (uint32_t)(ctx->ls[0x1CB] & 7);
++}
++
+ /* ---------------------------------------------------------------------------
+  * Local store access helpers
+  * -----------------------------------------------------------------------*/
+diff --git a/runtime/spu/spurs_job.c b/runtime/spu/spurs_job.c
+index 9beb8932..18b9304e 100644
+--- a/runtime/spu/spurs_job.c
++++ b/runtime/spu/spurs_job.c
+@@ -299,7 +299,8 @@ int spu_run_spurs_job(spu_lifted_entry_fn entry, int image_id,
+      * its DMA and atomic EAs from these words, so when a job spins on a
+      * lock-line address that is not backed, this is what to read first. */
+     { static int _d = 0;
+-      if (ps3_env_once("SPURS_JOB_DESCDUMP") && PS3_LOG_FIRST(_d, 4)) {
++      const char* e_dd = ps3_env_once("SPURS_JOB_DESCDUMP");
++      if (e_dd && PS3_LOG_FIRST(_d, 4)) {
+           fprintf(stderr, "[spurs-job] desc @0x%08X (%u bytes):", job_ea, dsz);
+           for (uint32_t o = 0; o < dsz && o < 128; o += 4) {
+               if ((o & 31) == 0) fprintf(stderr, "\n    +%02X:", o);
+@@ -310,7 +311,7 @@ int spu_run_spurs_job(spu_lifted_entry_fn entry, int image_id,
+            * data (past JH_SIZE) and dump what they point at. The job reads its
+            * parameters from there, so a wild DMA/atomic address usually
+            * originates in one of these blocks. */
+-          if (atoi(ps3_env_once("SPURS_JOB_DESCDUMP")) >= 2) {
++          if (atoi(e_dd) >= 2) {
+               for (uint32_t o = JH_SIZE; o < dsz && o < 128; o += 4) {
+                   uint32_t v = g32(job_ea + o);
+                   if (v < 0x10000u || v >= 0xD0000000u) continue;
+diff --git a/runtime/spu/spurs_policy.c b/runtime/spu/spurs_policy.c
+index 7578e48f..549c7d04 100644
+--- a/runtime/spu/spurs_policy.c
++++ b/runtime/spu/spurs_policy.c
+@@ -254,6 +254,7 @@ int spu_run_policy_module(spu_lifted_entry_fn entry, int image_id,
+     resident->data = wkl_data;
+     resident->pm = pm_host; resident->size = pm_size;
+     resident->entry = entry; resident->image_id = image_id;
++    ctx->spu_id      = spu_num;
+     ctx->image_id    = image_id;
+     ctx->policy_mode = 1;
+ 
+-- 
+2.48.1.windows.1
+

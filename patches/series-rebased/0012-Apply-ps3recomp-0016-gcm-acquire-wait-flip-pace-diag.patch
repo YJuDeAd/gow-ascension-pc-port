@@ -1,0 +1,177 @@
+From 1d22c8a5d9d9f004751dec94b0e34adc9ea4fb94 Mon Sep 17 00:00:00 2001
+From: YJuDeAd <robinrashi@gmail.com>
+Date: Thu, 12 Nov 2026 00:20:03 +0530
+Subject: [PATCH 12/49] Apply
+ ps3recomp-0016-gcm-acquire-wait-flip-pace-diagnostics.patch
+
+# Conflicts:
+#	libs/video/cellGcmSys.c
+#	runtime/spu/spu_interp.c
+---
+ libs/spurs/cellSpurs.c     | 10 +++++++++
+ libs/video/cellGcmSys.c    | 43 ++++++++++++++++++++++++++------------
+ runtime/spu/spu_channels.c | 24 +++++++++++++++++++++
+ runtime/spu/spu_workload.c |  9 ++++++++
+ 4 files changed, 73 insertions(+), 13 deletions(-)
+
+diff --git a/libs/spurs/cellSpurs.c b/libs/spurs/cellSpurs.c
+index ace06bdc..4a4b21c8 100644
+--- a/libs/spurs/cellSpurs.c
++++ b/libs/spurs/cellSpurs.c
+@@ -2136,6 +2136,16 @@ static DWORD WINAPI spurs_kernel_thread(LPVOID p)
+           const unsigned long long now = GetTickCount64();
+           if (s_wd > 0 && now >= s_next) {
+               s_next = now + (unsigned long long)s_wd * 1000ull;
++              /* The scheduler's own view: each SPU slot, and per workload the
++               * SPUs it holds, its readyCount, signal and idle back-off. */
++              for (u32 k = 0; k < si->nspus; k++)
++                  fprintf(stderr, "[wl-dump] t=%llu slot %u busy=%d wid=%u\n", now, k,
++                          si->slots[k].busy, si->slots[k].wid);
++              for (u32 w = 0; w < (si->is2 ? SPURS_MAX_WID : 16u); w++)
++                  if (s_workloads[w].in_use && s_workloads[w].spurs_ea == ea)
++                      fprintf(stderr, "[wl-dump] t=%llu wid=%u state=%u active=%u ready=%u sig=%d idle=%u enabled=%d\n",
++                              now, w, vm_read8(ea + wkl_state_off(w)), si->active[w], vm_read8(ea + wkl_ready_off(w)),
++                              wkl_signalled(ea, w), si->idle[w], (enabled & (0x80000000u >> w)) != 0);
+               for (u32 w = 0; w < (si->is2 ? SPURS_MAX_WID : 16u); w++) {
+                   if (!s_workloads[w].in_use || s_workloads[w].spurs_ea != ea) continue;
+                   const u32 d = (u32)vm_read64(ea + wkl_info_off(w) + 8);
+diff --git a/libs/video/cellGcmSys.c b/libs/video/cellGcmSys.c
+index d545b22c..0bb7eae5 100644
+--- a/libs/video/cellGcmSys.c
++++ b/libs/video/cellGcmSys.c
+@@ -2735,6 +2735,16 @@ static void gcm_rsx_process_fifo_unlocked(void)
+                         ps3_ft_span(PS3_FT_SEMA, 0, s_sema_offset, v, s_ft_sema_t0, ps3_ft_now());
+                         s_ft_sema_t0 = 0;
+                     }
++                    /* GCM_SEMALOG=1: every RELEASE, and each ACQUIRE once per (offset, value)
++                     * with what the label holds then. */
++                    { static int sl = -1; static u32 last_off = ~0u, last_v = ~0u;
++                      if (sl < 0) sl = getenv("GCM_SEMALOG") ? 1 : 0;
++                      if (sl && m == 0x6Cu)
++                          printf("[sema] t=%llu RELEASE off=0x%X <- 0x%08X get=0x%X%c", (unsigned long long)ps3_ms_now(), s_sema_offset, v, s_fifo_getoff, 10);
++                      if (sl && m == 0x68u && (s_sema_offset != last_off || v != last_v)) {
++                          last_off = s_sema_offset; last_v = v;
++                          printf("[sema] t=%llu ACQUIRE off=0x%X want 0x%08X has 0x%08X get=0x%X%c", (unsigned long long)ps3_ms_now(),
++                                 s_sema_offset, v, vm_read32(la), s_fifo_getoff, 10); } }
+                     if (m == 0x64u)      s_sema_offset = v;
+                     else if (m == 0x6Cu) {
+                         /* The RSX has fetched past a RELEASE before its
+@@ -2783,10 +2793,28 @@ static void gcm_rsx_process_fifo_unlocked(void)
+             }
+         }
+                 }
+-                if (sem_blocked) { s_sema_blocked_pass = 1; break; }
++                if (sem_blocked) { why = "sema-acquire"; break; }
+                 s_fifo_getoff += 4 + count * 4;
+                 continue;
+             }
++            /* GCM_FLIP_PACE_MS=<ms>: a flip in the command stream waits until that
++             * long after the previous one, the way a vsync flip holds a real RSX
++             * (the pass stops here without consuming the method, as a blocked
++             * ACQUIRE does). Off by default. Recompiled, the RSX side runs far
++             * faster than the SPU work it is meant to overlap: God of War:
++             * Ascension's frame 2 reports used to land while its SPU post-process
++             * tasks were still on frame 1, and RsxSync's signal for the next
++             * round was eaten by their barrier waits. */
++            if ((((subch << 13) | method) == 0xE920u || ((subch << 13) | method) == 0xE924u)) {
++                static long pace = -1; static unsigned long long last_flip;
++                if (pace < 0) { const char* e = getenv("GCM_FLIP_PACE_MS"); pace = e ? atol(e) : 0; }
++                if (pace > 0) {
++                    extern unsigned long long ps3_ms_now(void);
++                    const unsigned long long now = ps3_ms_now();
++                    if (last_flip && now - last_flip < (unsigned long long)pace) { why = "flip-pace"; break; }
++                    last_flip = now;
++                }
++            }
+             static int s1_2d = -1;
+             if (s1_2d < 0) { const char* e = getenv("GCM_SUBCH1_2D"); s1_2d = e ? atoi(e) : 0; }
+             /* A run of 3D methods inside one 1 MB IO page, with no per-word
+@@ -3023,19 +3051,8 @@ static void gcm_rsx_process_fifo_unlocked(void)
+           }
+       } else burned = 0; }
+ 
+-<<<<<<< ours
+-    /* A drain stopped on a semaphore acquire (GCM_SEMA_ACQUIRE) holds `get`
+-     * on purpose: that is the wait, not a stuck walker, and the acquire's own
+-     * bound (GCM_SEMA_ACQUIRE_MS) is what ends it. So is a self-JUMP park,
+-     * which GCM_PARK_GRACE_MS ends. This counter counts drain passes, not
+-     * time: both stop every pass at the same `get`, so it fired a few
+-     * milliseconds in and resynced to put. For a park that is before the
+-     * title has patched it into a JUMP to the commands it just wrote at the
+-     * ring start, and the resync dropped them: inFAMOUS 2 stopped presenting
+-     * for good that way in about one New Marais run in five ("stuck-get" at a
+-     * self-jump with no "jump-park" before it). */
+     { static u32 last = 0xFFFFFFFFu; static int stuck = 0;
+-      if (s_sema_blocked_pass || s_park_pass || s_report_hold_pass) {
++      if (s_sema_blocked_pass || s_park_pass || s_report_hold_pass || (why && strcmp(why, "flip-pace") == 0)) {
+           stuck = 0; last = s_fifo_getoff;
+           s_sema_blocked_pass = 0; s_park_pass = 0; s_report_hold_pass = 0; }
+       else if (s_fifo_getoff == last && s_fifo_getoff != put) {
+diff --git a/runtime/spu/spu_channels.c b/runtime/spu/spu_channels.c
+index 0f642699..58be3e6d 100644
+--- a/runtime/spu/spu_channels.c
++++ b/runtime/spu/spu_channels.c
+@@ -1117,6 +1117,30 @@ void spu_wrch(spu_context* ctx, uint32_t channel, u128 value)
+         if (channel == MFC_Cmd && spu_mfc_atomic(ctx, v))
+             return;
+         mfc_channel_write(mfc_for(ctx), ctx, channel, v);
++        /* SPU_MFCLOG_IMG=<image> [SPU_MFCLOG_MAX=<n>]: every plain GET/PUT that
++         * image issues (cmd, LS, EA, size and up to 64 bytes, read after the
++         * transfer), for lifted code the interpreter hooks never see. */
++        if (channel == MFC_Cmd) {
++            static int s_mi = -2, s_nea; static long s_mn, s_mmax; static uint32_t s_mea[8];
++            if (s_mi == -2) { const char* e = getenv("SPU_MFCLOG_IMG"); s_mi = e ? atoi(e) : -1;
++                              const char* m = getenv("SPU_MFCLOG_MAX"); s_mmax = m ? atol(m) : 20000;
++                              const char* a = getenv("SPU_MFCLOG_EA");
++                              while (a && *a && s_nea < 8) { char* end; s_mea[s_nea++] = (uint32_t)strtoul(a, &end, 16) & ~127u;
++                                                            a = (*end == ',') ? end + 1 : NULL; } }
++            /* SPU_MFCLOG_EA=<hex>[,<hex>...]: any image's GET/PUT that touches one of those 128-byte lines. */
++            int hit_ea = 0;
++            for (int k = 0; k < s_nea; k++)
++                if ((ctx->mfc_eal & ~127u) == s_mea[k] || ((ctx->mfc_eal + ctx->mfc_size - 1u) & ~127u) == s_mea[k]) hit_ea = 1;
++            if (((s_mi >= 0 && ctx->image_id == s_mi) || hit_ea) && s_mn++ < s_mmax) {
++                const uint32_t lsa = ctx->mfc_lsa & SPU_LS_MASK, n = ctx->mfc_size < 64u ? ctx->mfc_size : 64u;
++                extern int spu_workload_current_task(void);
++                char line[320]; int o = snprintf(line, sizeof line, "[mfclog] img=%d task=%d spu=%u cmd=%02X lsa=%05X ea=%08X size=%X tag=%u:",
++                                                  ctx->image_id, spu_workload_current_task(), ctx->spu_id, v & 0xFFu, lsa, ctx->mfc_eal, ctx->mfc_size, ctx->mfc_tag);
++                for (uint32_t k = 0; k < n && lsa + k < SPU_LS_SIZE; k++)
++                    o += snprintf(line + o, sizeof line - (size_t)o, (k & 3) ? "%02X" : " %02X", ctx->ls[lsa + k]);
++                fprintf(stderr, "%s\n", line);
++            }
++        }
+         /* SPU_EVLOG=1: MFC_WrTagMask / MFC_WrTagUpdate writes under a policy
+          * module, with the event mask they meet (first 400). */
+         if (channel == MFC_WrTagUpdate || channel == MFC_WrTagMask || channel == MFC_WrListStallAck)
+diff --git a/runtime/spu/spu_workload.c b/runtime/spu/spu_workload.c
+index 10c71fba..8fecea37 100644
+--- a/runtime/spu/spu_workload.c
++++ b/runtime/spu/spu_workload.c
+@@ -1497,9 +1497,15 @@ void spu_taskset_line_committed(uint32_t line)
+ /* WAIT_SIGNAL from the task side (runs ON the task's host thread, called by
+  * the 0xA70 taskset-syscall intercept). Consumes a pending signal or blocks
+  * until one is delivered. Returns 0 (the syscall's success rc). */
++/* The SPURS task this host thread runs (each task has its own), or -1: for
++ * diagnostics that want to tell the tasks of one image apart. */
++static _Thread_local int s_cur_task = -1;
++int spu_workload_current_task(void) { return s_cur_task; }
++
+ int spu_taskset_wait_signal(uint32_t taskset_ea, uint32_t taskId)
+ {
+     if (!taskset_ea || taskId >= 128) return 0;
++    s_cur_task = (int)taskId;
+     /* ran= is the wall time this task spent OUT of the wait (decode/mix work
+      * per round) -- decisive for "is the Bink decode CPU-bound". TLS: each
+      * task runs on its own host thread. */
+@@ -1594,6 +1600,9 @@ int spu_taskset_wait_signal(uint32_t taskset_ea, uint32_t taskId)
+     spu_serial_acquire();       /* resume: re-take the serial lock */
+     { extern unsigned long long ps3_ms_now(void);
+       s_wait_exit_ms = ps3_ms_now(); }   /* stamp for the next entry's ran= */
++    { static int _x = -1; if (_x < 0) _x = getenv("SPU_WAITSIG_EXITLOG") ? 1 : 0;
++      if (_x) fprintf(stderr, "[spu_workload] WAIT_SIGNAL exit task=%u taskset=0x%08X t=%llu\n",
++                      taskId, taskset_ea, (unsigned long long)s_wait_exit_ms); }
+     return 0;
+ }
+ 
+-- 
+2.48.1.windows.1
+

@@ -1,0 +1,48 @@
+From 0591d4fc0e206e645f166e96ac93dfd7e5a0baba Mon Sep 17 00:00:00 2001
+From: YJuDeAd <robinrashi@gmail.com>
+Date: Thu, 12 Nov 2026 01:16:39 +0530
+Subject: [PATCH 45/49] feat(spu): hook gow_spu_step_hook in
+ spu_task_launch_check and allow trampoline redirect
+
+# Conflicts:
+#	runtime/spu/spu_drain.c
+---
+ runtime/spu/spu_drain.c | 8 ++++++++
+ 1 file changed, 8 insertions(+)
+
+diff --git a/runtime/spu/spu_drain.c b/runtime/spu/spu_drain.c
+index c91b0483..b5230568 100644
+--- a/runtime/spu/spu_drain.c
++++ b/runtime/spu/spu_drain.c
+@@ -19,6 +19,8 @@
+ #define SPU_LONGJMP(env, v) _longjmp(env, v)
+ #endif
+ 
++extern void gow_spu_step_hook(spu_context* ctx);
++
+ /* See spu_context.h `irq_frame`. */
+ typedef struct spu_irq_frame {
+     jmp_buf               env;
+@@ -96,6 +98,8 @@ static int spu_task_launch_diagnostics(void)
+ SPU_DRAIN_INLINE void spu_task_launch_check_inline(spu_context* ctx, void* fn,
+                                                   spu_recent_history* recent)
+ {
++    { extern void gow_spu_step_hook(spu_context* ctx) __attribute__((weak));
++      if (gow_spu_step_hook) gow_spu_step_hook(ctx); }
+     { extern void spu_shadow_check(spu_context*, void (*)(spu_context*));
+       spu_shadow_check(ctx, (void (*)(spu_context*))fn); }
+     recent->pc[recent->n++ & 31] = (uint32_t)ctx->pc & SPU_LS_MASK;
+@@ -609,6 +613,10 @@ void spu_drain_call(spu_context* ctx, uint32_t return_pc)
+             *tramp = 0;
+             ctx->drain_ret_pc = return_pc & SPU_LS_MASK;   /* re-set: a nested drain changed it */
+             spu_drain_hop_inline(ctx, fn, recent);
++            if (*tramp) {
++                fn = *tramp;
++                *tramp = 0;
++            }
+             if (ctx->int_enable && (ctx->event_status & ctx->event_mask)) {
+                 void (*vf)(spu_context*) = spu_take_interrupt(ctx, fn);
+                 if (!ctx->int_enable) {   /* taken (a take clears the enable; a deferral leaves it) */
+-- 
+2.48.1.windows.1
+

@@ -1,0 +1,104 @@
+From 5c21fc017c6bf1c26b36115a2d1c3b4a37661726 Mon Sep 17 00:00:00 2001
+From: YJuDeAd <robinrashi@gmail.com>
+Date: Thu, 12 Nov 2026 00:55:10 +0530
+Subject: [PATCH 33/49] Apply
+ ps3recomp-0037-taskset-bitset-lock-rejoin-call.patch
+
+# Conflicts:
+#	runtime/spu/spu_channels.c
+#	runtime/spu/spu_drain.c
+#	runtime/spu/spu_interp.c
+#	runtime/spu/spu_workload.c
+---
+ runtime/spu/spu_interp.c | 75 ++++++++++++++++++++++++++++++++++++++++
+ 1 file changed, 75 insertions(+)
+
+diff --git a/runtime/spu/spu_interp.c b/runtime/spu/spu_interp.c
+index 1167df27..ad984b81 100644
+--- a/runtime/spu/spu_interp.c
++++ b/runtime/spu/spu_interp.c
+@@ -362,6 +362,81 @@ static int spu_step(spu_context* ctx) {
+ }
+ 
+ uint32_t g_spu_interp_last_pc = 0;
++
++/* SPU_PCWATCH=<hex>,<hex>,... : log when interpreted or microstepped code
++ * reaches one of these LS addresses (runtime-loaded job code has no lifted
++ * symbol to break on), with the first word at LS 0x4000 to tell job modules
++ * apart. */
++/* GET_REPORTs the FIFO walker has executed (cellGcmSys counts them): lets a
++ * trace start at a given frame instead of burning its budget during boot. */
++volatile long g_gcm_report_count = 0;
++void spu_pcwatch(spu_context* ctx, uint32_t pc)
++{
++    /* SPU_ITRACE_MOD=<hex> [SPU_ITRACE_WID=<wid>] [SPU_ITRACE_MAX=<n>]
++     * [SPU_ITRACE_LO/HI=<hex LS range>] [SPU_ITRACE_ARM=<n GET_REPORTs first>]: every
++     * interpreted step while that job module (the word at LS 0x4000) is
++     * loaded -- pc, the instruction word, r2-r9 -- to follow runtime-loaded job
++     * code that has no lifted symbols. */
++    { static int s_it = -1; static uint32_t s_mod, s_lo, s_hi; static long s_max, s_arm; static int s_wid;
++      if (s_it < 0) { const char* e = getenv("SPU_ITRACE_MOD"); s_it = e ? 1 : 0;
++                      s_mod = e ? (uint32_t)strtoul(e, 0, 16) : 0;
++                      const char* m = getenv("SPU_ITRACE_MAX"); s_max = m ? atol(m) : 200000;
++                      const char* w = getenv("SPU_ITRACE_WID"); s_wid = w ? atoi(w) : -1;
++                      const char* lo = getenv("SPU_ITRACE_LO"); s_lo = lo ? (uint32_t)strtoul(lo, 0, 16) : 0;
++                      const char* hi = getenv("SPU_ITRACE_HI"); s_hi = hi ? (uint32_t)strtoul(hi, 0, 16) : 0x40000;
++                      const char* ar = getenv("SPU_ITRACE_ARM"); s_arm = ar ? atol(ar) : 0; }
++      if (s_it) {
++          const uint32_t mod = ((uint32_t)ctx->ls[0x4000] << 24) | ((uint32_t)ctx->ls[0x4001] << 16)
++                             | ((uint32_t)ctx->ls[0x4002] << 8) | ctx->ls[0x4003];
++          if (mod == s_mod && g_gcm_report_count >= s_arm && pc >= s_lo && pc < s_hi && (s_wid < 0 || ctx->ls[0x1DF] == (unsigned)s_wid)) {
++              static long n;
++              if (n++ < s_max) {
++                  const uint8_t* q = ctx->ls + (pc & 0x3FFFC);
++                  fprintf(stderr, "[itrace] spu=%u pc=%05X w=%02X%02X%02X%02X r2=%08X r3=%08X %08X r4=%08X r5=%08X r6=%08X r7=%08X r8=%08X r9=%08X\n",
++                          ctx->ls[0x1CB], pc, q[0], q[1], q[2], q[3],
++                          ctx->gpr[2]._u32[0], ctx->gpr[3]._u32[0], ctx->gpr[3]._u32[1], ctx->gpr[4]._u32[0],
++                          ctx->gpr[5]._u32[0], ctx->gpr[6]._u32[0], ctx->gpr[7]._u32[0], ctx->gpr[8]._u32[0], ctx->gpr[9]._u32[0]);
++              }
++          }
++      } }
++    static int s_pw_n = -1; static uint32_t s_pw[8];
++    if (s_pw_n < 0) { int n = 0; const char* e = getenv("SPU_PCWATCH");
++        while (e && *e && n < 8) { char* end; s_pw[n++] = (uint32_t)strtoul(e, &end, 16);
++            e = (*end == ',') ? end + 1 : NULL; }
++        s_pw_n = n; }
++    for (int k = 0; k < s_pw_n; k++) if (pc == s_pw[k]) {
++        /* SPU_PCWATCH_MOD=<hex>: only while that job module (the word at LS
++         * 0x4000) is loaded; job modules share their LS addresses. */
++        static int s_pm_set = -1; static uint32_t s_pm;
++        if (s_pm_set < 0) { const char* e = getenv("SPU_PCWATCH_MOD");
++            s_pm_set = e ? 1 : 0; s_pm = e ? (uint32_t)strtoul(e, 0, 16) : 0; }
++        const uint32_t mod = ((uint32_t)ctx->ls[0x4000] << 24) | ((uint32_t)ctx->ls[0x4001] << 16)
++                           | ((uint32_t)ctx->ls[0x4002] << 8) | ctx->ls[0x4003];
++        if (s_pm_set && mod != s_pm) return;
++        static long s_pw_lines = 0;
++        if (s_pw_lines++ < 400)
++            fprintf(stderr, "[pcwatch] pc=0x%05X img=%d ls4000=%08X r3=%08X r4=%08X r5=%08X r6=%08X r12=%08X"
++                            " r80=%08X r81=%08X r82=%08X r83=%08X\n",
++                    pc, ctx->image_id, mod,
++                    ctx->gpr[3]._u32[0], ctx->gpr[4]._u32[0], ctx->gpr[5]._u32[0], ctx->gpr[6]._u32[0],
++                    ctx->gpr[12]._u32[0], ctx->gpr[80]._u32[0], ctx->gpr[81]._u32[0],
++                    ctx->gpr[82]._u32[0], ctx->gpr[83]._u32[0]);
++        /* SPU_PCWATCH_R90=1: also r0/r1/r9/r11/r90/r93 and the 32 bytes at
++         * r90+0x220 (Ascension job modules: the job manager's service table
++         * and state words sit off r90). */
++        { static int s_r90 = -1; if (s_r90 < 0) s_r90 = getenv("SPU_PCWATCH_R90") ? 1 : 0;
++          if (s_r90 && s_pw_lines <= 400) {
++              const uint32_t b = (ctx->gpr[90]._u32[0] + 0x220) & 0x3FFF0;
++              fprintf(stderr, "[pcwatch]   r0=%08X r1=%08X r9=%08X r11=%08X r90=%08X r93=%08X r90+220:",
++                      ctx->gpr[0]._u32[0], ctx->gpr[1]._u32[0], ctx->gpr[9]._u32[0], ctx->gpr[11]._u32[0],
++                      ctx->gpr[90]._u32[0], ctx->gpr[93]._u32[0]);
++              for (int q = 0; q < 32; q += 4)
++                  fprintf(stderr, " %02X%02X%02X%02X", ctx->ls[b+q], ctx->ls[b+q+1], ctx->ls[b+q+2], ctx->ls[b+q+3]);
++              fprintf(stderr, "\n");
++          } }
++        return;
++    }
++}
+ uint64_t g_spu_interp_steps   = 0;
+ 
+ /* Call-trace ring buffer for diagnosing SPU asserts (env SPU_CALLTRACE). */
+-- 
+2.48.1.windows.1
+

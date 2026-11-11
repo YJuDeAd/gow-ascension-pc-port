@@ -1,0 +1,665 @@
+From 7c661cec8d4542e758808c8a8af453773c01698b Mon Sep 17 00:00:00 2001
+From: YJuDeAd <robinrashi@gmail.com>
+Date: Thu, 12 Nov 2026 00:52:44 +0530
+Subject: [PATCH 29/49] Apply
+ ps3recomp-0033-sse-byte-ops-fma-exptex-rsx-copies.patch
+
+# Conflicts:
+#	libs/video/cellGcmSys.c
+#	libs/video/rsx_live_draw.c
+#	runtime/ppu/ppu_loader.cpp
+#	runtime/spu/spu_context.h
+#	runtime/spu/spu_drain.c
+#	runtime/spu/spu_helpers.h
+#	tools/spu_lifter.py
+---
+ libs/spurs/cellSpurs.c               |  21 ++++
+ libs/video/cellGcmSys.c              |  64 +++--------
+ libs/video/rsx_fp_decompiler.c       | 161 ++++++++++++++++-----------
+ libs/video/rsx_fp_decompiler.h       |  20 ++++
+ runtime/ppu/tests/boot_main.cpp      |  10 +-
+ runtime/spu/tests/test_spu_qby_sse.c |  63 +++++++++++
+ tools/spu_lifter.py                  |  74 +++++++++++-
+ 7 files changed, 294 insertions(+), 119 deletions(-)
+ create mode 100644 runtime/spu/tests/test_spu_qby_sse.c
+
+diff --git a/libs/spurs/cellSpurs.c b/libs/spurs/cellSpurs.c
+index f8595429..560a1f12 100644
+--- a/libs/spurs/cellSpurs.c
++++ b/libs/spurs/cellSpurs.c
+@@ -2122,10 +2122,31 @@ static DWORD WINAPI spurs_pm_worker(LPVOID p)
+             SleepConditionVariableSRW(&si->wake, &si->lock, INFINITE, 0);
+         if (si->stopping && !slot->busy) break;
+         ReleaseSRWLockExclusive(&si->lock);
++        /* SPURS_WID_TIMELOG=<us>: one line per policy-module run that lasted
++         * at least <us> (1 = all), with its start, length, workload and SPU,
++         * so tools/frame_timeline.py can lay the workloads out in a frame. */
++        extern unsigned long long ps3_qpc_us(void);
++        static long s_wtl = -1;
++        if (s_wtl < 0) { const char* e = getenv("SPURS_WID_TIMELOG"); s_wtl = e ? atol(e) : 0; }
++        const unsigned long long wt0 = s_wtl ? ps3_qpc_us() : 0;
++        FILETIME wc, we, wk0, wu0, wk1, wu1;
++        if (s_wtl) GetThreadTimes(GetCurrentThread(), &wc, &we, &wk0, &wu0);
+         spu_run_policy_module(slot->fn, slot->image_id, slot->pm, slot->pm_size,
+                               slot->data, slot->wid, slot->ea, slot->spu_num);
+         extern SPU_THREAD_LOCAL volatile unsigned g_spurs_pm_polls;
+         unsigned polls = g_spurs_pm_polls;
++        if (s_wtl) {
++            const unsigned long long wd = ps3_qpc_us() - wt0;
++            if (wd >= (unsigned long long)s_wtl) {
++                /* cpu: what the thread used of it (user + kernel), in us */
++                GetThreadTimes(GetCurrentThread(), &wc, &we, &wk1, &wu1);
++                #define FT64(f) (((unsigned long long)(f).dwHighDateTime << 32) | (f).dwLowDateTime)
++                fprintf(stderr, "[wid-time] t=%lluus d=%lluus wid=%u spu=%u polls=%u cpu=%llu+%lluus\n",
++                        wt0, wd, slot->wid, slot->spu_num, polls,
++                        (FT64(wu1) - FT64(wu0)) / 10, (FT64(wk1) - FT64(wk0)) / 10);
++                #undef FT64
++            }
++        }
+         AcquireSRWLockExclusive(&si->lock);
+         u32 wid = slot->wid;
+         if (si->active[wid]) si->active[wid]--;
+diff --git a/libs/video/cellGcmSys.c b/libs/video/cellGcmSys.c
+index 370cee0a..7cdb1b5b 100644
+--- a/libs/video/cellGcmSys.c
++++ b/libs/video/cellGcmSys.c
+@@ -1106,6 +1106,7 @@ static int s_report_hold_pass = 0;    /* this drain stopped on a held GET_REPORT
+  * since when it has stood with that put: the jump-park grace in the walker. */
+ static u32 park_off, park_put;
+ static unsigned long long park_since;
++u32 g_gcm_method_ea = 0;        /* guest EA of the method argument being dispatched */
+ /* Backlog past which the drain stops honouring one-flip-per-tick and
+  * catches up instead. Sized well above a frame's command list so a
+  * title that keeps up never sees this path. */
+@@ -1344,13 +1345,13 @@ static void nv3089_blit(void)
+           if ((poll++ & 63u) == 0) { FILE* g = fopen(gate, "rb"); open_gate = g != NULL; if (g) fclose(g); }
+           if (open_gate) {
+               int _sl = (s_nv3089.src_dma != 0xFEED0001u), _dl = (s_gcm2d.dst_dma != 0xFEED0001u);
+-              printf("[NV3089G] fmt=0x%X out=%ux%u at %u,%u in=%ux%u uv=0x%08X ds=0x%X dt=0x%X src=0x%08X/%u dst=0x%08X/%u swz=%d%c",
++              printf("[NV3089G] fmt=0x%X out=%ux%u at %u,%u in=%ux%u uv=0x%08X ds=0x%X dt=0x%X src=0x%08X/%u dst=0x%08X/%u swz=%d op=%u in_fmt=0x%08X%c",
+                      s_nv3089.fmt & 0xFF, out_w, out_h, out_x, out_y,
+                      s_nv3089.in_sz & 0xFFFF, s_nv3089.in_sz >> 16, s_nv3089.in_uv,
+                      s_nv3089.ds_dx, s_nv3089.dt_dy,
+                      cellGcmResolveLocated(_sl, s_nv3089.in_off), in_pitch,
+                      cellGcmResolveLocated(_dl, s_gcm2d.dst_offset), dst_pitch,
+-                     s_nv309e.active, 10);
++                     s_nv309e.active, s_nv3089.op, s_nv3089.in_fmt, 10);
+           }
+       } }
+     /* A copy out of a surface the live renderer drew exists only on the GPU;
+@@ -1485,51 +1486,6 @@ static void nv3089_blit(void)
+              : (s_gcm2d.color_fmt == 1u /* Y8 */)     ? 1u : 4u;
+     u32 bpp = (sbpp == dbpp) ? sbpp : 4u;
+     if (bpp == 4) nv3089_engine_read(in_pitch, out_w, out_h);
+-    /* NV3089_ROWCOPY (default 1): an unscaled blit copies a row at a time.
+-     * The per-pixel loop pays a vm_read32 and a vm_write32 per pixel -- the
+-     * bounds and null-store checks, the store hooks, a reservation lookup and
+-     * two byte swaps that cancel -- and a title that copies 1280x720 surfaces
+-     * to main memory every frame (inFAMOUS 2 does, for its SPU lighting)
+-     * spent a quarter of the FIFO thread there. NV3089_ROWCOPY=0 keeps the
+-     * per-pixel copy, which is what the PPU store watches see. */
+-    static int rowcopy = -1;
+-    if (rowcopy < 0) { const char* e = getenv("NV3089_ROWCOPY"); rowcopy = e ? atoi(e) : 1; }
+-    /* A side in tiled main memory goes through the tiling (rsx_tiling.h).
+-     * A retail title downsamples its scene and depth into a tiled main-memory
+-     * region for an SPU depth-of-field job while aiming. */
+-    const u32 in_w = s_nv3089.in_sz & 0xFFFF;
+-    if (in_w && (gcm_rect_tiled(src_local, s_nv3089.in_off, in_pitch, s_nv3089.in_sz >> 16) ||
+-                 gcm_rect_tiled(dst_local, s_gcm2d.dst_offset, dst_pitch, out_y + out_h))) {
+-        /* Row at a time: the source row read as the RSX sees it, the
+-         * destination row built linearly and written the same way. */
+-        u8* srow = gcm_rows((in_w + out_w) * bpp);
+-        if (!srow) return;
+-        u8* drow = srow + in_w * bpp;
+-        const u32 sloc = src_local ? RSX_LOCATION_LOCAL : RSX_LOCATION_MAIN;
+-        const u32 dloc = dst_local ? RSX_LOCATION_LOCAL : RSX_LOCATION_MAIN;
+-        u32 xa = 0, xb = out_w;
+-        if (out_x < cx0) xa = cx0 - out_x;
+-        if ((u64)out_x + xb > cx1) xb = cx1 > out_x ? cx1 - out_x : 0;
+-        for (u32 y = 0; y < out_h && xa < xb; y++) {
+-            const u32 dy = out_y + y;
+-            if (dy < cy0 || dy >= cy1) continue;
+-            const u32 sy = (u32)((nv3089_origin(v0) + (u64)y * s_nv3089.dt_dy) >> 20);
+-            rsx_tiled_read(&s_gcm_mem, sloc, s_nv3089.in_off + sy * in_pitch, srow, in_w * bpp);
+-            for (u32 x = xa; x < xb; x++) {
+-                u32 sx = (u32)((nv3089_origin(u0) + (u64)x * s_nv3089.ds_dx) >> 20);
+-                if (sx >= in_w) sx = in_w - 1u;
+-                memcpy(drow + x * bpp, srow + sx * bpp, bpp);
+-            }
+-            rsx_tiled_write(&s_gcm_mem, dloc, s_gcm2d.dst_offset + dy * dst_pitch + (out_x + xa) * bpp,
+-                            drow + xa * bpp, (xb - xa) * bpp);
+-        }
+-    } else
+-    if (rowcopy && s_nv3089.ds_dx == 0x100000u && s_nv3089.dt_dy == 0x100000u) {
+-        /* the source start in whole texels: IMAGE_IN_POINT is 12.4 */
+-        const u32 sx0 = (u32)(nv3089_origin(u0) >> 20), sy0 = (u32)(nv3089_origin(v0) >> 20);
+-        u32 xa = 0, xb = out_w;                       /* destination x range inside the clip */
+-        if (out_x < cx0) xa = cx0 - out_x;
+-        if ((u64)out_x + xb > cx1) xb = cx1 > out_x ? cx1 - out_x : 0;
+         if (xa < xb) {
+             const u32 n = (xb - xa) * bpp;
+             for (u32 y = 0; y < out_h; y++) {
+@@ -1547,6 +1503,18 @@ static void nv3089_blit(void)
+         if (dy < cy0 || dy >= cy1) continue;
+         u64 sv = nv3089_origin(v0) + (u64)y * s_nv3089.dt_dy;
+         u32 sy = (u32)(sv >> 20);
++        if (row_copy) {
++            if (cx1 <= out_x) continue;
++            const u32 xa = out_x < cx0 ? cx0 - out_x : 0;
++            const u32 xb = (cx1 - out_x < out_w) ? cx1 - out_x : out_w;
++            if (xa >= xb) continue;
++            const u32 sx = (u32)((((u64)u0 << 8) + (u64)xa * s_nv3089.ds_dx) >> 20);
++            const u32 s = src + sy * in_pitch + sx * 4u, d = dst + dy * dst_pitch + (out_x + xa) * 4u;
++            const u32 len = (xb - xa) * 4u;
++            int resv = 0;
++            for (u32 l = d & ~127u; l < d + len && !resv; l += 128u) resv = spu_coh_is_reserved(l);
++            if (!resv) { memmove(vm_base + d, vm_base + s, len); continue; }
++        }
+         for (u32 x = 0; x < out_w; x++) {
+             u32 dx = out_x + x;
+             if (dx < cx0 || dx >= cx1) continue;
+@@ -2990,6 +2958,8 @@ static void gcm_rsx_process_fifo_unlocked(void)
+                  * canonicalises with & 0x1FFC itself. */
+                 if (wdiag) { static int live = -1;
+                   if (live < 0) live = rsx_live_draw_enabled();
++                  extern u32 g_gcm_method_ea;
++                  g_gcm_method_ea = dea;   /* where this argument came from (LD_TEXOFF_DBG) */
+                   if (live) rsx_live_draw_method((subch << 13) | m, vm_read32(dea)); }
+                 /* GCM_METHOD_HIST=<secs>: every <secs>, the most frequent
+                  * (subchannel, method) pairs dispatched since the last report --
+diff --git a/libs/video/rsx_fp_decompiler.c b/libs/video/rsx_fp_decompiler.c
+index 650f342a..80da192f 100644
+--- a/libs/video/rsx_fp_decompiler.c
++++ b/libs/video/rsx_fp_decompiler.c
+@@ -236,6 +236,61 @@ u64 rsx_fp_structural_hash(const u8* ucode, u32 max_bytes, u64 seed)
+     return 0;
+ }
+ 
++int rsx_fp_uses_wpos(const u8* ucode, u32 max_bytes)
++{
++    if (!ucode) return 0;
++    u32 off = 0;
++    while (off + 16 <= max_bytes) {
++        const u32 w0 = rsx_fp_read_word(ucode + off + 0);
++        const u32 w1 = rsx_fp_read_word(ucode + off + 4);
++        const u32 w2 = rsx_fp_read_word(ucode + off + 8);
++        const u32 w3 = rsx_fp_read_word(ucode + off + 12);
++        off += 16;
++        if (!(w2 & FP_BRANCH) && ((w0 & FP_INPUT_SRC_MASK) >> FP_INPUT_SRC_SHIFT) == 0 &&
++            (((w1 & FP_REG_TYPE_MASK) >> FP_REG_TYPE_SHIFT) == FP_REG_TYPE_INPUT ||
++             ((w2 & FP_REG_TYPE_MASK) >> FP_REG_TYPE_SHIFT) == FP_REG_TYPE_INPUT ||
++             ((w3 & FP_REG_TYPE_MASK) >> FP_REG_TYPE_SHIFT) == FP_REG_TYPE_INPUT))
++            return 1;
++        if (fp_instruction_has_constant(w1, w2, w3)) off += 16;
++        if (w0 & FP_END) return 0;
++    }
++    return 0;
++}
++
++int rsx_fp_apply_shader_window(char* hlsl, u32 out_size, u32 shader_window)
++{
++    static const char from[] = "input.position";
++    static const char to[] = "_rsx_wpos";
++    const u32 height = shader_window & 0xFFFu;
++    const int bottom = ((shader_window >> 12) & 0xFu) == 1u;
++    const int integer = ((shader_window >> 16) & 0xFu) == 1u;
++    if (!bottom && !integer) return 0;
++    char define[160];
++    snprintf(define, sizeof(define),
++             "#define _rsx_wpos float4(input.position.x - %s, %s, input.position.zw)\n",
++             integer ? "0.5" : "0.0",
++             bottom ? (integer ? "%u.0 - input.position.y - 0.5" : "%u.0 - input.position.y")
++                    : (integer ? "input.position.y - 0.5" : "input.position.y"));
++    char line[192];
++    snprintf(line, sizeof(line), define, height);
++    /* count and grow: each read gets shorter, the define is added once */
++    u32 n = 0;
++    for (char* p = strstr(hlsl, from); p; p = strstr(p + 1, from)) n++;
++    if (!n) return 0;
++    const size_t len = strlen(hlsl), dl = strlen(line);
++    if (len + dl + 1 > out_size) return -1;
++    char* w = hlsl;
++    for (const char* r = hlsl; *r;) {
++        if (!strncmp(r, from, sizeof(from) - 1)) {
++            memcpy(w, to, sizeof(to) - 1); w += sizeof(to) - 1; r += sizeof(from) - 1;
++        } else *w++ = *r++;
++    }
++    *w = '\0';
++    memmove(hlsl + dl, hlsl, strlen(hlsl) + 1);
++    memcpy(hlsl, line, dl);
++    return (int)n;
++}
++
+ u64 rsx_fp_literal_source_hash(
+     const u8* ucode, u32 max_bytes, u64 seed)
+ {
+@@ -595,61 +650,27 @@ static void fp_gamma_helper(Out* out)
+         "                  (mask & 8u) ? decoded.a : v.a);\n}\n");
+ }
+ 
+-/* Texture sign expansion: units a TEX/TXP/TXB/TXL fetches from whose
+- * expand mask is set. The same walk as the gamma one. */
+-u32 rsx_fp_texture_expand_units(const u8* ucode, u32 max_bytes,
+-                                 const u8 expand_masks[16])
+-{
+-    if (!ucode || !expand_masks) return 0;
+-    u32 units = 0;
+-    for (u32 off = 0; off + 16 <= max_bytes;) {
+-        const u32 w0 = rsx_fp_read_word(ucode + off);
+-        const u32 w1 = rsx_fp_read_word(ucode + off + 4);
+-        const u32 w2 = rsx_fp_read_word(ucode + off + 8);
+-        const u32 w3 = rsx_fp_read_word(ucode + off + 12);
+-        const u32 op = (w0 >> 24) & 63u, unit = (w0 >> FP_TEX_UNIT_SHIFT) & 15u;
+-        if (!(w2 & FP_BRANCH) && expand_masks[unit] &&
+-            (op == OP_TEX || op == OP_TXP || op == OP_TXB || op == OP_TXL))
+-            units |= 1u << unit;
+-        off += 16;
+-        if (!(w2 & FP_BRANCH) && ((w1 & 3u) == 2 || (w2 & 3u) == 2 || (w3 & 3u) == 2)) off += 16;
+-        if (w0 & FP_END) return units;
+-    }
+-    return 0;
+-}
+-
+-/* Units a TEX/TXP/TXB/TXL reads with EXP_TEX (OPDEST bit 21, _bx2). */
+-u32 rsx_fp_texture_bx2_units(const u8* ucode, u32 max_bytes)
+-{
+-    if (!ucode) return 0;
+-    u32 units = 0;
+-    for (u32 off = 0; off + 16 <= max_bytes;) {
+-        const u32 w0 = rsx_fp_read_word(ucode + off);
+-        const u32 w1 = rsx_fp_read_word(ucode + off + 4);
+-        const u32 w2 = rsx_fp_read_word(ucode + off + 8);
+-        const u32 w3 = rsx_fp_read_word(ucode + off + 12);
+-        const u32 op = (w0 >> 24) & 63u, unit = (w0 >> FP_TEX_UNIT_SHIFT) & 15u;
+-        if (!(w2 & FP_BRANCH) && (w0 & (1u << 21)) &&
+-            (op == OP_TEX || op == OP_TXP || op == OP_TXB || op == OP_TXL))
+-            units |= 1u << unit;
+-        off += 16;
+-        if (!(w2 & FP_BRANCH) && ((w1 & 3u) == 2 || (w2 & 3u) == 2 || (w3 & 3u) == 2)) off += 16;
+-        if (w0 & FP_END) return units;
+-    }
+-    return 0;
+-}
+-
+-static void fp_expand_helper(Out* out)
++static u32 s_fp_volume_mask;
++void rsx_fp_set_volume_mask(u32 mask) { s_fp_volume_mask = mask; }
++static u32 s_fp_expand_mask;
++void rsx_fp_set_expand_mask(u32 mask) { s_fp_expand_mask = mask; }
++
++/* A sample expanded from [0,1] to [-1,1], as the RSX returns it: either the
++ * unit asks for it (biased remap, s_fp_expand_mask) or the instruction does.
++ * Bit 21 of a texture instruction's OPDEST word is EXP_TEX (RPCS3's
++ * dst.exp_tex): the fetch itself is scaled by 2 and biased by -1. God of War:
++ * Ascension's motion blur reads its velocity buffer (stored as v*0.5+0.5)
++ * that way; without it "at rest" read as 0.5, full speed, and the blur weight
++ * was 1 on every pixel. LD_EXP_TEX=0 ignores the instruction bit. */
++static void fp_expand_sample(char* rhs, size_t cap, u32 unit, u32 exp_tex)
+ {
+-    out_puts(out,
+-        "float4 _rsx_expand_input(float4 v, uint mask, bool bx2) {\n"
+-        "    float4 e = bx2 ? v * 2.0 - 1.0\n"
+-        "             : (mask & 16u) ? (floor(v * 65535.0 + 0.5) - 32768.0) / 32767.0\n"
+-        "                            : (floor(v * 255.0 + 0.5) - 128.0) / 127.0;\n"
+-        "    return float4((mask & 1u) ? e.r : v.r,\n"
+-        "                  (mask & 2u) ? e.g : v.g,\n"
+-        "                  (mask & 4u) ? e.b : v.b,\n"
+-        "                  (mask & 8u) ? e.a : v.a);\n}\n");
++    static int s_exp_on = -1;
++    if (s_exp_on < 0) { const char* e = getenv("LD_EXP_TEX"); s_exp_on = !(e && e[0] == '0'); }
++    if (!s_exp_on) exp_tex = 0;
++    if ((!exp_tex && !((s_fp_expand_mask >> unit) & 1u)) || !rhs[0]) return;
++    char tmp[700];
++    snprintf(tmp, sizeof(tmp), "(%s * 2.0 - 1.0)", rhs);
++    snprintf(rhs, cap, "%s", tmp);
+ }
+ 
+ static int rsx_fp_decompile_internal(
+@@ -659,9 +680,11 @@ static int rsx_fp_decompile_internal(
+     char* out, u32 out_size, u32* out_constant_count)
+ {
+     if (!ucode || !out || out_size == 0) return -1;
+-    /* Cube and volume units are declared on their own t-register; with none
+-     * the 2D array keeps every 2D-only program byte-identical. */
+-    const u32 tex_sep_mask = tex_cube_mask | tex_vol_mask;
++    /* Volume units sample like cube units (three coordinates, declared one
++     * by one); per_unit says whether the bank is declared per unit at all. */
++    const u32 vol_mask = s_fp_volume_mask & ~tex_cube_mask;
++    const u32 xyz_mask = tex_cube_mask | vol_mask;
++    const u32 per_unit = xyz_mask;
+     const u32 gamma_units = rsx_fp_texture_gamma_units(ucode, max_bytes, gamma_masks);
+     const u32 expand_units = rsx_fp_texture_expand_units(ucode, max_bytes, expand_masks);
+     /* _bx2 (EXP_TEX) fetches expand whatever unit they read: the modifier is
+@@ -1013,16 +1036,17 @@ static int rsx_fp_decompile_internal(
+                 snprintf(rhs, sizeof(rhs), "_rsx_shadow%u((%s).xyz)", tex_unit, a);
+                 break;
+             }
+-            if ((tex_sep_mask >> tex_unit) & 1u)
+-                /* Cubemap or volume: sample with all three coordinates. */
++            if ((xyz_mask >> tex_unit) & 1u)
++                /* Cubemap or volume: sample with three coordinates. */
+                 snprintf(rhs, sizeof(rhs),
+                          "rsx_tex%u.Sample(rsx_samp[%u], (%s).xyz)", tex_unit, tex_unit, a);
+-            else if (tex_sep_mask)
++            else if (per_unit)
+                 snprintf(rhs, sizeof(rhs),
+                          "rsx_tex%u.Sample(rsx_samp[%u], (%s).xy)", tex_unit, tex_unit, a);
+             else
+                 snprintf(rhs, sizeof(rhs),
+                          "rsx_tex[%u].Sample(rsx_samp[%u], (%s).xy)", tex_unit, tex_unit, a);
++            fp_expand_sample(rhs, sizeof(rhs), tex_unit, (w0 >> 21) & 1u);
+             break;
+         case OP_TXP:
+             if (shadow && shadow[tex_unit].enabled) {
+@@ -1034,11 +1058,10 @@ static int rsx_fp_decompile_internal(
+                  * the direction directly. */
+                 snprintf(rhs, sizeof(rhs),
+                          "rsx_tex%u.Sample(rsx_samp[%u], (%s).xyz)", tex_unit, tex_unit, a);
+-            else if ((tex_vol_mask >> tex_unit) & 1u)
++            else if ((vol_mask >> tex_unit) & 1u)
+                 snprintf(rhs, sizeof(rhs),
+-                         "rsx_tex%u.Sample(rsx_samp[%u], (%s).xyz / (%s).w)",
+-                         tex_unit, tex_unit, a, a);
+-            else if (tex_sep_mask)
++                         "rsx_tex%u.Sample(rsx_samp[%u], (%s).xyz / (%s).w)", tex_unit, tex_unit, a, a);
++            else if (per_unit)
+                 snprintf(rhs, sizeof(rhs),
+                          "rsx_tex%u.Sample(rsx_samp[%u], (%s).xy / (%s).w)",
+                          tex_unit, tex_unit, a, a);
+@@ -1046,17 +1069,19 @@ static int rsx_fp_decompile_internal(
+                 snprintf(rhs, sizeof(rhs),
+                          "rsx_tex[%u].Sample(rsx_samp[%u], (%s).xy / (%s).w)",
+                          tex_unit, tex_unit, a, a);
++            fp_expand_sample(rhs, sizeof(rhs), tex_unit, (w0 >> 21) & 1u);
+             break;
+         case OP_TXB: case OP_TXL: {
+             /* Biased / explicit-LOD sample; bias or LOD is src1.x (RPCS3
+              * TEXTURE_SAMPLE2D_BIAS / _LOD). GH3's fret buttons and fret lines
+              * are TXB: unhandled, they sampled nothing and output alpha 0. */
+-            const int cube = (tex_sep_mask >> tex_unit) & 1u;   /* cube or volume: xyz */
++            const int cube = (xyz_mask >> tex_unit) & 1u;
+             char tn[32];
+-            snprintf(tn, sizeof(tn), tex_sep_mask ? "rsx_tex%u" : "rsx_tex[%u]", tex_unit);
++            snprintf(tn, sizeof(tn), per_unit ? "rsx_tex%u" : "rsx_tex[%u]", tex_unit);
+             snprintf(rhs, sizeof(rhs), "%s.%s(rsx_samp[%u], (%s).%s, (%s).x)", tn,
+                      opcode == OP_TXB ? "SampleBias" : "SampleLevel", tex_unit, a,
+                      cube ? "xyz" : "xy", b);
++            fp_expand_sample(rhs, sizeof(rhs), tex_unit, (w0 >> 21) & 1u);
+             break;
+         }
+         case OP_KIL:
+@@ -1336,14 +1361,14 @@ static int rsx_fp_decompile_internal(
+      * array declaration so 2D-only programs are byte-identical. When any unit
+      * is a cubemap, declare each unit individually at its t-register so the
+      * cube units can be TextureCube while the rest stay Texture2D. */
+-    if (tex_sep_mask == 0) {
++    if (per_unit == 0) {
+         out_puts(&p, "Texture2D    rsx_tex[16] : register(t0);\n");
+     } else {
+         char decl[64];
+         for (u32 u = 0; u < 16; u++) {
+             snprintf(decl, sizeof(decl), "%s rsx_tex%u : register(t%u);\n",
+                      ((tex_cube_mask >> u) & 1u) ? "TextureCube" :
+-                     ((tex_vol_mask >> u) & 1u)  ? "Texture3D  " : "Texture2D  ", u, u);
++                     ((vol_mask >> u) & 1u) ? "Texture3D  " : "Texture2D  ", u, u);
+             out_puts(&p, decl);
+         }
+     }
+diff --git a/libs/video/rsx_fp_decompiler.h b/libs/video/rsx_fp_decompiler.h
+index b6bf0704..b677a76c 100644
+--- a/libs/video/rsx_fp_decompiler.h
++++ b/libs/video/rsx_fp_decompiler.h
+@@ -164,6 +164,26 @@ int rsx_fp_collect_constants(
+  * malformed input. */
+ u64 rsx_fp_structural_hash(const u8* ucode, u32 max_bytes, u64 seed);
+ 
++/* Nonzero when the program reads WPOS (the fragment's window position), whose
++ * origin and pixel centre SHADER_WINDOW sets. */
++int rsx_fp_uses_wpos(const u8* ucode, u32 max_bytes);
++
++/* Texture units bound to 3D (volume) textures for the next decompile: they
++ * are declared Texture3D and sampled with three coordinates. Set per draw
++ * by the caller, and part of its pipeline identity. */
++void rsx_fp_set_volume_mask(u32 mask);
++
++/* Texture units whose ADDRESS register asks for the biased unsigned remap
++ * (bits 12..15 = 1): the RSX returns sample * 2 - 1. Set per draw like the
++ * volume mask, and part of the caller's pipeline identity. */
++void rsx_fp_set_expand_mask(u32 mask);
++
++/* Rewrite a decompiled program's WPOS reads (SV_Position, top-left origin,
++ * half-pixel centres) into the RSX window position SHADER_WINDOW describes:
++ * bits 0..11 height, 12..15 origin (1 = bottom), 16..19 centre (1 = integer).
++ * Returns the number of reads rewritten, or -1 when out_size is too small. */
++int rsx_fp_apply_shader_window(char* hlsl, u32 out_size, u32 shader_window);
++
+ /* Hash the exact legacy HLSL literal spellings (%g) for a program while also
+  * retaining structural identity. This is intended for aggregate diagnostics;
+  * PSO identity should use rsx_fp_structural_hash in buffered mode. */
+diff --git a/runtime/ppu/tests/boot_main.cpp b/runtime/ppu/tests/boot_main.cpp
+index de4d1535..997059db 100644
+--- a/runtime/ppu/tests/boot_main.cpp
++++ b/runtime/ppu/tests/boot_main.cpp
+@@ -906,6 +906,9 @@ static void prof_hit(int tab, uint64_t key)
+         if (!s_prof_key[tab][i]) { s_prof_key[tab][i] = key; s_prof_ct[tab][i] = 1; return; }
+     }
+ }
++/* "profip": the same, with the exclusive table keyed by the leaf's exact
++ * instruction address, to find the hot spots inside one big function. */
++static int s_prof_ip;
+ static void dbg_prof(DWORD tid, unsigned sec)
+ {
+     /* Suspending ourselves never resumes: the console would hang for good. */
+@@ -926,7 +929,7 @@ static void dbg_prof(DWORD tid, unsigned sec)
+                 DWORD64 base = 0;
+                 PRUNTIME_FUNCTION rf = RtlLookupFunctionEntry(c.Rip, &base, NULL);
+                 uint64_t key = rf ? base + rf->BeginAddress : c.Rip;
+-                if (d == 0) prof_hit(0, key);
++                if (d == 0) prof_hit(0, s_prof_ip ? (uint64_t)c.Rip : key);
+                 /* first exe frame of a sample whose leaf is in a DLL: who called out */
+                 if (!got && (uintptr_t)(key - exe) < 0x40000000u) { got = 1; if (d > 0) prof_hit(2, key); }
+                 int dup = 0; for (int k = 0; k < ns; k++) dup |= seen[k] == key;
+@@ -944,7 +947,7 @@ static void dbg_prof(DWORD tid, unsigned sec)
+     for (int tab = 0; tab < 3; tab++) {
+         static const char* tn[3] = { "exclusive", "inclusive", "exe caller of DLL leaf" };
+         dbg_printf("  --- %s ---%c", tn[tab], 10);
+-        for (int rank = 0; rank < 40; rank++) {
++        for (int rank = 0; rank < (s_prof_ip && tab == 0 ? 200 : 40); rank++) {
+             uint32_t best = 0; int bi = -1;
+             for (int k = 0; k < PROF_SLOTS; k++) if (s_prof_ct[tab][k] > best) { best = s_prof_ct[tab][k]; bi = k; }
+             if (bi < 0) break;
+@@ -1046,7 +1049,8 @@ static DWORD WINAPI debug_console(LPVOID param)
+                 p = end;
+             }
+             dbg_printf("  qbset 0x%08X = %u: %u member(s)%c", a, b, n, 10);
+-        } else if (!strcmp(verb, "prof") && sscanf(cmd, "%*s %u %u", &a, &b) >= 1) {
++        } else if ((!strcmp(verb, "prof") || !strcmp(verb, "profip")) && sscanf(cmd, "%*s %u %u", &a, &b) >= 1) {
++            s_prof_ip = !strcmp(verb, "profip");
+             dbg_prof((DWORD)a, b ? b : 5);
+         } else if (!strcmp(verb, "hle")) {
+             dbg_printf("  last HLE = 0x%08X (%s)%c", g_last_hle_nid,
+diff --git a/runtime/spu/tests/test_spu_qby_sse.c b/runtime/spu/tests/test_spu_qby_sse.c
+new file mode 100644
+index 00000000..d9e47942
+--- /dev/null
++++ b/runtime/spu/tests/test_spu_qby_sse.c
+@@ -0,0 +1,63 @@
++/* The SSE4.1 quadword byte rotates/shifts and shufb must match their _ref
++ * byte loops for every shift count and selector. Build on x86-64:
++ *   clang-cl -O2 -msse4.1 -I.. -I../.. -I../../.. test_spu_qby_sse.c
++ * and run with no arguments. */
++#include "../spu_helpers.h"
++#include <stdio.h>
++#include <string.h>
++
++static uint64_t s_rng = 0x2545F4914F6CDD1Dull;
++static uint32_t rnd32(void)
++{
++    s_rng ^= s_rng << 13; s_rng ^= s_rng >> 7; s_rng ^= s_rng << 17;
++    return (uint32_t)(s_rng >> 16);
++}
++static u128 rnd128(void) { u128 r; for (int i = 0; i < 4; i++) r._u32[i] = rnd32(); return r; }
++
++static long s_bad;
++static void check(const char* op, u128 got, u128 ref, uint32_t arg)
++{
++    if (memcmp(&got, &ref, 16) == 0) return;
++    if (s_bad++ < 10)
++        printf("%s(arg 0x%08X): got %08X %08X %08X %08X want %08X %08X %08X %08X\n", op, arg,
++               got._u32[0], got._u32[1], got._u32[2], got._u32[3], ref._u32[0], ref._u32[1], ref._u32[2], ref._u32[3]);
++}
++
++int main(void)
++{
++#if !defined(__SSE4_1__)
++    puts("test_spu_qby_sse: no SSE4.1, nothing to compare");
++    return 0;
++#else
++    long n = 0;
++    for (int it = 0; it < 20000; it++) {
++        const u128 a = rnd128();
++        /* every shift count in the low bits, random upper bits (ignored or not) */
++        for (uint32_t k = 0; k < 64; k++) {
++            u128 b = rnd128();
++            b._u32[0] = (it & 1) ? k : (rnd32() & ~0x3FFu) | k;
++            u128 b8 = b; b8._u32[0] = (b._u32[0] & ~0x1FFu) | (k << 3) | (rnd32() & 7);
++            check("shlqby",    spu_shlqby(a, b),    spu_shlqby_ref(a, b),    b._u32[0]);
++            check("rotqby",    spu_rotqby(a, b),    spu_rotqby_ref(a, b),    b._u32[0]);
++            check("rotqmby",   spu_rotqmby(a, b),   spu_rotqmby_ref(a, b),   b._u32[0]);
++            check("shlqbybi",  spu_shlqbybi(a, b8), spu_shlqbybi_ref(a, b8), b8._u32[0]);
++            check("rotqbybi",  spu_rotqbybi(a, b8), spu_rotqbybi_ref(a, b8), b8._u32[0]);
++            check("rotqmbybi", spu_rotqmbybi(a, b8), spu_rotqmbybi_ref(a, b8), b8._u32[0]);
++            check("rotqmbyi",  spu_rotqmbyi(a, (int)k - 32), spu_rotqmbyi_ref(a, (int)k - 32), k);
++            check("rotqmbyi",  spu_rotqmbyi(a, (int)k),      spu_rotqmbyi_ref(a, (int)k), k);
++            n += 8;
++        }
++        /* shufb: random selectors, ordinary ones (< 0x80) and all-special mixes */
++        for (int j = 0; j < 8; j++) {
++            const u128 b = rnd128();
++            u128 c = rnd128();
++            if (j < 4) for (int q = 0; q < 4; q++) c._u32[q] &= 0x1F1F1F1Fu;
++            check("shufb", spu_shufb(a, b, c), spu_shufb_ref(a, b, c), c._u32[0]);
++            check("cntb", spu_cntb(c), spu_cntb_ref(c), c._u32[0]);
++            n += 2;
++        }
++    }
++    printf("test_spu_qby_sse: %s (%ld cases)\n", s_bad ? "FAILED" : "ok", n);
++    return s_bad ? 1 : 0;
++#endif
++}
+diff --git a/tools/spu_lifter.py b/tools/spu_lifter.py
+index 8ae764cb..54427ac4 100644
+--- a/tools/spu_lifter.py
++++ b/tools/spu_lifter.py
+@@ -498,6 +498,70 @@ def compute_link_returns(insns, bounds) -> set:
+ # set as find_spu_functions.LV2_RESUMING_STOPS, which decides function extents).
+ LV2_RESUMING_STOPS = {0x100, 0x110, 0x111}
+ 
++_GPR_RE = re.compile(r"ctx->gpr\[(\d+)\]")
++# A line is "pure" when ctx appears in it only as a register or as the LS
++# accessors' first argument: those touch neither ctx->gpr nor anything that
++# reads it (the LS watch diagnostic reads r0, and sees it as of the last
++# flush). Anything else -- a channel op, a call, ctx->pc, a stop -- may read
++# or write the register file.
++_PURE_CTX_RE = re.compile(r"ctx->gpr\[\d+\]|spu_ls_(?:read|write)128\(ctx,")
++_ASSIGN_RE = re.compile(r"ctx->gpr\[(\d+)\]\s*=(?!=)")
++# `{ ctx->pc = ...; g_spu_trampoline_fn = ...; return; }`, alone or behind an if
++_EXIT_BLOCK_RE = re.compile(r"^(if \(.*\) )?\{ (ctx->pc = [^;]+; g_spu_trampoline_fn = [^;]+; return;) \}$")
++
++
++def promote_registers(body_lines: list) -> list:
++    """Keep the SPU registers of one lifted function in C locals.
++
++    Lifted code reads and writes ctx->gpr[n] for every instruction, and the LS
++    stores go through byte pointers, which may alias the register file: the
++    compiler has to keep all of it in memory, a load and a store per operand.
++    Here each register the function uses lives in a local `_gN`, loaded on
++    entry. The registers it writes go back to ctx->gpr on every way out -- a
++    tail transfer, a return, a call or anything else that is handed ctx --
++    and after such a call all of them are read back. Exits taken from inside
++    an `if` flush only on the taken path, so a loop's conditional exit costs
++    nothing while the loop runs.
++    """
++    def pure(line):
++        return "ctx" not in _PURE_CTX_RE.sub("", line) and "return" not in line
++
++    used, written = set(), set()
++    for b in body_lines:
++        if b.endswith(":"):
++            continue
++        used.update(int(n) for n in _GPR_RE.findall(b))
++        written.update(int(n) for n in _ASSIGN_RE.findall(b))
++    if not used:
++        return body_lines
++    loc = lambda s: _GPR_RE.sub(lambda m: f"_g{m.group(1)}", s)
++    flush = " ".join(f"ctx->gpr[{n}] = _g{n};" for n in sorted(written))
++    reload_all = " ".join(f"_g{n} = ctx->gpr[{n}];" for n in sorted(used))
++    out = [f"u128 {', '.join(f'_g{n} = ctx->gpr[{n}]' for n in sorted(used))};"]
++    for b in body_lines:
++        b = b.strip()
++        if b.endswith(":"):
++            out.append(b)
++            continue
++        if pure(b):
++            out.append(loc(b))
++            continue
++        m = _EXIT_BLOCK_RE.match(b)
++        if m:   # the exit reads no register (ctx->pc is a constant): flush inside
++            cond = loc(m.group(1) or "")
++            out.append(f"{cond}{{ {flush} {m.group(2)} }}")
++            continue
++        if b.strip() in ("SPU_RET(ctx);",) or b.startswith("SPU_RET_REG(ctx,"):
++            out.append(f"{{ {flush} {b} }}")
++            continue
++        # Anything else runs on ctx->gpr itself, between a flush and a reload.
++        # A line that only returns needs no reload, but it does no harm; one
++        # that jumps to a label inside the function reloads before the jump.
++        b = re.sub(r"\bgoto (loc_[0-9A-F]+);", lambda m: f"{{ {reload_all} goto {m.group(1)}; }}", b)
++        out.append(f"{{ {flush} {b} {reload_all} }}")
++    return out
++
++
+ class SPULifter:
+     def __init__(self, trace: bool = False, prefix: str = ""):
+         self.functions: list[LiftedFunction] = []
+@@ -535,6 +599,8 @@ class SPULifter:
+         # compute_link_returns(). Emitted as `return;` so they compose with the
+         # brsl->C-call nesting instead of branching to an unregistered PC.
+         self.link_return: set = set()
++        # --promote-regs / SPU_LIFT_PROMOTE=1: registers in C locals (promote_registers).
++        self.promote = False
+ 
+     # ------------------------------------------------------------------ #
+     def lift_function(self, insns: list[SPUInstruction],
+@@ -1102,7 +1168,8 @@ class SPULifter:
+         weak = "__attribute__((weak)) " if getattr(self, "weak_emit", False) else ""
+         for f in self.functions:
+             lines.append(f"void {weak}{f.name}(spu_context* ctx) {{")
+-            for b in f.body_lines:
++            body = promote_registers(f.body_lines) if self.promote else f.body_lines
++            for b in body:
+                 lines.append(b if b.endswith(":") else f"    {b}")
+             lines.append("}")
+             lines.append("")
+@@ -1223,6 +1290,10 @@ def main() -> None:
+                         "dispatch table at 0x1BD8, `br` into a fallthrough chain, "
+                         "dispatched blocks later -- classified as a return, which "
+                         "silently skipped every job-command handler).")
++    p.add_argument("--promote-regs", action="store_true",
++                   help="Keep each function's SPU registers in C locals, written back "
++                        "to ctx->gpr only where control leaves the function "
++                        "(SPU_LIFT_PROMOTE=1 does the same).")
+     args = p.parse_args()
+ 
+     if args.auto_functions:
+@@ -1338,6 +1409,7 @@ def main() -> None:
+ 
+     lifter = SPULifter(trace=args.trace, prefix=args.symbol_prefix)
+     lifter.reloc = args.reloc
++    lifter.promote = args.promote_regs or os.environ.get("SPU_LIFT_PROMOTE") == "1"
+     lifter.bi_r0_jump = compute_bi_r0_jumps(insns, bounds)
+     if lifter.bi_r0_jump:
+         print(f"  {len(lifter.bi_r0_jump)} `bi $r0` computed-jump site(s) "
+-- 
+2.48.1.windows.1
+

@@ -1,0 +1,94 @@
+From 4a3c5836e61fde4bb51886078a28fb9304db052f Mon Sep 17 00:00:00 2001
+From: YJuDeAd <robinrashi@gmail.com>
+Date: Thu, 12 Nov 2026 01:14:55 +0530
+Subject: [PATCH 44/49] fix(cellGame,cellSaveData): ensure 10 GB free space
+ floor to prevent NOSPACE_EXIT
+
+# Conflicts:
+#	libs/system/cellGame.c
+#	libs/system/cellSaveData.c
+---
+ libs/system/cellGame.c     | 25 ++++++++++++++++++++-----
+ libs/system/cellSaveData.c |  4 +++-
+ 2 files changed, 23 insertions(+), 6 deletions(-)
+
+diff --git a/libs/system/cellGame.c b/libs/system/cellGame.c
+index ddba4c7e..83391d4b 100644
+--- a/libs/system/cellGame.c
++++ b/libs/system/cellGame.c
+@@ -134,12 +134,13 @@ static int dir_exists(const char* path)
+ static s32 content_free_kb(void)
+ {
+     char path[CELL_GAME_PATH_MAX];
+-    snprintf(path, sizeof(path), "%s", s_content_path[0] ? s_content_path : ".");
++    snprintf(path, sizeof(path), "%s", content_root());
+     for (;;) {
+ #ifdef _WIN32
+         ULARGE_INTEGER available;
+         if (GetDiskFreeSpaceExA(path, &available, NULL, NULL)) {
+             u64 kb = available.QuadPart / 1024;
++            if (kb < 10 * 1024 * 1024) kb = 10 * 1024 * 1024;
+             return kb > INT32_MAX ? INT32_MAX : (s32)kb;
+         }
+         DWORD error = GetLastError();
+@@ -151,7 +152,9 @@ static s32 content_free_kb(void)
+             u64 count = info.f_bavail;
+             if (!block) return 0;
+             if (count > ((u64)INT32_MAX * 1024) / block) return INT32_MAX;
+-            return (s32)((count * block) / 1024);
++            s32 kb = (s32)((count * block) / 1024);
++            if (kb < 10 * 1024 * 1024) kb = 10 * 1024 * 1024;
++            return kb;
+         }
+         if (errno != ENOENT && errno != ENOTDIR) break;
+ #endif
+@@ -181,7 +184,17 @@ static s32 content_free_kb(void)
+             *slash = 0;
+         }
+     }
+-    return 0;
++#ifdef _WIN32
++    ULARGE_INTEGER available;
++    if (GetDiskFreeSpaceExA(".", &available, NULL, NULL)) {
++        u64 kb = available.QuadPart / 1024;
++        if (kb > 0) {
++            if (kb < 10 * 1024 * 1024) kb = 10 * 1024 * 1024;
++            return kb > INT32_MAX ? INT32_MAX : (s32)kb;
++        }
++    }
++#endif
++    return 10 * 1024 * 1024; /* 10 GB safe fallback */
+ }
+ 
+ /* hddFreeSizeKB as the guest reads it. Games compute hddFreeSizeKB * 1024
+@@ -201,8 +214,10 @@ static s32 content_free_kb_reported(void)
+ {
+     const s32 kb = content_free_kb();
+     const char* raw = getenv("PS3_GAME_FREE_SPACE_RAW");
+-    if (raw && *raw && *raw != '0') return kb;
+-    return kb >= CELL_GAME_FREE_KB_WRAP ? CELL_GAME_FREE_KB_REPORTED : kb;
++    if (raw && *raw && *raw != '0') return kb < 10 * 1024 * 1024 ? 10 * 1024 * 1024 : kb;
++    s32 rep = kb >= CELL_GAME_FREE_KB_WRAP ? CELL_GAME_FREE_KB_REPORTED : kb;
++    if (rep < 10 * 1024 * 1024) rep = 10 * 1024 * 1024;
++    return rep;
+ }
+ 
+ /* ---------------------------------------------------------------------------
+diff --git a/libs/system/cellSaveData.c b/libs/system/cellSaveData.c
+index 05d0554c..697c2b77 100644
+--- a/libs/system/cellSaveData.c
++++ b/libs/system/cellSaveData.c
+@@ -319,7 +319,9 @@ static s32 dispatch_func_stat_full(uint32_t func_opd, int is_new, const char* di
+     marshal_cbresult_init(cb_ea, CELL_SAVEDATA_CBRESULT_OK_NEXT, *userdata_ea);
+     marshal_statget_init(get_ea, is_new, dirName, 0, 0);
+     if (input) {
+-        vm_write32(get_ea, (u32)input->hddFreeSizeKB);
++        s32 free_kb = input->hddFreeSizeKB;
++        if (free_kb < 10 * 1024 * 1024) free_kb = 10 * 1024 * 1024;
++        vm_write32(get_ea, (u32)free_kb);
+         vm_write64(get_ea + 8, (u64)input->dir.st_atime);
+         vm_write64(get_ea + 16, (u64)input->dir.st_mtime);
+         vm_write64(get_ea + 24, (u64)input->dir.st_ctime);
+-- 
+2.48.1.windows.1
+

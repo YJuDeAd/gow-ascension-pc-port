@@ -1,0 +1,211 @@
+From fb557b08c889b01c5aefea8fcef4d8bcb5ed1cbe Mon Sep 17 00:00:00 2001
+From: YJuDeAd <robinrashi@gmail.com>
+Date: Thu, 12 Nov 2026 00:42:05 +0530
+Subject: [PATCH 25/49] Apply
+ ps3recomp-0029-report-hold-missed-wake-vdec-held-au.patch
+
+# Conflicts:
+#	libs/codec/cellVdec.c
+#	libs/video/cellGcmSys.c
+#	runtime/spu/spu_workload.c
+---
+ libs/video/cellGcmSys.c    | 30 +++++++++++++++--
+ runtime/spu/spu_workload.c | 67 ++++++++++++++++++++++++++++++++++----
+ 2 files changed, 89 insertions(+), 8 deletions(-)
+
+diff --git a/libs/video/cellGcmSys.c b/libs/video/cellGcmSys.c
+index 2e6e8f18..370cee0a 100644
+--- a/libs/video/cellGcmSys.c
++++ b/libs/video/cellGcmSys.c
+@@ -850,6 +850,17 @@ static atomic_flag s_gcm_pumping = ATOMIC_FLAG_INIT;
+ static u32 s_fifo_getoff;   /* tentative: defined below */
+ /* The park the walker last stopped on (GCM_PARK_SPU_HOLD_MS), ~0 = none. */
+ static u32 s_last_park_off = ~0u;
++/* Every place the walker has parked. The title reuses the same few park
++ * words frame after frame; when its CPU side is quick enough to patch one
++ * before the walker gets there, the walker never parks on it, and the hold
++ * has to recognise it by its address. */
++#define GCM_PARK_SITES 16
++static u32 s_park_sites[GCM_PARK_SITES]; static unsigned s_park_sites_n;
++static int gcm_is_park_site(u32 off)
++{
++    for (unsigned i = 0; i < s_park_sites_n; i++) if (s_park_sites[i] == off) return 1;
++    return 0;
++}
+ 
+ void cellGcm_request_tick(void)
+ {
+@@ -2039,6 +2050,13 @@ void cellGcm_fifo_kick_wait(unsigned ms)
+     else    Sleep(ms);
+ }
+ 
++/* Wake the present thread's walker now (a wait it stopped on may be over:
++ * the SPURS tasks a held report waits for have gone back to WAIT_SIGNAL). */
++void cellGcm_fifo_kick(void)
++{
++    if (s_gcm_kick_ev) SetEvent(s_gcm_kick_ev);
++}
++
+ 
+ /* Serializes fence publication between the present ticker and every guest
+  * thread poll-reading the ref register (REFPOLL default-on made this path
+@@ -2675,6 +2693,9 @@ static void gcm_rsx_process_fifo_unlocked(void)
+                       }
+                   }
+                   s_last_park_off = s_fifo_getoff;
++                  if (!gcm_is_park_site(s_fifo_getoff))
++                      s_park_sites[s_park_sites_n++ % GCM_PARK_SITES] = s_fifo_getoff;
++                  if (s_park_sites_n > GCM_PARK_SITES) s_park_sites_n = GCM_PARK_SITES;
+                   why = "parked";
+                   s_park_pass = 1;
+                   break;
+@@ -2689,7 +2710,7 @@ static void gcm_rsx_process_fifo_unlocked(void)
+                * first frame and relies on that time: RsxSync's signal for
+                * round 2 was eaten by tasks still in round 1's barriers. Off
+                * by default. */
+-              if (s_fifo_getoff == s_last_park_off) {
++              if (s_fifo_getoff == s_last_park_off || gcm_is_park_site(s_fifo_getoff)) {
+                   static long hold = -1; static unsigned long long held_since;
+                   if (hold < 0) { const char* e = getenv("GCM_PARK_SPU_HOLD_MS"); hold = e ? atol(e) : 0; }
+                   extern long spu_taskset_tasks_running(void) __attribute__((weak));
+@@ -2699,6 +2720,11 @@ static void gcm_rsx_process_fifo_unlocked(void)
+                       if (!held_since) held_since = now;
+                       if (now - held_since < (unsigned long long)hold) { why = "spu-hold"; break; }
+                   }
++                  { static int lg = -1; if (lg < 0) lg = getenv("GCM_HOLD_LOG") ? 1 : 0;
++                    if (lg) { extern unsigned long long ps3_qpc_us(void);
++                      fprintf(stderr, "[gcm-hold] t=%lluus park=0x%X parked=%d held=%llums\n",
++                              ps3_qpc_us(), s_fifo_getoff, s_fifo_getoff == s_last_park_off,
++                              held_since ? ps3_ms_now() - held_since : 0ull); } }
+                   held_since = 0;
+                   s_last_park_off = ~0u;
+               }
+@@ -3090,7 +3116,7 @@ static void gcm_rsx_process_fifo_unlocked(void)
+       } else burned = 0; }
+ 
+     { static u32 last = 0xFFFFFFFFu; static int stuck = 0;
+-      if (s_sema_blocked_pass || s_park_pass || s_report_hold_pass || (why && (strcmp(why, "flip-pace") == 0 || strcmp(why, "spu-hold") == 0))) {
++      if (s_sema_blocked_pass || s_park_pass || s_report_hold_pass || (why && (strcmp(why, "flip-pace") == 0 || strcmp(why, "spu-hold") == 0 || strcmp(why, "report-hold") == 0))) {
+           stuck = 0; last = s_fifo_getoff;
+           s_sema_blocked_pass = 0; s_park_pass = 0; s_report_hold_pass = 0; }
+       else if (s_fifo_getoff == last && s_fifo_getoff != put) {
+diff --git a/runtime/spu/spu_workload.c b/runtime/spu/spu_workload.c
+index 4e2415bf..20c12e31 100644
+--- a/runtime/spu/spu_workload.c
++++ b/runtime/spu/spu_workload.c
+@@ -1508,19 +1508,56 @@ int spu_workload_current_task(void) { return s_cur_task; }
+  * RSX, which runs a frame in no time, from overtaking that work where a real
+  * RSX would still be drawing (GCM_PARK_SPU_HOLD_MS, cellGcmSys.c). */
+ static volatile long s_tasks_out_of_wait;
++/* The last running task back in its wait: a GET_REPORT held for the tasks
++ * (GCM_REPORT_SPU_HOLD_MS) can go now, so wake the walker instead of letting
++ * it find out at its next poll. */
++extern void cellGcm_fifo_kick(void);
++static void spu_task_back_in_wait(void)
++{
++    if (__atomic_sub_fetch(&s_tasks_out_of_wait, 1, __ATOMIC_ACQ_REL) == 0)
++        cellGcm_fifo_kick();
++}
+ static _Thread_local int s_task_out;
+-long spu_taskset_tasks_running(void) { return __atomic_load_n(&s_tasks_out_of_wait, __ATOMIC_ACQUIRE); }
++/* Also a task still parked whose signal is already set: it has work and is
++ * about to run. Right after RsxSync signals the five post-process tasks there
++ * is an instant when all of them are signalled but none has woken; counting
++ * only woken tasks let the GPU hold go there, frame 2's reports landed before
++ * round 1 had started, and God of War: Ascension stopped at the end of
++ * loading (deterministically once its SPU jobs ran lifted). */
++long spu_taskset_tasks_running(void)
++{
++    const long n = __atomic_load_n(&s_tasks_out_of_wait, __ATOMIC_ACQUIRE);
++    if (n) return n;
++    for (int i = 0; i < SPU_PARKED_MAX; i++) {
++        const uint64_t k = s_parked[i];
++        if (k && spurs_bitset_test((uint32_t)(k >> 32) + CSTS_SIGNALLED, (uint32_t)(k & 0xFFFFFFFFu) - 1u))
++            return 1;
++    }
++    return 0;
++}
+ /* A task that ends while out of a wait is no longer running. */
+ void spu_taskset_task_ended(void)
+ {
+-    if (s_task_out) { s_task_out = 0; __atomic_fetch_sub(&s_tasks_out_of_wait, 1, __ATOMIC_ACQ_REL); }
++    if (s_task_out) { s_task_out = 0; spu_task_back_in_wait(); }
++}
++
++/* A wait that timed out with its bit already set: the commit that set it did
++ * not wake the waiter. Counted, and logged with SPU_WAITSIG_MISSLOG. */
++static volatile long s_waitsig_missed;
++static void spu_waitsig_missed(uint32_t taskId, uint32_t taskset_ea)
++{
++    const long n = __atomic_add_fetch(&s_waitsig_missed, 1, __ATOMIC_RELAXED);
++    static int lg = -1; if (lg < 0) lg = getenv("SPU_WAITSIG_MISSLOG") ? 1 : 0;
++    if (lg) { extern unsigned long long ps3_qpc_us(void);
++        fprintf(stderr, "[missed-wake] t=%lluus #%ld task=%u taskset=0x%08X\n",
++                ps3_qpc_us(), n, taskId, taskset_ea); }
+ }
+ 
+ int spu_taskset_wait_signal(uint32_t taskset_ea, uint32_t taskId)
+ {
+     if (!taskset_ea || taskId >= 128) return 0;
+     s_cur_task = (int)taskId;
+-    if (s_task_out) { s_task_out = 0; __atomic_fetch_sub(&s_tasks_out_of_wait, 1, __ATOMIC_ACQ_REL); }
++    if (s_task_out) { s_task_out = 0; spu_task_back_in_wait(); }
+     /* ran= is the wall time this task spent OUT of the wait (decode/mix work
+      * per round) -- decisive for "is the Bink decode CPU-bound". TLS: each
+      * task runs on its own host thread. */
+@@ -1568,6 +1605,16 @@ int spu_taskset_wait_signal(uint32_t taskset_ea, uint32_t taskId)
+         }
+     }
+     unsigned secs = 0;
++    /* SPU_WAITSIG_POLL_MS (default 2): how often the wait re-checks its bit
++     * without being woken. A commit that sets it is meant to wake the waiter
++     * (spu_taskset_line_committed), but one that lands between the check and
++     * the sleep, or for a task not yet in s_parked, does not; with a 1 s
++     * timeout that cost God of War: Ascension's cutscene a one-second freeze
++     * every few seconds once the GPU stopped pacing its tasks. */
++    static int poll_ms = -1;
++    if (poll_ms < 0) { const char* e = getenv("SPU_WAITSIG_POLL_MS"); poll_ms = e ? atoi(e) : 2;
++                       if (poll_ms <= 0 || poll_ms > 1000) poll_ms = 1000; }
++    unsigned waited_ms = 0;
+     /* LBP_WS_DRAIN=<secs>: EXPERIMENT (general work-drained approximation).
+      * A task ENTERING WAIT_SIGNAL has drained the work dispatched to it. In our
+      * one-shot SPU model the producer task ran to completion already, so the
+@@ -1588,7 +1635,10 @@ int spu_taskset_wait_signal(uint32_t taskset_ea, uint32_t taskId)
+ #ifdef _WIN32
+     AcquireSRWLockExclusive(&s_sig_lock);
+     while (!spurs_bitset_test(taskset_ea + CSTS_SIGNALLED, taskId)) {
+-        if (!SleepConditionVariableSRW(&s_sig_cv, &s_sig_lock, 1000, 0)) {
++        if (!SleepConditionVariableSRW(&s_sig_cv, &s_sig_lock, (DWORD)poll_ms, 0)) {
++            if (spurs_bitset_test(taskset_ea + CSTS_SIGNALLED, taskId)) { spu_waitsig_missed(taskId, taskset_ea); break; }
++            if ((waited_ms += (unsigned)poll_ms) < 1000) continue;
++            waited_ms = 0;
+             static int _n = 0;
+             if (++secs && _n < 16) { _n++;
+                 fprintf(stderr, "[spu_workload] task %u (taskset 0x%08X) sleeping "
+@@ -1600,8 +1650,13 @@ int spu_taskset_wait_signal(uint32_t taskset_ea, uint32_t taskId)
+ #else
+     pthread_mutex_lock(&s_sig_lock);
+     while (!spurs_bitset_test(taskset_ea + CSTS_SIGNALLED, taskId)) {
+-        struct timespec ts; clock_gettime(CLOCK_REALTIME, &ts); ts.tv_sec += 1;
++        struct timespec ts; clock_gettime(CLOCK_REALTIME, &ts);
++        ts.tv_nsec += (long)poll_ms * 1000000L;
++        while (ts.tv_nsec >= 1000000000L) { ts.tv_nsec -= 1000000000L; ts.tv_sec++; }
+         if (pthread_cond_timedwait(&s_sig_cv, &s_sig_lock, &ts) != 0) {
++            if (spurs_bitset_test(taskset_ea + CSTS_SIGNALLED, taskId)) { spu_waitsig_missed(taskId, taskset_ea); break; }
++            if ((waited_ms += (unsigned)poll_ms) < 1000) continue;
++            waited_ms = 0;
+             static int _n = 0;
+             if (++secs && _n < 16) { _n++;
+                 fprintf(stderr, "[spu_workload] task %u (taskset 0x%08X) sleeping "
+@@ -1620,7 +1675,7 @@ int spu_taskset_wait_signal(uint32_t taskset_ea, uint32_t taskId)
+         fprintf(stderr, "[spu_workload] task %u (taskset 0x%08X) WS_DRAIN resume "
+                 "after %us (no signal)\n", taskId, taskset_ea, secs); fflush(stderr); }
+     spu_serial_acquire();       /* resume: re-take the serial lock */
+-    s_task_out = 1; __atomic_fetch_add(&s_tasks_out_of_wait, 1, __ATOMIC_ACQ_REL);
++    if (!s_task_out) { s_task_out = 1; __atomic_fetch_add(&s_tasks_out_of_wait, 1, __ATOMIC_ACQ_REL); }
+     { extern unsigned long long ps3_ms_now(void);
+       s_wait_exit_ms = ps3_ms_now(); }   /* stamp for the next entry's ran= */
+     if (s_ttl) { extern unsigned long long ps3_qpc_us(void);
+-- 
+2.48.1.windows.1
+
