@@ -74,6 +74,27 @@ static std::mutex s_task4_mutex;
 static std::map<std::string, SpursCallRate> s_task4_spurs_calls;
 static std::atomic<bool> s_task4_monitor_started{false};
 
+static void gow_watch_3510_thread()
+{
+    uint32_t last_val = 0xDEADBEEF;
+    while (true) {
+        if (vm_base) {
+            uint32_t cur_val = __builtin_bswap32(*(const volatile uint32_t*)(vm_base + 0x747D3510u));
+            if (cur_val != last_val) {
+                uint64_t t_us = ps3_qpc_us();
+                uint32_t mlr = g_ppu_main_ctx ? (uint32_t)g_ppu_main_ctx->lr : 0;
+                uint32_t brb_lr = (g_ppu_threads[8].state != PPU_THREAD_STATE_FREE) ? (uint32_t)g_ppu_threads[8].ctx.lr : 0;
+                uint32_t w8_pm = g_spurs_pm_entry_count[8];
+                fprintf(stderr, "[TRANSITION-0x747D3510] t=%lluus old=0x%08X new=0x%08X | main_lr=0x%08X brb_lr=0x%08X w8_pm=%u\n",
+                        t_us, last_val, cur_val, mlr, brb_lr, w8_pm);
+                fflush(stderr);
+                last_val = cur_val;
+            }
+        }
+        std::this_thread::sleep_for(std::chrono::microseconds(50));
+    }
+}
+
 static void task4_monitor_thread_func()
 {
     static bool s_seen_thread[PPU_THREAD_MAX + 1] = {false};
@@ -628,11 +649,18 @@ static void task4_monitor_thread_func()
     }
 }
 
-static void task4_log_spurs_call(uint32_t tid, const char* name, ppu_context* ctx)
+static void ensure_monitors_started()
 {
     if (!s_task4_monitor_started.exchange(true)) {
         std::thread(task4_monitor_thread_func).detach();
+        std::thread(gow_barrier_watch_thread_func).detach();
+        std::thread(gow_watch_3510_thread).detach();
     }
+}
+
+static void task4_log_spurs_call(uint32_t tid, const char* name, ppu_context* ctx)
+{
+    ensure_monitors_started();
 
     if (!name) return;
 
@@ -772,10 +800,7 @@ extern "C" {
     }
 
     GOW_WEAK void ppu_diag_enter_hle(uint32_t tid, uint32_t nid, const char* name) {
-        if (!s_task4_monitor_started.exchange(true)) {
-            std::thread(task4_monitor_thread_func).detach();
-            std::thread(gow_barrier_watch_thread_func).detach();
-        }
+        ensure_monitors_started();
         if (tid < 64) {
             ppu_context* c = (tid == 1) ? g_ppu_main_ctx : (tid > 0 && tid <= PPU_THREAD_MAX ? &g_ppu_threads[tid - 1].ctx : nullptr);
             uint64_t arg0 = c ? c->gpr[3] : 0;
@@ -1074,10 +1099,7 @@ extern "C" {
     void ps3_load_prx_modules(void) {
         gow_register_spu_overrides();
         gow_psn_stubs_register();
-        if (!s_task4_monitor_started.exchange(true)) {
-            std::thread(task4_monitor_thread_func).detach();
-            std::thread(gow_barrier_watch_thread_func).detach();
-        }
+        ensure_monitors_started();
     }
 
 #ifdef _WIN32
