@@ -1,0 +1,514 @@
+[
+  {
+    "index": 1,
+    "file": "0001-cellSpurs-the-second-generation-entry-points-God-of-.patch",
+    "subject": "cellSpurs: the second-generation entry points God of",
+    "status": "CONFLICT",
+    "upstream_commit": null,
+    "details": "Conflict in: libs/spurs/cellSpurs.c, libs/spurs/cellSpurs.h"
+  },
+  {
+    "index": 2,
+    "file": "0002-cellGamePatchCheck-and-LWCOND_TRACE.patch",
+    "subject": "cellGamePatchCheck, and LWCOND_TRACE",
+    "status": "CONFLICT",
+    "upstream_commit": null,
+    "details": "Conflict in: runtime/ppu/ppu_sysprx.cpp"
+  },
+  {
+    "index": 3,
+    "file": "0003-cellSpurs-_cellSpursLFQueuePushBody-and-spu_signal_p.patch",
+    "subject": "cellSpurs: _cellSpursLFQueuePushBody and",
+    "status": "CONFLICT",
+    "upstream_commit": null,
+    "details": "Conflict in: runtime/spu/spu_workload.c"
+  },
+  {
+    "index": 4,
+    "file": "0004-Apply-ps3recomp-0004-edge-zlib-task2.patch.patch",
+    "subject": "Apply ps3recomp-0004-edge-zlib-task2.patch",
+    "status": "CONFLICT",
+    "upstream_commit": null,
+    "details": "Conflict in: libs/spurs/cellSpurs.c, libs/spurs/cellSpurs.h"
+  },
+  {
+    "index": 5,
+    "file": "0005-Apply-ps3recomp-0005-gcm-offset-table.patch.patch",
+    "subject": "Apply ps3recomp-0005-gcm-offset-table.patch",
+    "status": "CONFLICT",
+    "upstream_commit": null,
+    "details": "Conflict in: libs/video/cellGcmSys.c"
+  },
+  {
+    "index": 6,
+    "file": "0006-Apply-ps3recomp-0006-edge-zlib-skip.patch.patch",
+    "subject": "Apply ps3recomp-0006-edge-zlib-skip.patch",
+    "status": "CONFLICT",
+    "upstream_commit": null,
+    "details": "Conflict in: libs/spurs/cellSpurs.c"
+  },
+  {
+    "index": 7,
+    "file": "0007-Apply-ps3recomp-0007-gcm-park-wait.patch.patch",
+    "subject": "Apply ps3recomp-0007-gcm-park-wait.patch",
+    "status": "CONFLICT",
+    "upstream_commit": null,
+    "details": "Conflict in: libs/video/cellGcmSys.c"
+  },
+  {
+    "index": 8,
+    "file": "0008-Apply-ps3recomp-0008-spurs2-32-workloads.patch.patch",
+    "subject": "Apply ps3recomp-0008-spurs2-32-workloads.patch",
+    "status": "CONFLICT",
+    "upstream_commit": null,
+    "details": "Conflict in: libs/spurs/cellSpurs.c, runtime/spu/spurs_policy.c"
+  },
+  {
+    "index": 9,
+    "file": "0009-Apply-ps3recomp-0009-spurs-spu-diagnostics.patch.patch",
+    "subject": "Apply ps3recomp-0009-spurs-spu-diagnostics.patch",
+    "status": "CONFLICT",
+    "upstream_commit": null,
+    "details": "Conflict in: libs/spurs/cellSpurs.c, runtime/spu/spu_channels.c"
+  },
+  {
+    "index": 10,
+    "file": "0010-Apply-ps3recomp-0010-macos-window-frame-dump.patch.patch",
+    "subject": "Apply ps3recomp-0010-macos-window-frame-dump.patch",
+    "status": "APPLIED_CLEAN",
+    "upstream_commit": null,
+    "details": "Applied cleanly via git am --3way"
+  },
+  {
+    "index": 11,
+    "file": "0011-Apply-ps3recomp-0011-spurs-temparea-ready-level.patc.patch",
+    "subject": "Apply ps3recomp-0011-spurs-temparea-ready-level.patch",
+    "status": "CONFLICT",
+    "upstream_commit": null,
+    "details": "Conflict in: libs/spurs/cellSpurs.c, runtime/spu/spu_channels.c, runtime/spu/spu_interp.c"
+  },
+  {
+    "index": 12,
+    "file": "0012-Apply-ps3recomp-0012-spu-evlog.patch.patch",
+    "subject": "Apply ps3recomp-0012-spu-evlog.patch",
+    "status": "CONFLICT",
+    "upstream_commit": null,
+    "details": "Conflict in: runtime/spu/spu_channels.c, runtime/spu/spu_dma.h"
+  },
+  {
+    "index": 13,
+    "file": "0013-Apply-ps3recomp-0013-gcm-park-grace-jobapi-log.patch.patch",
+    "subject": "Apply ps3recomp-0013-gcm-park-grace-jobapi-log.patch",
+    "status": "CONFLICT",
+    "upstream_commit": null,
+    "details": "Conflict in: libs/video/cellGcmSys.c, runtime/spu/spu_interp.c"
+  },
+  {
+    "index": 14,
+    "file": "0014-Apply-ps3recomp-0014-spu-commit-log.patch.patch",
+    "subject": "Apply ps3recomp-0014-spu-commit-log.patch",
+    "status": "APPLIED_CLEAN",
+    "upstream_commit": null,
+    "details": "Applied cleanly via git am --3way"
+  },
+  {
+    "index": 15,
+    "file": "0015-Apply-ps3recomp-0015-taskset-bitset-lockline.patch.patch",
+    "subject": "Apply ps3recomp-0015-taskset-bitset-lockline.patch",
+    "status": "APPLIED_CLEAN",
+    "upstream_commit": null,
+    "details": "Applied cleanly via git am --3way"
+  },
+  {
+    "index": 16,
+    "file": "0016-Apply-ps3recomp-0016-gcm-acquire-wait-flip-pace-diag.patch",
+    "subject": "Apply",
+    "status": "CONFLICT",
+    "upstream_commit": null,
+    "details": "Conflict in: libs/spurs/cellSpurs.c, libs/video/cellGcmSys.c, runtime/spu/spu_channels.c, runtime/spu/spu_interp.c"
+  },
+  {
+    "index": 17,
+    "file": "0017-Apply-ps3recomp-0017-gcm-park-spu-hold.patch.patch",
+    "subject": "Apply ps3recomp-0017-gcm-park-spu-hold.patch",
+    "status": "CONFLICT",
+    "upstream_commit": null,
+    "details": "Conflict in: libs/video/cellGcmSys.c, runtime/spu/spu_channels.c, runtime/spu/spu_workload.c"
+  },
+  {
+    "index": 18,
+    "file": "0018-Apply-ps3recomp-0018-null-read-per-function.patch.patch",
+    "subject": "Apply ps3recomp-0018-null-read-per-function.patch",
+    "status": "APPLIED_CLEAN",
+    "upstream_commit": null,
+    "details": "Applied cleanly via git am --3way"
+  },
+  {
+    "index": 19,
+    "file": "0019-Apply-ps3recomp-0019-spurs-taskset2-task-starts.patc.patch",
+    "subject": "Apply ps3recomp-0019-spurs-taskset2-task-starts.patch",
+    "status": "CONFLICT",
+    "upstream_commit": null,
+    "details": "Conflict in: libs/spurs/cellSpurs.c, runtime/spu/spu_workload.c"
+  },
+  {
+    "index": 20,
+    "file": "0020-Apply-ps3recomp-0020-watchdog-regs-dump-unwind.patch.patch",
+    "subject": "Apply ps3recomp-0020-watchdog-regs-dump-unwind.patch",
+    "status": "CONFLICT",
+    "upstream_commit": null,
+    "details": "Conflict in: runtime/spu/spu_channels.c"
+  },
+  {
+    "index": 21,
+    "file": "0021-Apply-ps3recomp-0021-live-draw-x16-srgb-ddx.patch.patch",
+    "subject": "Apply ps3recomp-0021-live-draw-x16-srgb-ddx.patch",
+    "status": "CONFLICT",
+    "upstream_commit": null,
+    "details": "Conflict in: libs/video/rsx_fp_decompiler.c"
+  },
+  {
+    "index": 22,
+    "file": "0022-Apply-ps3recomp-0022-vdec-ex-movie-perf-overlay-jobm.patch",
+    "subject": "Apply",
+    "status": "CONFLICT",
+    "upstream_commit": null,
+    "details": "Conflict in: unmerged hunks"
+  },
+  {
+    "index": 23,
+    "file": "0023-Apply-ps3recomp-0023-spu-pic-fragments-interp-rejoin.patch",
+    "subject": "Apply",
+    "status": "CONFLICT",
+    "upstream_commit": null,
+    "details": "Conflict in: unmerged hunks"
+  },
+  {
+    "index": 24,
+    "file": "0024-Apply-ps3recomp-0024-spu-x86-sse-float-frame-chain-t.patch",
+    "subject": "Apply",
+    "status": "CONFLICT",
+    "upstream_commit": null,
+    "details": "Conflict in: unmerged hunks"
+  },
+  {
+    "index": 25,
+    "file": "0025-Apply-ps3recomp-0025-vblank-qpc-callbacks-movie-diag.patch",
+    "subject": "Apply",
+    "status": "CONFLICT",
+    "upstream_commit": null,
+    "details": "Conflict in: libs/codec/cellVdec.c"
+  },
+  {
+    "index": 26,
+    "file": "0026-Apply-ps3recomp-0026-spurs-wake-on-gpu-report.patch.patch",
+    "subject": "Apply ps3recomp-0026-spurs-wake-on-gpu-report.patch",
+    "status": "CONFLICT",
+    "upstream_commit": null,
+    "details": "Conflict in: unmerged hunks"
+  },
+  {
+    "index": 27,
+    "file": "0027-Apply-ps3recomp-0027-sse-ops-interp-ed-job-hist.patc.patch",
+    "subject": "Apply ps3recomp-0027-sse-ops-interp-ed-job-hist.patch",
+    "status": "CONFLICT",
+    "upstream_commit": null,
+    "details": "Conflict in: unmerged hunks"
+  },
+  {
+    "index": 28,
+    "file": "0028-Apply-ps3recomp-0028-spu-shadow-nolift-default.patch.patch",
+    "subject": "Apply ps3recomp-0028-spu-shadow-nolift-default.patch",
+    "status": "CONFLICT",
+    "upstream_commit": null,
+    "details": "Conflict in: unmerged hunks"
+  },
+  {
+    "index": 29,
+    "file": "0029-Apply-ps3recomp-0029-report-hold-missed-wake-vdec-he.patch",
+    "subject": "Apply",
+    "status": "CONFLICT",
+    "upstream_commit": null,
+    "details": "Conflict in: libs/codec/cellVdec.c, libs/video/cellGcmSys.c, runtime/spu/spu_workload.c"
+  },
+  {
+    "index": 30,
+    "file": "0030-Apply-ps3recomp-0030-host-window-language-mods.patch.patch",
+    "subject": "Apply ps3recomp-0030-host-window-language-mods.patch",
+    "status": "APPLIED_CLEAN",
+    "upstream_commit": null,
+    "details": "Applied cleanly via git am --3way"
+  },
+  {
+    "index": 31,
+    "file": "0031-Apply-ps3recomp-0031-spu-fragments-by-content.patch.patch",
+    "subject": "Apply ps3recomp-0031-spu-fragments-by-content.patch",
+    "status": "CONFLICT",
+    "upstream_commit": null,
+    "details": "Conflict in: unmerged hunks"
+  },
+  {
+    "index": 32,
+    "file": "0032-Apply-ps3recomp-0032-spu-fast-fp-mode.patch.patch",
+    "subject": "Apply ps3recomp-0032-spu-fast-fp-mode.patch",
+    "status": "CONFLICT",
+    "upstream_commit": null,
+    "details": "Conflict in: unmerged hunks"
+  },
+  {
+    "index": 33,
+    "file": "0033-Apply-ps3recomp-0033-sse-byte-ops-fma-exptex-rsx-cop.patch",
+    "subject": "Apply",
+    "status": "CONFLICT",
+    "upstream_commit": null,
+    "details": "Conflict in: unmerged hunks"
+  },
+  {
+    "index": 34,
+    "file": "0034-Apply-ps3recomp-0034-usleep-hr-timer.patch.patch",
+    "subject": "Apply ps3recomp-0034-usleep-hr-timer.patch",
+    "status": "APPLIED_CLEAN",
+    "upstream_commit": null,
+    "details": "Applied cleanly via git am --3way"
+  },
+  {
+    "index": 35,
+    "file": "0035-Apply-ps3recomp-0035-tex8-tex9-fp-probe.patch.patch",
+    "subject": "Apply ps3recomp-0035-tex8-tex9-fp-probe.patch",
+    "status": "APPLIED_CLEAN",
+    "upstream_commit": null,
+    "details": "Applied cleanly via git am --3way"
+  },
+  {
+    "index": 36,
+    "file": "0036-Apply-ps3recomp-0036-persp-corr-rrc-replay-noirq-pro.patch",
+    "subject": "Apply",
+    "status": "CONFLICT",
+    "upstream_commit": null,
+    "details": "Conflict in: unmerged hunks"
+  },
+  {
+    "index": 37,
+    "file": "0037-Apply-ps3recomp-0037-taskset-bitset-lock-rejoin-call.patch",
+    "subject": "Apply",
+    "status": "CONFLICT",
+    "upstream_commit": null,
+    "details": "Conflict in: unmerged hunks"
+  },
+  {
+    "index": 38,
+    "file": "0038-Apply-ps3recomp-0038-inline-guest-stores.patch.patch",
+    "subject": "Apply ps3recomp-0038-inline-guest-stores.patch",
+    "status": "CONFLICT",
+    "upstream_commit": null,
+    "details": "Conflict in: runtime/ppu/ppu_loader.cpp, runtime/spu/spu_coherency.c"
+  },
+  {
+    "index": 39,
+    "file": "0039-Apply-ps3recomp-0039-half2-tex-shadow-compare.patch.patch",
+    "subject": "Apply ps3recomp-0039-half2-tex-shadow-compare.patch",
+    "status": "CONFLICT",
+    "upstream_commit": null,
+    "details": "Conflict in: unmerged hunks"
+  },
+  {
+    "index": 40,
+    "file": "0040-Apply-ps3recomp-0040-upload-reserve-capture-draws-me.patch",
+    "subject": "Apply",
+    "status": "CONFLICT",
+    "upstream_commit": null,
+    "details": "Conflict in: unmerged hunks"
+  },
+  {
+    "index": 41,
+    "file": "0041-Apply-ps3recomp-0041-dispatch-hooks-kernel-spin.patc.patch",
+    "subject": "Apply ps3recomp-0041-dispatch-hooks-kernel-spin.patch",
+    "status": "CONFLICT",
+    "upstream_commit": null,
+    "details": "Conflict in: unmerged hunks"
+  },
+  {
+    "index": 42,
+    "file": "0042-Perf-panel-SPU-RSX-and-report-hold-figures-hold-only.patch",
+    "subject": "Perf panel: SPU, RSX and report-hold figures; hold only",
+    "status": "CONFLICT",
+    "upstream_commit": null,
+    "details": "Conflict in: unmerged hunks"
+  },
+  {
+    "index": 43,
+    "file": "0043-Live-draw-cache-resident-host-allocations-for-guest-.patch",
+    "subject": "Live draw: cache resident host allocations for guest",
+    "status": "CONFLICT",
+    "upstream_commit": null,
+    "details": "Conflict in: unmerged hunks"
+  },
+  {
+    "index": 44,
+    "file": "0044-Promote-IRQ-poll-for-SPU-task-completion-patch-0044.patch",
+    "subject": "Promote IRQ poll for SPU task completion (patch 0044)",
+    "status": "CONFLICT",
+    "upstream_commit": null,
+    "details": "Conflict in: tools/spu_lifter.py"
+  },
+  {
+    "index": 45,
+    "file": "0045-Fix-syntax-errors-resolve-conflict-markers-and-resto.patch",
+    "subject": "Fix syntax errors, resolve conflict markers, and",
+    "status": "CONFLICT",
+    "upstream_commit": null,
+    "details": "Conflict in: unmerged hunks"
+  },
+  {
+    "index": 46,
+    "file": "0046-Restore-rsx_fp_texture_expand_units-for-rsx_draw_eng.patch",
+    "subject": "Restore rsx_fp_texture_expand_units for rsx_draw_engine",
+    "status": "APPLIED_CLEAN",
+    "upstream_commit": null,
+    "details": "Applied cleanly via git am --3way"
+  },
+  {
+    "index": 47,
+    "file": "0047-lift_jobmods.py-fix-newline-syntax-error-before-pars.patch",
+    "subject": "lift_jobmods.py: fix newline syntax error before",
+    "status": "CONFLICT",
+    "upstream_commit": null,
+    "details": "Conflict in: tools/lift_jobmods.py"
+  },
+  {
+    "index": 48,
+    "file": "0048-diagnostics.patch",
+    "subject": "0048-diagnostics.patch",
+    "status": "FAILED",
+    "upstream_commit": null,
+    "details": "Patch format detection failed."
+  },
+  {
+    "index": 49,
+    "file": "0049-spu-stack-unwind.patch",
+    "subject": "feat(spu): unwind repeating spu_drain_call frames via clean C",
+    "status": "CONFLICT",
+    "upstream_commit": null,
+    "details": "Conflict in: unmerged hunks"
+  },
+  {
+    "index": 50,
+    "file": "0050-fios-cache-modes.patch",
+    "subject": "0050-fios-cache-modes.patch",
+    "status": "FAILED",
+    "upstream_commit": null,
+    "details": "Patch format detection failed."
+  },
+  {
+    "index": 51,
+    "file": "0051-task5-mfc-diag.patch",
+    "subject": "0051-task5-mfc-diag.patch",
+    "status": "FAILED",
+    "upstream_commit": null,
+    "details": "Patch format detection failed."
+  },
+  {
+    "index": 52,
+    "file": "0052-spu-cycle-state-preserve-spurs-accounting.patch",
+    "subject": "0052-spu-cycle-state-preserve-spurs-accounting.patch",
+    "status": "FAILED",
+    "upstream_commit": null,
+    "details": "Patch format detection failed."
+  },
+  {
+    "index": 53,
+    "file": "0053-fix-spurs-pm-poll-and-dma.patch",
+    "subject": "0053-fix-spurs-pm-poll-and-dma.patch",
+    "status": "FAILED",
+    "upstream_commit": null,
+    "details": "Patch format detection failed."
+  },
+  {
+    "index": 54,
+    "file": "0054-spurs-lane-preemption-idle-wake.patch",
+    "subject": "0054-spurs-lane-preemption-idle-wake.patch",
+    "status": "FAILED",
+    "upstream_commit": null,
+    "details": "Patch format detection failed."
+  },
+  {
+    "index": 55,
+    "file": "0055-spurs-lane-preemption-idle-wake-and-revert-fake-fios.patch",
+    "subject": "0055-spurs-lane-preemption-idle-wake-and-revert-fake-fios.patch",
+    "status": "FAILED",
+    "upstream_commit": null,
+    "details": "Patch format detection failed."
+  },
+  {
+    "index": 56,
+    "file": "0056-cellGame-cellSaveData-free-space-floor.patch",
+    "subject": "fix(cellGame,cellSaveData): ensure 10 GB free space floor to",
+    "status": "CONFLICT",
+    "upstream_commit": null,
+    "details": "Conflict in: unmerged hunks"
+  },
+  {
+    "index": 57,
+    "file": "0056-fix-spurs-add-workload-poll-thread-yield-and-SPU-que.patch",
+    "subject": "fix(spurs): add workload poll thread yield and SPU",
+    "status": "CONFLICT",
+    "upstream_commit": null,
+    "details": "Conflict in: unmerged hunks"
+  },
+  {
+    "index": 58,
+    "file": "0057-spu-sn-defer-per-context.patch",
+    "subject": "fix(spu): per-context sn_defer and fallback interrupt target",
+    "status": "FAILED",
+    "upstream_commit": null,
+    "details": "Patch format detection failed."
+  },
+  {
+    "index": 59,
+    "file": "0057-telemetry-track-g_spu_yield_count-per-lane-and-log-l.patch",
+    "subject": "telemetry: track g_spu_yield_count per lane and log",
+    "status": "CONFLICT",
+    "upstream_commit": null,
+    "details": "Conflict in: unmerged hunks"
+  },
+  {
+    "index": 60,
+    "file": "0058-spu-shadow-unwind-bound-depth.patch",
+    "subject": "0058-spu-shadow-unwind-bound-depth.patch",
+    "status": "FAILED",
+    "upstream_commit": null,
+    "details": "Patch format detection failed."
+  },
+  {
+    "index": 61,
+    "file": "0059-fs-writable-mounts-mkdir-p.patch",
+    "subject": "0059-fs-writable-mounts-mkdir-p.patch",
+    "status": "FAILED",
+    "upstream_commit": null,
+    "details": "Patch format detection failed."
+  },
+  {
+    "index": 62,
+    "file": "0060-window-wide-title-opt-in-watchdog-lock-silence.patch",
+    "subject": "0060-window-wide-title-opt-in-watchdog-lock-silence.patch",
+    "status": "FAILED",
+    "upstream_commit": null,
+    "details": "Patch format detection failed."
+  },
+  {
+    "index": 63,
+    "file": "0061-spurs32-spu-lane-telemetry-wws-gate.patch",
+    "subject": "0061-spurs32-spu-lane-telemetry-wws-gate.patch",
+    "status": "FAILED",
+    "upstream_commit": null,
+    "details": "Patch format detection failed."
+  },
+  {
+    "index": 64,
+    "file": "0062-spurs-audit-guard-and-cellspurs2.patch",
+    "subject": "0062-spurs-audit-guard-and-cellspurs2.patch",
+    "status": "FAILED",
+    "upstream_commit": null,
+    "details": "Patch format detection failed."
+  }
+]

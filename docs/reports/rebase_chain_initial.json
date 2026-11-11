@@ -1,0 +1,567 @@
+[
+  {
+    "patch": "0001-cellSpurs-the-second-generation-entry-points-God-of-.patch",
+    "subject": "cellSpurs: the second-generation entry points God of",
+    "status": "CONFLICT",
+    "cite": null,
+    "conflicts": [
+      "libs/spurs/cellSpurs.c",
+      "libs/spurs/cellSpurs.h"
+    ],
+    "err": "error: Failed to merge in the changes.\nhint: Use 'git am --show-current-patch=diff' to see the failed patch\nhint: When you have resolved this problem, run \"git am --continue\".\nhint: If you prefer to skip this patch, run \"git am --skip\" instead.\nhint: To restore the original branch and stop patching,"
+  },
+  {
+    "patch": "0002-cellGamePatchCheck-and-LWCOND_TRACE.patch",
+    "subject": "cellGamePatchCheck, and LWCOND_TRACE",
+    "status": "CONFLICT",
+    "cite": null,
+    "conflicts": [
+      "runtime/ppu/ppu_sysprx.cpp"
+    ],
+    "err": "error: Failed to merge in the changes.\nhint: Use 'git am --show-current-patch=diff' to see the failed patch\nhint: When you have resolved this problem, run \"git am --continue\".\nhint: If you prefer to skip this patch, run \"git am --skip\" instead.\nhint: To restore the original branch and stop patching,"
+  },
+  {
+    "patch": "0003-cellSpurs-_cellSpursLFQueuePushBody-and-spu_signal_p.patch",
+    "subject": "cellSpurs: _cellSpursLFQueuePushBody and",
+    "status": "CONFLICT",
+    "cite": null,
+    "conflicts": [
+      "runtime/spu/spu_workload.c"
+    ],
+    "err": "error: Failed to merge in the changes.\nhint: Use 'git am --show-current-patch=diff' to see the failed patch\nhint: When you have resolved this problem, run \"git am --continue\".\nhint: If you prefer to skip this patch, run \"git am --skip\" instead.\nhint: To restore the original branch and stop patching,"
+  },
+  {
+    "patch": "0004-Apply-ps3recomp-0004-edge-zlib-task2.patch.patch",
+    "subject": "Apply ps3recomp-0004-edge-zlib-task2.patch",
+    "status": "CONFLICT",
+    "cite": null,
+    "conflicts": [
+      "libs/spurs/cellSpurs.c",
+      "libs/spurs/cellSpurs.h"
+    ],
+    "err": "error: Failed to merge in the changes.\nhint: Use 'git am --show-current-patch=diff' to see the failed patch\nhint: When you have resolved this problem, run \"git am --continue\".\nhint: If you prefer to skip this patch, run \"git am --skip\" instead.\nhint: To restore the original branch and stop patching,"
+  },
+  {
+    "patch": "0005-Apply-ps3recomp-0005-gcm-offset-table.patch.patch",
+    "subject": "Apply ps3recomp-0005-gcm-offset-table.patch",
+    "status": "CONFLICT",
+    "cite": null,
+    "conflicts": [
+      "libs/video/cellGcmSys.c"
+    ],
+    "err": "error: Failed to merge in the changes.\nhint: Use 'git am --show-current-patch=diff' to see the failed patch\nhint: When you have resolved this problem, run \"git am --continue\".\nhint: If you prefer to skip this patch, run \"git am --skip\" instead.\nhint: To restore the original branch and stop patching,"
+  },
+  {
+    "patch": "0006-Apply-ps3recomp-0006-edge-zlib-skip.patch.patch",
+    "subject": "Apply ps3recomp-0006-edge-zlib-skip.patch",
+    "status": "CONFLICT",
+    "cite": null,
+    "conflicts": [
+      "libs/spurs/cellSpurs.c"
+    ],
+    "err": "error: Failed to merge in the changes.\nhint: Use 'git am --show-current-patch=diff' to see the failed patch\nhint: When you have resolved this problem, run \"git am --continue\".\nhint: If you prefer to skip this patch, run \"git am --skip\" instead.\nhint: To restore the original branch and stop patching,"
+  },
+  {
+    "patch": "0007-Apply-ps3recomp-0007-gcm-park-wait.patch.patch",
+    "subject": "Apply ps3recomp-0007-gcm-park-wait.patch",
+    "status": "CONFLICT",
+    "cite": null,
+    "conflicts": [
+      "libs/video/cellGcmSys.c"
+    ],
+    "err": "error: Failed to merge in the changes.\nhint: Use 'git am --show-current-patch=diff' to see the failed patch\nhint: When you have resolved this problem, run \"git am --continue\".\nhint: If you prefer to skip this patch, run \"git am --skip\" instead.\nhint: To restore the original branch and stop patching,"
+  },
+  {
+    "patch": "0008-Apply-ps3recomp-0008-spurs2-32-workloads.patch.patch",
+    "subject": "Apply ps3recomp-0008-spurs2-32-workloads.patch",
+    "status": "CONFLICT",
+    "cite": null,
+    "conflicts": [
+      "libs/spurs/cellSpurs.c",
+      "runtime/spu/spurs_policy.c"
+    ],
+    "err": "error: Failed to merge in the changes.\nhint: Use 'git am --show-current-patch=diff' to see the failed patch\nhint: When you have resolved this problem, run \"git am --continue\".\nhint: If you prefer to skip this patch, run \"git am --skip\" instead.\nhint: To restore the original branch and stop patching,"
+  },
+  {
+    "patch": "0009-Apply-ps3recomp-0009-spurs-spu-diagnostics.patch.patch",
+    "subject": "Apply ps3recomp-0009-spurs-spu-diagnostics.patch",
+    "status": "CONFLICT",
+    "cite": null,
+    "conflicts": [
+      "libs/spurs/cellSpurs.c",
+      "runtime/spu/spu_channels.c"
+    ],
+    "err": "error: Failed to merge in the changes.\nhint: Use 'git am --show-current-patch=diff' to see the failed patch\nhint: When you have resolved this problem, run \"git am --continue\".\nhint: If you prefer to skip this patch, run \"git am --skip\" instead.\nhint: To restore the original branch and stop patching,"
+  },
+  {
+    "patch": "0010-Apply-ps3recomp-0010-macos-window-frame-dump.patch.patch",
+    "subject": "Apply ps3recomp-0010-macos-window-frame-dump.patch",
+    "status": "APPLIED_CLEAN",
+    "cite": null,
+    "resolution": "Applied cleanly via 3-way merge."
+  },
+  {
+    "patch": "0011-Apply-ps3recomp-0011-spurs-temparea-ready-level.patc.patch",
+    "subject": "Apply ps3recomp-0011-spurs-temparea-ready-level.patch",
+    "status": "CONFLICT",
+    "cite": null,
+    "conflicts": [
+      "libs/spurs/cellSpurs.c",
+      "runtime/spu/spu_channels.c",
+      "runtime/spu/spu_interp.c"
+    ],
+    "err": "error: Failed to merge in the changes.\nhint: Use 'git am --show-current-patch=diff' to see the failed patch\nhint: When you have resolved this problem, run \"git am --continue\".\nhint: If you prefer to skip this patch, run \"git am --skip\" instead.\nhint: To restore the original branch and stop patching,"
+  },
+  {
+    "patch": "0012-Apply-ps3recomp-0012-spu-evlog.patch.patch",
+    "subject": "Apply ps3recomp-0012-spu-evlog.patch",
+    "status": "CONFLICT",
+    "cite": null,
+    "conflicts": [
+      "runtime/spu/spu_channels.c",
+      "runtime/spu/spu_dma.h"
+    ],
+    "err": "error: Failed to merge in the changes.\nhint: Use 'git am --show-current-patch=diff' to see the failed patch\nhint: When you have resolved this problem, run \"git am --continue\".\nhint: If you prefer to skip this patch, run \"git am --skip\" instead.\nhint: To restore the original branch and stop patching,"
+  },
+  {
+    "patch": "0013-Apply-ps3recomp-0013-gcm-park-grace-jobapi-log.patch.patch",
+    "subject": "Apply ps3recomp-0013-gcm-park-grace-jobapi-log.patch",
+    "status": "CONFLICT",
+    "cite": null,
+    "conflicts": [
+      "libs/video/cellGcmSys.c",
+      "runtime/spu/spu_interp.c"
+    ],
+    "err": "error: Failed to merge in the changes.\nhint: Use 'git am --show-current-patch=diff' to see the failed patch\nhint: When you have resolved this problem, run \"git am --continue\".\nhint: If you prefer to skip this patch, run \"git am --skip\" instead.\nhint: To restore the original branch and stop patching,"
+  },
+  {
+    "patch": "0014-Apply-ps3recomp-0014-spu-commit-log.patch.patch",
+    "subject": "Apply ps3recomp-0014-spu-commit-log.patch",
+    "status": "APPLIED_CLEAN",
+    "cite": null,
+    "resolution": "Applied cleanly via 3-way merge."
+  },
+  {
+    "patch": "0015-Apply-ps3recomp-0015-taskset-bitset-lockline.patch.patch",
+    "subject": "Apply ps3recomp-0015-taskset-bitset-lockline.patch",
+    "status": "APPLIED_CLEAN",
+    "cite": null,
+    "resolution": "Applied cleanly via 3-way merge."
+  },
+  {
+    "patch": "0016-Apply-ps3recomp-0016-gcm-acquire-wait-flip-pace-diag.patch",
+    "subject": "Apply",
+    "status": "CONFLICT",
+    "cite": null,
+    "conflicts": [
+      "libs/spurs/cellSpurs.c",
+      "libs/video/cellGcmSys.c",
+      "runtime/spu/spu_channels.c",
+      "runtime/spu/spu_interp.c"
+    ],
+    "err": "error: Failed to merge in the changes.\nhint: Use 'git am --show-current-patch=diff' to see the failed patch\nhint: When you have resolved this problem, run \"git am --continue\".\nhint: If you prefer to skip this patch, run \"git am --skip\" instead.\nhint: To restore the original branch and stop patching,"
+  },
+  {
+    "patch": "0017-Apply-ps3recomp-0017-gcm-park-spu-hold.patch.patch",
+    "subject": "Apply ps3recomp-0017-gcm-park-spu-hold.patch",
+    "status": "CONFLICT",
+    "cite": null,
+    "conflicts": [
+      "libs/video/cellGcmSys.c",
+      "runtime/spu/spu_channels.c",
+      "runtime/spu/spu_workload.c"
+    ],
+    "err": "error: Failed to merge in the changes.\nhint: Use 'git am --show-current-patch=diff' to see the failed patch\nhint: When you have resolved this problem, run \"git am --continue\".\nhint: If you prefer to skip this patch, run \"git am --skip\" instead.\nhint: To restore the original branch and stop patching,"
+  },
+  {
+    "patch": "0018-Apply-ps3recomp-0018-null-read-per-function.patch.patch",
+    "subject": "Apply ps3recomp-0018-null-read-per-function.patch",
+    "status": "APPLIED_CLEAN",
+    "cite": null,
+    "resolution": "Applied cleanly via 3-way merge."
+  },
+  {
+    "patch": "0019-Apply-ps3recomp-0019-spurs-taskset2-task-starts.patc.patch",
+    "subject": "Apply ps3recomp-0019-spurs-taskset2-task-starts.patch",
+    "status": "CONFLICT",
+    "cite": null,
+    "conflicts": [
+      "libs/spurs/cellSpurs.c",
+      "runtime/spu/spu_workload.c"
+    ],
+    "err": "error: Failed to merge in the changes.\nhint: Use 'git am --show-current-patch=diff' to see the failed patch\nhint: When you have resolved this problem, run \"git am --continue\".\nhint: If you prefer to skip this patch, run \"git am --skip\" instead.\nhint: To restore the original branch and stop patching,"
+  },
+  {
+    "patch": "0020-Apply-ps3recomp-0020-watchdog-regs-dump-unwind.patch.patch",
+    "subject": "Apply ps3recomp-0020-watchdog-regs-dump-unwind.patch",
+    "status": "CONFLICT",
+    "cite": null,
+    "conflicts": [
+      "runtime/spu/spu_channels.c"
+    ],
+    "err": "error: Failed to merge in the changes.\nhint: Use 'git am --show-current-patch=diff' to see the failed patch\nhint: When you have resolved this problem, run \"git am --continue\".\nhint: If you prefer to skip this patch, run \"git am --skip\" instead.\nhint: To restore the original branch and stop patching,"
+  },
+  {
+    "patch": "0021-Apply-ps3recomp-0021-live-draw-x16-srgb-ddx.patch.patch",
+    "subject": "Apply ps3recomp-0021-live-draw-x16-srgb-ddx.patch",
+    "status": "CONFLICT",
+    "cite": null,
+    "conflicts": [
+      "libs/video/rsx_fp_decompiler.c"
+    ],
+    "err": "error: Failed to merge in the changes.\nhint: Use 'git am --show-current-patch=diff' to see the failed patch\nhint: When you have resolved this problem, run \"git am --continue\".\nhint: If you prefer to skip this patch, run \"git am --skip\" instead.\nhint: To restore the original branch and stop patching,"
+  },
+  {
+    "patch": "0022-Apply-ps3recomp-0022-vdec-ex-movie-perf-overlay-jobm.patch",
+    "subject": "Apply",
+    "status": "CONFLICT",
+    "cite": null,
+    "conflicts": [],
+    "err": "error: patch failed: libs/video/rsx_live_draw.c:88\nerror: libs/video/rsx_live_draw.c: patch does not apply\nerror: patch failed: runtime/spu/spu_channels.c:1\nerror: runtime/spu/spu_channels.c: patch does not apply\nerror: Did you hand edit your patch?\nIt does not apply to blobs recorded in its index.\n"
+  },
+  {
+    "patch": "0023-Apply-ps3recomp-0023-spu-pic-fragments-interp-rejoin.patch",
+    "subject": "Apply",
+    "status": "CONFLICT",
+    "cite": null,
+    "conflicts": [],
+    "err": "error: sha1 information is lacking or useless (runtime/spu/spu_channels.c).\nerror: could not build fake ancestor\nhint: Use 'git am --show-current-patch=diff' to see the failed patch\nhint: When you have resolved this problem, run \"git am --continue\".\nhint: If you prefer to skip this patch, run \"git a"
+  },
+  {
+    "patch": "0024-Apply-ps3recomp-0024-spu-x86-sse-float-frame-chain-t.patch",
+    "subject": "Apply",
+    "status": "CONFLICT",
+    "cite": null,
+    "conflicts": [],
+    "err": "error: sha1 information is lacking or useless (runtime/spu/spu_channels.c).\nerror: could not build fake ancestor\nhint: Use 'git am --show-current-patch=diff' to see the failed patch\nhint: When you have resolved this problem, run \"git am --continue\".\nhint: If you prefer to skip this patch, run \"git a"
+  },
+  {
+    "patch": "0025-Apply-ps3recomp-0025-vblank-qpc-callbacks-movie-diag.patch",
+    "subject": "Apply",
+    "status": "CONFLICT",
+    "cite": null,
+    "conflicts": [
+      "libs/codec/cellVdec.c"
+    ],
+    "err": "error: Failed to merge in the changes.\nhint: Use 'git am --show-current-patch=diff' to see the failed patch\nhint: When you have resolved this problem, run \"git am --continue\".\nhint: If you prefer to skip this patch, run \"git am --skip\" instead.\nhint: To restore the original branch and stop patching,"
+  },
+  {
+    "patch": "0026-Apply-ps3recomp-0026-spurs-wake-on-gpu-report.patch.patch",
+    "subject": "Apply ps3recomp-0026-spurs-wake-on-gpu-report.patch",
+    "status": "CONFLICT",
+    "cite": null,
+    "conflicts": [],
+    "err": "error: patch failed: runtime/ppu/tests/boot_main.cpp:76\nerror: runtime/ppu/tests/boot_main.cpp: patch does not apply\nerror: Did you hand edit your patch?\nIt does not apply to blobs recorded in its index.\nhint: Use 'git am --show-current-patch=diff' to see the failed patch\nhint: When you have resolve"
+  },
+  {
+    "patch": "0027-Apply-ps3recomp-0027-sse-ops-interp-ed-job-hist.patc.patch",
+    "subject": "Apply ps3recomp-0027-sse-ops-interp-ed-job-hist.patch",
+    "status": "CONFLICT",
+    "cite": null,
+    "conflicts": [],
+    "err": "error: sha1 information is lacking or useless (runtime/spu/spu_channels.c).\nerror: could not build fake ancestor\nhint: Use 'git am --show-current-patch=diff' to see the failed patch\nhint: When you have resolved this problem, run \"git am --continue\".\nhint: If you prefer to skip this patch, run \"git a"
+  },
+  {
+    "patch": "0028-Apply-ps3recomp-0028-spu-shadow-nolift-default.patch.patch",
+    "subject": "Apply ps3recomp-0028-spu-shadow-nolift-default.patch",
+    "status": "CONFLICT",
+    "cite": null,
+    "conflicts": [],
+    "err": "error: sha1 information is lacking or useless (runtime/spu/spu_channels.c).\nerror: could not build fake ancestor\nhint: Use 'git am --show-current-patch=diff' to see the failed patch\nhint: When you have resolved this problem, run \"git am --continue\".\nhint: If you prefer to skip this patch, run \"git a"
+  },
+  {
+    "patch": "0029-Apply-ps3recomp-0029-report-hold-missed-wake-vdec-he.patch",
+    "subject": "Apply",
+    "status": "CONFLICT",
+    "cite": null,
+    "conflicts": [
+      "libs/codec/cellVdec.c",
+      "libs/video/cellGcmSys.c",
+      "runtime/spu/spu_workload.c"
+    ],
+    "err": "error: Failed to merge in the changes.\nhint: Use 'git am --show-current-patch=diff' to see the failed patch\nhint: When you have resolved this problem, run \"git am --continue\".\nhint: If you prefer to skip this patch, run \"git am --skip\" instead.\nhint: To restore the original branch and stop patching,"
+  },
+  {
+    "patch": "0030-Apply-ps3recomp-0030-host-window-language-mods.patch.patch",
+    "subject": "Apply ps3recomp-0030-host-window-language-mods.patch",
+    "status": "APPLIED_CLEAN",
+    "cite": null,
+    "resolution": "Applied cleanly via 3-way merge."
+  },
+  {
+    "patch": "0031-Apply-ps3recomp-0031-spu-fragments-by-content.patch.patch",
+    "subject": "Apply ps3recomp-0031-spu-fragments-by-content.patch",
+    "status": "CONFLICT",
+    "cite": null,
+    "conflicts": [],
+    "err": "error: sha1 information is lacking or useless (runtime/spu/spu_channels.c).\nerror: could not build fake ancestor\nhint: Use 'git am --show-current-patch=diff' to see the failed patch\nhint: When you have resolved this problem, run \"git am --continue\".\nhint: If you prefer to skip this patch, run \"git a"
+  },
+  {
+    "patch": "0032-Apply-ps3recomp-0032-spu-fast-fp-mode.patch.patch",
+    "subject": "Apply ps3recomp-0032-spu-fast-fp-mode.patch",
+    "status": "CONFLICT",
+    "cite": null,
+    "conflicts": [],
+    "err": "error: sha1 information is lacking or useless (runtime/spu/spu_channels.c).\nerror: could not build fake ancestor\nhint: Use 'git am --show-current-patch=diff' to see the failed patch\nhint: When you have resolved this problem, run \"git am --continue\".\nhint: If you prefer to skip this patch, run \"git a"
+  },
+  {
+    "patch": "0033-Apply-ps3recomp-0033-sse-byte-ops-fma-exptex-rsx-cop.patch",
+    "subject": "Apply",
+    "status": "CONFLICT",
+    "cite": null,
+    "conflicts": [],
+    "err": "error: patch failed: libs/video/rsx_live_draw.c:1\nerror: libs/video/rsx_live_draw.c: patch does not apply\nerror: Did you hand edit your patch?\nIt does not apply to blobs recorded in its index.\nhint: Use 'git am --show-current-patch=diff' to see the failed patch\nhint: When you have resolved this prob"
+  },
+  {
+    "patch": "0034-Apply-ps3recomp-0034-usleep-hr-timer.patch.patch",
+    "subject": "Apply ps3recomp-0034-usleep-hr-timer.patch",
+    "status": "APPLIED_CLEAN",
+    "cite": null,
+    "resolution": "Applied cleanly via 3-way merge."
+  },
+  {
+    "patch": "0035-Apply-ps3recomp-0035-tex8-tex9-fp-probe.patch.patch",
+    "subject": "Apply ps3recomp-0035-tex8-tex9-fp-probe.patch",
+    "status": "APPLIED_CLEAN",
+    "cite": null,
+    "resolution": "Applied cleanly via 3-way merge."
+  },
+  {
+    "patch": "0036-Apply-ps3recomp-0036-persp-corr-rrc-replay-noirq-pro.patch",
+    "subject": "Apply",
+    "status": "CONFLICT",
+    "cite": null,
+    "conflicts": [],
+    "err": "error: sha1 information is lacking or useless (libs/video/rsx_live_draw.c).\nerror: could not build fake ancestor\nhint: Use 'git am --show-current-patch=diff' to see the failed patch\nhint: When you have resolved this problem, run \"git am --continue\".\nhint: If you prefer to skip this patch, run \"git a"
+  },
+  {
+    "patch": "0037-Apply-ps3recomp-0037-taskset-bitset-lock-rejoin-call.patch",
+    "subject": "Apply",
+    "status": "CONFLICT",
+    "cite": null,
+    "conflicts": [],
+    "err": "error: sha1 information is lacking or useless (runtime/spu/spu_channels.c).\nerror: could not build fake ancestor\nhint: Use 'git am --show-current-patch=diff' to see the failed patch\nhint: When you have resolved this problem, run \"git am --continue\".\nhint: If you prefer to skip this patch, run \"git a"
+  },
+  {
+    "patch": "0038-Apply-ps3recomp-0038-inline-guest-stores.patch.patch",
+    "subject": "Apply ps3recomp-0038-inline-guest-stores.patch",
+    "status": "CONFLICT",
+    "cite": null,
+    "conflicts": [
+      "runtime/ppu/ppu_loader.cpp",
+      "runtime/spu/spu_coherency.c"
+    ],
+    "err": "error: Failed to merge in the changes.\nhint: Use 'git am --show-current-patch=diff' to see the failed patch\nhint: When you have resolved this problem, run \"git am --continue\".\nhint: If you prefer to skip this patch, run \"git am --skip\" instead.\nhint: To restore the original branch and stop patching,"
+  },
+  {
+    "patch": "0039-Apply-ps3recomp-0039-half2-tex-shadow-compare.patch.patch",
+    "subject": "Apply ps3recomp-0039-half2-tex-shadow-compare.patch",
+    "status": "CONFLICT",
+    "cite": null,
+    "conflicts": [],
+    "err": "error: sha1 information is lacking or useless (libs/video/rsx_live_draw.c).\nerror: could not build fake ancestor\nhint: Use 'git am --show-current-patch=diff' to see the failed patch\nhint: When you have resolved this problem, run \"git am --continue\".\nhint: If you prefer to skip this patch, run \"git a"
+  },
+  {
+    "patch": "0040-Apply-ps3recomp-0040-upload-reserve-capture-draws-me.patch",
+    "subject": "Apply",
+    "status": "CONFLICT",
+    "cite": null,
+    "conflicts": [],
+    "err": "error: sha1 information is lacking or useless (libs/video/rsx_live_draw.c).\nerror: could not build fake ancestor\nhint: Use 'git am --show-current-patch=diff' to see the failed patch\nhint: When you have resolved this problem, run \"git am --continue\".\nhint: If you prefer to skip this patch, run \"git a"
+  },
+  {
+    "patch": "0041-Apply-ps3recomp-0041-dispatch-hooks-kernel-spin.patc.patch",
+    "subject": "Apply ps3recomp-0041-dispatch-hooks-kernel-spin.patch",
+    "status": "CONFLICT",
+    "cite": null,
+    "conflicts": [],
+    "err": "error: sha1 information is lacking or useless (runtime/spu/spu_channels.c).\nerror: could not build fake ancestor\nhint: Use 'git am --show-current-patch=diff' to see the failed patch\nhint: When you have resolved this problem, run \"git am --continue\".\nhint: If you prefer to skip this patch, run \"git a"
+  },
+  {
+    "patch": "0042-Perf-panel-SPU-RSX-and-report-hold-figures-hold-only.patch",
+    "subject": "Perf panel: SPU, RSX and report-hold figures; hold only",
+    "status": "CONFLICT",
+    "cite": null,
+    "conflicts": [],
+    "err": "error: sha1 information is lacking or useless (libs/video/rsx_live_draw.c).\nerror: could not build fake ancestor\nhint: Use 'git am --show-current-patch=diff' to see the failed patch\nhint: When you have resolved this problem, run \"git am --continue\".\nhint: If you prefer to skip this patch, run \"git a"
+  },
+  {
+    "patch": "0043-Live-draw-cache-resident-host-allocations-for-guest-.patch",
+    "subject": "Live draw: cache resident host allocations for guest",
+    "status": "CONFLICT",
+    "cite": null,
+    "conflicts": [],
+    "err": "error: sha1 information is lacking or useless (runtime/spu/spu_channels.c).\nerror: could not build fake ancestor\nhint: Use 'git am --show-current-patch=diff' to see the failed patch\nhint: When you have resolved this problem, run \"git am --continue\".\nhint: If you prefer to skip this patch, run \"git a"
+  },
+  {
+    "patch": "0044-Promote-IRQ-poll-for-SPU-task-completion-patch-0044.patch",
+    "subject": "Promote IRQ poll for SPU task completion (patch 0044)",
+    "status": "CONFLICT",
+    "cite": null,
+    "conflicts": [
+      "tools/spu_lifter.py"
+    ],
+    "err": "error: Failed to merge in the changes.\nhint: Use 'git am --show-current-patch=diff' to see the failed patch\nhint: When you have resolved this problem, run \"git am --continue\".\nhint: If you prefer to skip this patch, run \"git am --skip\" instead.\nhint: To restore the original branch and stop patching,"
+  },
+  {
+    "patch": "0045-Fix-syntax-errors-resolve-conflict-markers-and-resto.patch",
+    "subject": "Fix syntax errors, resolve conflict markers, and",
+    "status": "CONFLICT",
+    "cite": null,
+    "conflicts": [],
+    "err": "error: sha1 information is lacking or useless (libs/video/rsx_live_draw.c).\nerror: could not build fake ancestor\nhint: Use 'git am --show-current-patch=diff' to see the failed patch\nhint: When you have resolved this problem, run \"git am --continue\".\nhint: If you prefer to skip this patch, run \"git a"
+  },
+  {
+    "patch": "0046-Restore-rsx_fp_texture_expand_units-for-rsx_draw_eng.patch",
+    "subject": "Restore rsx_fp_texture_expand_units for rsx_draw_engine",
+    "status": "APPLIED_CLEAN",
+    "cite": null,
+    "resolution": "Applied cleanly via 3-way merge."
+  },
+  {
+    "patch": "0047-lift_jobmods.py-fix-newline-syntax-error-before-pars.patch",
+    "subject": "lift_jobmods.py: fix newline syntax error before",
+    "status": "CONFLICT",
+    "cite": null,
+    "conflicts": [
+      "tools/lift_jobmods.py"
+    ],
+    "err": "error: Failed to merge in the changes.\nhint: Use 'git am --show-current-patch=diff' to see the failed patch\nhint: When you have resolved this problem, run \"git am --continue\".\nhint: If you prefer to skip this patch, run \"git am --skip\" instead.\nhint: To restore the original branch and stop patching,"
+  },
+  {
+    "patch": "0048-diagnostics.patch",
+    "subject": "0048-diagnostics",
+    "status": "CONFLICT",
+    "cite": null,
+    "conflicts": [],
+    "err": "error: No valid patches in input (allow with \"--allow-empty\")\n"
+  },
+  {
+    "patch": "0049-spu-stack-unwind.patch",
+    "subject": "feat(spu): unwind repeating spu_drain_call frames via clean C",
+    "status": "CONFLICT",
+    "cite": null,
+    "conflicts": [],
+    "err": "error: sha1 information is lacking or useless (runtime/spu/spu_drain.c).\nerror: could not build fake ancestor\nhint: Use 'git am --show-current-patch=diff' to see the failed patch\nhint: When you have resolved this problem, run \"git am --continue\".\nhint: If you prefer to skip this patch, run \"git am -"
+  },
+  {
+    "patch": "0050-fios-cache-modes.patch",
+    "subject": "0050-fios-cache-modes",
+    "status": "CONFLICT",
+    "cite": null,
+    "conflicts": [],
+    "err": "error: No valid patches in input (allow with \"--allow-empty\")\n"
+  },
+  {
+    "patch": "0051-task5-mfc-diag.patch",
+    "subject": "0051-task5-mfc-diag",
+    "status": "CONFLICT",
+    "cite": null,
+    "conflicts": [],
+    "err": "error: No valid patches in input (allow with \"--allow-empty\")\n"
+  },
+  {
+    "patch": "0052-spu-cycle-state-preserve-spurs-accounting.patch",
+    "subject": "0052-spu-cycle-state-preserve-spurs-accounting",
+    "status": "CONFLICT",
+    "cite": null,
+    "conflicts": [],
+    "err": "error: No valid patches in input (allow with \"--allow-empty\")\n"
+  },
+  {
+    "patch": "0053-fix-spurs-pm-poll-and-dma.patch",
+    "subject": "0053-fix-spurs-pm-poll-and-dma",
+    "status": "CONFLICT",
+    "cite": null,
+    "conflicts": [],
+    "err": "error: No valid patches in input (allow with \"--allow-empty\")\n"
+  },
+  {
+    "patch": "0054-spurs-lane-preemption-idle-wake.patch",
+    "subject": "0054-spurs-lane-preemption-idle-wake",
+    "status": "CONFLICT",
+    "cite": null,
+    "conflicts": [],
+    "err": "error: No valid patches in input (allow with \"--allow-empty\")\n"
+  },
+  {
+    "patch": "0055-spurs-lane-preemption-idle-wake-and-revert-fake-fios.patch",
+    "subject": "0055-spurs-lane-preemption-idle-wake-and-revert-fake-fios",
+    "status": "CONFLICT",
+    "cite": null,
+    "conflicts": [],
+    "err": "error: No valid patches in input (allow with \"--allow-empty\")\n"
+  },
+  {
+    "patch": "0056-cellGame-cellSaveData-free-space-floor.patch",
+    "subject": "fix(cellGame,cellSaveData): ensure 10 GB free space floor to",
+    "status": "CONFLICT",
+    "cite": null,
+    "conflicts": [],
+    "err": "error: patch failed: libs/system/cellSaveData.c:319\nerror: libs/system/cellSaveData.c: patch does not apply\nerror: Did you hand edit your patch?\nIt does not apply to blobs recorded in its index.\nhint: Use 'git am --show-current-patch=diff' to see the failed patch\nhint: When you have resolved this pr"
+  },
+  {
+    "patch": "0056-fix-spurs-add-workload-poll-thread-yield-and-SPU-que.patch",
+    "subject": "fix(spurs): add workload poll thread yield and SPU",
+    "status": "CONFLICT",
+    "cite": null,
+    "conflicts": [],
+    "err": "error: patch failed: runtime/spu/spu_channels.c:511\nerror: runtime/spu/spu_channels.c: patch does not apply\nerror: Did you hand edit your patch?\nIt does not apply to blobs recorded in its index.\nhint: Use 'git am --show-current-patch=diff' to see the failed patch\nhint: When you have resolved this pr"
+  },
+  {
+    "patch": "0057-spu-sn-defer-per-context.patch",
+    "subject": "fix(spu): per-context sn_defer and fallback interrupt target",
+    "status": "CONFLICT",
+    "cite": null,
+    "conflicts": [],
+    "err": "error: patch failed: runtime/spu/spu_dma.h:804\nFalling back to direct application...\nerror: patch failed: runtime/spu/spu_dma.h:804\nerror: runtime/spu/spu_dma.h: patch does not apply\nerror: patch failed: runtime/spu/spu_drain.c:313\nFalling back to direct application...\nerror: patch failed: runtime/s"
+  },
+  {
+    "patch": "0057-telemetry-track-g_spu_yield_count-per-lane-and-log-l.patch",
+    "subject": "telemetry: track g_spu_yield_count per lane and log",
+    "status": "CONFLICT",
+    "cite": null,
+    "conflicts": [],
+    "err": "error: patch failed: runtime/spu/spu_channels.c:509\nerror: runtime/spu/spu_channels.c: patch does not apply\nerror: Did you hand edit your patch?\nIt does not apply to blobs recorded in its index.\nhint: Use 'git am --show-current-patch=diff' to see the failed patch\nhint: When you have resolved this pr"
+  },
+  {
+    "patch": "0058-spu-shadow-unwind-bound-depth.patch",
+    "subject": "0058-spu-shadow-unwind-bound-depth",
+    "status": "CONFLICT",
+    "cite": null,
+    "conflicts": [],
+    "err": "error: patch failed: runtime/spu/spu_drain.c:1\nFalling back to direct application...\nerror: patch failed: runtime/spu/spu_drain.c:1\nerror: runtime/spu/spu_drain.c: patch does not apply\n"
+  },
+  {
+    "patch": "0059-fs-writable-mounts-mkdir-p.patch",
+    "subject": "0059-fs-writable-mounts-mkdir-p",
+    "status": "CONFLICT",
+    "cite": null,
+    "conflicts": [],
+    "err": "error: patch failed: runtime/ppu/ppu_fs.cpp:126\nFalling back to direct application...\nerror: patch failed: runtime/ppu/ppu_fs.cpp:126\nerror: runtime/ppu/ppu_fs.cpp: patch does not apply\n"
+  },
+  {
+    "patch": "0060-window-wide-title-opt-in-watchdog-lock-silence.patch",
+    "subject": "0060-window-wide-title-opt-in-watchdog-lock-silence",
+    "status": "CONFLICT",
+    "cite": null,
+    "conflicts": [],
+    "err": "error: patch failed: libs/video/rsx_d3d12_backend.c:5122\nFalling back to direct application...\nerror: patch failed: libs/video/rsx_d3d12_backend.c:5122\nerror: libs/video/rsx_d3d12_backend.c: patch does not apply\nerror: patch failed: libs/video/rsx_host_window.h:77\nFalling back to direct application."
+  },
+  {
+    "patch": "0061-spurs32-spu-lane-telemetry-wws-gate.patch",
+    "subject": "0061-spurs32-spu-lane-telemetry-wws-gate",
+    "status": "CONFLICT",
+    "cite": null,
+    "conflicts": [],
+    "err": "error: No valid patches in input (allow with \"--allow-empty\")\n"
+  },
+  {
+    "patch": "0062-spurs-audit-guard-and-cellspurs2.patch",
+    "subject": "0062-spurs-audit-guard-and-cellspurs2",
+    "status": "CONFLICT",
+    "cite": null,
+    "conflicts": [],
+    "err": "error: No valid patches in input (allow with \"--allow-empty\")\n"
+  }
+]

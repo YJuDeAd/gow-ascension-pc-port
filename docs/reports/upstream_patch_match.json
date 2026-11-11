@@ -1,0 +1,322 @@
+[
+  {
+    "file": "0001-cellSpurs-the-second-generation-entry-points-God-of-.patch",
+    "subject": "cellSpurs: the second-generation entry points God of",
+    "upstream": null
+  },
+  {
+    "file": "0002-cellGamePatchCheck-and-LWCOND_TRACE.patch",
+    "subject": "cellGamePatchCheck, and LWCOND_TRACE",
+    "upstream": null
+  },
+  {
+    "file": "0003-cellSpurs-_cellSpursLFQueuePushBody-and-spu_signal_p.patch",
+    "subject": "cellSpurs: _cellSpursLFQueuePushBody and",
+    "upstream": null
+  },
+  {
+    "file": "0004-Apply-ps3recomp-0004-edge-zlib-task2.patch.patch",
+    "subject": "Apply ps3recomp-0004-edge-zlib-task2.patch",
+    "upstream": null
+  },
+  {
+    "file": "0005-Apply-ps3recomp-0005-gcm-offset-table.patch.patch",
+    "subject": "Apply ps3recomp-0005-gcm-offset-table.patch",
+    "upstream": null
+  },
+  {
+    "file": "0006-Apply-ps3recomp-0006-edge-zlib-skip.patch.patch",
+    "subject": "Apply ps3recomp-0006-edge-zlib-skip.patch",
+    "upstream": null
+  },
+  {
+    "file": "0007-Apply-ps3recomp-0007-gcm-park-wait.patch.patch",
+    "subject": "Apply ps3recomp-0007-gcm-park-wait.patch",
+    "upstream": null
+  },
+  {
+    "file": "0008-Apply-ps3recomp-0008-spurs2-32-workloads.patch.patch",
+    "subject": "Apply ps3recomp-0008-spurs2-32-workloads.patch",
+    "upstream": null
+  },
+  {
+    "file": "0009-Apply-ps3recomp-0009-spurs-spu-diagnostics.patch.patch",
+    "subject": "Apply ps3recomp-0009-spurs-spu-diagnostics.patch",
+    "upstream": null
+  },
+  {
+    "file": "0010-Apply-ps3recomp-0010-macos-window-frame-dump.patch.patch",
+    "subject": "Apply ps3recomp-0010-macos-window-frame-dump.patch",
+    "upstream": null
+  },
+  {
+    "file": "0011-Apply-ps3recomp-0011-spurs-temparea-ready-level.patc.patch",
+    "subject": "Apply ps3recomp-0011-spurs-temparea-ready-level.patch",
+    "upstream": null
+  },
+  {
+    "file": "0012-Apply-ps3recomp-0012-spu-evlog.patch.patch",
+    "subject": "Apply ps3recomp-0012-spu-evlog.patch",
+    "upstream": null
+  },
+  {
+    "file": "0013-Apply-ps3recomp-0013-gcm-park-grace-jobapi-log.patch.patch",
+    "subject": "Apply ps3recomp-0013-gcm-park-grace-jobapi-log.patch",
+    "upstream": null
+  },
+  {
+    "file": "0014-Apply-ps3recomp-0014-spu-commit-log.patch.patch",
+    "subject": "Apply ps3recomp-0014-spu-commit-log.patch",
+    "upstream": null
+  },
+  {
+    "file": "0015-Apply-ps3recomp-0015-taskset-bitset-lockline.patch.patch",
+    "subject": "Apply ps3recomp-0015-taskset-bitset-lockline.patch",
+    "upstream": null
+  },
+  {
+    "file": "0016-Apply-ps3recomp-0016-gcm-acquire-wait-flip-pace-diag.patch",
+    "subject": "Apply",
+    "upstream": "e3b61d8b Merge PR #466: hand rsx_state only the methods with outside effects (@tekulvw)"
+  },
+  {
+    "file": "0017-Apply-ps3recomp-0017-gcm-park-spu-hold.patch.patch",
+    "subject": "Apply ps3recomp-0017-gcm-park-spu-hold.patch",
+    "upstream": null
+  },
+  {
+    "file": "0018-Apply-ps3recomp-0018-null-read-per-function.patch.patch",
+    "subject": "Apply ps3recomp-0018-null-read-per-function.patch",
+    "upstream": null
+  },
+  {
+    "file": "0019-Apply-ps3recomp-0019-spurs-taskset2-task-starts.patc.patch",
+    "subject": "Apply ps3recomp-0019-spurs-taskset2-task-starts.patch",
+    "upstream": null
+  },
+  {
+    "file": "0020-Apply-ps3recomp-0020-watchdog-regs-dump-unwind.patch.patch",
+    "subject": "Apply ps3recomp-0020-watchdog-regs-dump-unwind.patch",
+    "upstream": null
+  },
+  {
+    "file": "0021-Apply-ps3recomp-0021-live-draw-x16-srgb-ddx.patch.patch",
+    "subject": "Apply ps3recomp-0021-live-draw-x16-srgb-ddx.patch",
+    "upstream": null
+  },
+  {
+    "file": "0022-Apply-ps3recomp-0022-vdec-ex-movie-perf-overlay-jobm.patch",
+    "subject": "Apply",
+    "upstream": "e3b61d8b Merge PR #466: hand rsx_state only the methods with outside effects (@tekulvw)"
+  },
+  {
+    "file": "0023-Apply-ps3recomp-0023-spu-pic-fragments-interp-rejoin.patch",
+    "subject": "Apply",
+    "upstream": "e3b61d8b Merge PR #466: hand rsx_state only the methods with outside effects (@tekulvw)"
+  },
+  {
+    "file": "0024-Apply-ps3recomp-0024-spu-x86-sse-float-frame-chain-t.patch",
+    "subject": "Apply",
+    "upstream": "e3b61d8b Merge PR #466: hand rsx_state only the methods with outside effects (@tekulvw)"
+  },
+  {
+    "file": "0025-Apply-ps3recomp-0025-vblank-qpc-callbacks-movie-diag.patch",
+    "subject": "Apply",
+    "upstream": "e3b61d8b Merge PR #466: hand rsx_state only the methods with outside effects (@tekulvw)"
+  },
+  {
+    "file": "0026-Apply-ps3recomp-0026-spurs-wake-on-gpu-report.patch.patch",
+    "subject": "Apply ps3recomp-0026-spurs-wake-on-gpu-report.patch",
+    "upstream": null
+  },
+  {
+    "file": "0027-Apply-ps3recomp-0027-sse-ops-interp-ed-job-hist.patc.patch",
+    "subject": "Apply ps3recomp-0027-sse-ops-interp-ed-job-hist.patch",
+    "upstream": null
+  },
+  {
+    "file": "0028-Apply-ps3recomp-0028-spu-shadow-nolift-default.patch.patch",
+    "subject": "Apply ps3recomp-0028-spu-shadow-nolift-default.patch",
+    "upstream": null
+  },
+  {
+    "file": "0029-Apply-ps3recomp-0029-report-hold-missed-wake-vdec-he.patch",
+    "subject": "Apply",
+    "upstream": "e3b61d8b Merge PR #466: hand rsx_state only the methods with outside effects (@tekulvw)"
+  },
+  {
+    "file": "0030-Apply-ps3recomp-0030-host-window-language-mods.patch.patch",
+    "subject": "Apply ps3recomp-0030-host-window-language-mods.patch",
+    "upstream": null
+  },
+  {
+    "file": "0031-Apply-ps3recomp-0031-spu-fragments-by-content.patch.patch",
+    "subject": "Apply ps3recomp-0031-spu-fragments-by-content.patch",
+    "upstream": null
+  },
+  {
+    "file": "0032-Apply-ps3recomp-0032-spu-fast-fp-mode.patch.patch",
+    "subject": "Apply ps3recomp-0032-spu-fast-fp-mode.patch",
+    "upstream": null
+  },
+  {
+    "file": "0033-Apply-ps3recomp-0033-sse-byte-ops-fma-exptex-rsx-cop.patch",
+    "subject": "Apply",
+    "upstream": "e3b61d8b Merge PR #466: hand rsx_state only the methods with outside effects (@tekulvw)"
+  },
+  {
+    "file": "0034-Apply-ps3recomp-0034-usleep-hr-timer.patch.patch",
+    "subject": "Apply ps3recomp-0034-usleep-hr-timer.patch",
+    "upstream": null
+  },
+  {
+    "file": "0035-Apply-ps3recomp-0035-tex8-tex9-fp-probe.patch.patch",
+    "subject": "Apply ps3recomp-0035-tex8-tex9-fp-probe.patch",
+    "upstream": null
+  },
+  {
+    "file": "0036-Apply-ps3recomp-0036-persp-corr-rrc-replay-noirq-pro.patch",
+    "subject": "Apply",
+    "upstream": "e3b61d8b Merge PR #466: hand rsx_state only the methods with outside effects (@tekulvw)"
+  },
+  {
+    "file": "0037-Apply-ps3recomp-0037-taskset-bitset-lock-rejoin-call.patch",
+    "subject": "Apply",
+    "upstream": "e3b61d8b Merge PR #466: hand rsx_state only the methods with outside effects (@tekulvw)"
+  },
+  {
+    "file": "0038-Apply-ps3recomp-0038-inline-guest-stores.patch.patch",
+    "subject": "Apply ps3recomp-0038-inline-guest-stores.patch",
+    "upstream": null
+  },
+  {
+    "file": "0039-Apply-ps3recomp-0039-half2-tex-shadow-compare.patch.patch",
+    "subject": "Apply ps3recomp-0039-half2-tex-shadow-compare.patch",
+    "upstream": null
+  },
+  {
+    "file": "0040-Apply-ps3recomp-0040-upload-reserve-capture-draws-me.patch",
+    "subject": "Apply",
+    "upstream": "e3b61d8b Merge PR #466: hand rsx_state only the methods with outside effects (@tekulvw)"
+  },
+  {
+    "file": "0041-Apply-ps3recomp-0041-dispatch-hooks-kernel-spin.patc.patch",
+    "subject": "Apply ps3recomp-0041-dispatch-hooks-kernel-spin.patch",
+    "upstream": null
+  },
+  {
+    "file": "0042-Perf-panel-SPU-RSX-and-report-hold-figures-hold-only.patch",
+    "subject": "Perf panel: SPU, RSX and report-hold figures; hold only",
+    "upstream": null
+  },
+  {
+    "file": "0043-Live-draw-cache-resident-host-allocations-for-guest-.patch",
+    "subject": "Live draw: cache resident host allocations for guest",
+    "upstream": null
+  },
+  {
+    "file": "0044-Promote-IRQ-poll-for-SPU-task-completion-patch-0044.patch",
+    "subject": "Promote IRQ poll for SPU task completion (patch 0044)",
+    "upstream": null
+  },
+  {
+    "file": "0045-Fix-syntax-errors-resolve-conflict-markers-and-resto.patch",
+    "subject": "Fix syntax errors, resolve conflict markers, and",
+    "upstream": null
+  },
+  {
+    "file": "0046-Restore-rsx_fp_texture_expand_units-for-rsx_draw_eng.patch",
+    "subject": "Restore rsx_fp_texture_expand_units for rsx_draw_engine",
+    "upstream": null
+  },
+  {
+    "file": "0047-lift_jobmods.py-fix-newline-syntax-error-before-pars.patch",
+    "subject": "lift_jobmods.py: fix newline syntax error before",
+    "upstream": null
+  },
+  {
+    "file": "0048-diagnostics.patch",
+    "subject": "0048-diagnostics.patch",
+    "upstream": null
+  },
+  {
+    "file": "0049-spu-stack-unwind.patch",
+    "subject": "feat(spu): unwind repeating spu_drain_call frames via clean C",
+    "upstream": null
+  },
+  {
+    "file": "0050-fios-cache-modes.patch",
+    "subject": "0050-fios-cache-modes.patch",
+    "upstream": null
+  },
+  {
+    "file": "0051-task5-mfc-diag.patch",
+    "subject": "0051-task5-mfc-diag.patch",
+    "upstream": null
+  },
+  {
+    "file": "0052-spu-cycle-state-preserve-spurs-accounting.patch",
+    "subject": "0052-spu-cycle-state-preserve-spurs-accounting.patch",
+    "upstream": null
+  },
+  {
+    "file": "0053-fix-spurs-pm-poll-and-dma.patch",
+    "subject": "0053-fix-spurs-pm-poll-and-dma.patch",
+    "upstream": null
+  },
+  {
+    "file": "0054-spurs-lane-preemption-idle-wake.patch",
+    "subject": "0054-spurs-lane-preemption-idle-wake.patch",
+    "upstream": null
+  },
+  {
+    "file": "0055-spurs-lane-preemption-idle-wake-and-revert-fake-fios.patch",
+    "subject": "0055-spurs-lane-preemption-idle-wake-and-revert-fake-fios.patch",
+    "upstream": null
+  },
+  {
+    "file": "0056-cellGame-cellSaveData-free-space-floor.patch",
+    "subject": "fix(cellGame,cellSaveData): ensure 10 GB free space floor to",
+    "upstream": null
+  },
+  {
+    "file": "0056-fix-spurs-add-workload-poll-thread-yield-and-SPU-que.patch",
+    "subject": "fix(spurs): add workload poll thread yield and SPU",
+    "upstream": null
+  },
+  {
+    "file": "0057-spu-sn-defer-per-context.patch",
+    "subject": "fix(spu): per-context sn_defer and fallback interrupt target",
+    "upstream": null
+  },
+  {
+    "file": "0057-telemetry-track-g_spu_yield_count-per-lane-and-log-l.patch",
+    "subject": "telemetry: track g_spu_yield_count per lane and log",
+    "upstream": null
+  },
+  {
+    "file": "0058-spu-shadow-unwind-bound-depth.patch",
+    "subject": "0058-spu-shadow-unwind-bound-depth.patch",
+    "upstream": null
+  },
+  {
+    "file": "0059-fs-writable-mounts-mkdir-p.patch",
+    "subject": "0059-fs-writable-mounts-mkdir-p.patch",
+    "upstream": null
+  },
+  {
+    "file": "0060-window-wide-title-opt-in-watchdog-lock-silence.patch",
+    "subject": "0060-window-wide-title-opt-in-watchdog-lock-silence.patch",
+    "upstream": null
+  },
+  {
+    "file": "0061-spurs32-spu-lane-telemetry-wws-gate.patch",
+    "subject": "0061-spurs32-spu-lane-telemetry-wws-gate.patch",
+    "upstream": null
+  },
+  {
+    "file": "0062-spurs-audit-guard-and-cellspurs2.patch",
+    "subject": "0062-spurs-audit-guard-and-cellspurs2.patch",
+    "upstream": null
+  }
+]
