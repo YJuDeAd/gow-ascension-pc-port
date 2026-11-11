@@ -227,11 +227,7 @@ extern "C" void ascension_apply_defaults(void)
     set_default("GCM_ROUND_GATE", "9BAC30");
     set_default("GCM_ROUND_RING", "io:1ED00,18");
     set_default("SPURS_READY_LEVEL", "1");
-    if (getenv("GOW_REVERT_DDE3F83")) {
-        set_default("SPURS_MAXCONT", "3=1,13=3,15=5,16=5,17=5");
-    } else {
-        set_default("SPURS_MAXCONT", "3=1,9=5,10=5,11=5,12=5,13=3,15=5,16=5,17=5,18=5");
-    }
+    set_default("SPURS_MAXCONT", "3=5,13=3,15=5,16=5,17=5");
     set_default("SPURS_IDLE_BACKOFF_MAX", "0");
     set_default("SPURS_PIN", "1");
     set_default("PS3_PIN_PPU", "1");
