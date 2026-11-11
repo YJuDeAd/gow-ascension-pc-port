@@ -1,0 +1,282 @@
+From b9792c2417f357207f9b6b1c6c6867df17403e9d Mon Sep 17 00:00:00 2001
+From: YJuDeAd <robinrashi@gmail.com>
+Date: Thu, 12 Nov 2026 01:10:45 +0530
+Subject: [PATCH 40/49] Fix syntax errors, resolve conflict markers, and
+ restore missing struct members
+
+# Conflicts:
+#	libs/video/rsx_fp_decompiler.c
+#	libs/video/rsx_live_draw.c
+#	runtime/spu/spu_channels.c
+#	runtime/spu/spu_workload.c
+---
+ libs/video/rsx_fp_decompiler.c |  16 +---
+ libs/video/rsx_live_draw.c     | 148 +++------------------------------
+ runtime/spu/spu_workload.c     |  37 ++++-----
+ 3 files changed, 30 insertions(+), 171 deletions(-)
+
+diff --git a/libs/video/rsx_fp_decompiler.c b/libs/video/rsx_fp_decompiler.c
+index 80da192f..f82d15e3 100644
+--- a/libs/video/rsx_fp_decompiler.c
++++ b/libs/video/rsx_fp_decompiler.c
+@@ -686,19 +686,13 @@ static int rsx_fp_decompile_internal(
+     const u32 xyz_mask = tex_cube_mask | vol_mask;
+     const u32 per_unit = xyz_mask;
+     const u32 gamma_units = rsx_fp_texture_gamma_units(ucode, max_bytes, gamma_masks);
+-    const u32 expand_units = rsx_fp_texture_expand_units(ucode, max_bytes, expand_masks);
+-    /* _bx2 (EXP_TEX) fetches expand whatever unit they read: the modifier is
+-     * the instruction's, not the texture's. inFAMOUS 2 stores tangent-space
+-     * normal maps and its occlusion-cone LUTs unsigned and reads them with
+-     * TEX_bx2; about a quarter of its fragment programs do. */
+-    const u32 bx2_units = rsx_fp_texture_bx2_units(ucode, max_bytes);
+ 
+     const u32 sampled_units = rsx_fp_texture_units(ucode, max_bytes);
+     if (shadow) for (u32 u = 0; u < 16; u++)
+         if ((sampled_units & (1u << u)) && shadow[u].enabled &&
+             (shadow[u].enabled != 1 || shadow[u].func > 7 ||
+              shadow[u].linear > 1 || shadow[u].unnormalized > 1 ||
+-             (tex_sep_mask & (1u << u)))) {
++             (per_unit & (1u << u)))) {
+             static u32 n_layout_errors;
+             if (PS3_LOG_FIRST(n_layout_errors, 32))
+                 fprintf(stderr, "[RSX fp] unsupported depth comparison layout on texture unit %u\n", u);
+@@ -1388,14 +1382,8 @@ static int rsx_fp_decompile_internal(
+     }
+     if (shadow) for (u32 u = 0; u < 16; u++)
+         if ((sampled_units & (1u << u)) && shadow[u].enabled)
+-            fp_shadow_helper(&p, u, tex_sep_mask, &shadow[u]);
+-    /* Also wherever the body calls one: the unit scanners above skip an inline
+-     * constant only after a non-branch instruction, the body walk after any,
+-     * so a program with branches can desynchronise them. God of War:
+-     * Ascension's level had programs that called _rsx_expand_input with no
+-     * definition and failed to compile. */
++            fp_shadow_helper(&p, u, per_unit, &shadow[u]);
+     if (gamma_units || strstr(o.p, "_rsx_gamma_input(")) fp_gamma_helper(&p);
+-    if (expand_units || bx2_units || strstr(o.p, "_rsx_expand_input(")) fp_expand_helper(&p);
+     /* NV40 pack/unpack. A packed word travels on in a float's bits, so the
+      * packs bitcast and the unpacks bitcast back; the sRGB forms follow
+      * RPCS3's _builtin_pkg/_builtin_upg (linear_to_srgb, srgb_to_linear).
+diff --git a/libs/video/rsx_live_draw.c b/libs/video/rsx_live_draw.c
+index 26d3522e..516527dd 100644
+--- a/libs/video/rsx_live_draw.c
++++ b/libs/video/rsx_live_draw.c
+@@ -162,7 +162,13 @@ extern volatile unsigned long long g_yz_auto_start_tick;
+ /* Top-left windows of a surface for smaller textures that alias it (see surface_window). */
+ #define LD_SWIN_PER       2
+ #define SRV_SURF_WIN_BASE (SRV_FEEDBACK_BASE + MAX_SURFACES)
+-#define SRV_CPU_HEAP_SLOTS (SRV_SURF_WIN_BASE + MAX_SURFACES * LD_SWIN_PER)
++/* A zeta's depth packed as the bytes an ARGB8 read of it sees (zdepth_pack). */
++#define SRV_ZPACK_BASE    (SRV_SURF_WIN_BASE + MAX_SURFACES * LD_SWIN_PER)
++#define UAV_ZPACK_BASE    (SRV_ZPACK_BASE + MAX_SURFACES)
++/* A colour surface read back as Y16_X16_FLOAT (surface_half2_srv). */
++#define SRV_HALF2_BASE    (UAV_ZPACK_BASE + MAX_SURFACES)
++#define UAV_HALF2_BASE    (SRV_HALF2_BASE + MAX_SURFACES)
++#define SRV_CPU_HEAP_SLOTS (UAV_HALF2_BASE + MAX_SURFACES)
+ #define SRV_TABLE_SIZE   16
+ #define SRV_RING_TABLES  4096
+ 
+@@ -212,143 +218,9 @@ typedef struct {
+     /* Top-left windows of the surface for smaller aliasing textures (see surface_window). */
+     struct { ID3D12Resource* tex; ID3D12Resource* src; u32 w, h, wgen, used; } swin[LD_SWIN_PER];
+     u32 swin_wgen;            /* bumped by every write into the surface; a window older than it is recopied */
+-#if !defined(YZ_PERF_CLEAN)
+-    u32 resource_serial;
+-    u32 last_write_generation;
+-    u32 last_write_kind;
+-    u32 last_create_generation;
+-    u32 last_draw_generation;
+-    u32 last_clear_generation;
+-    u32 last_copy_generation;
+-    u32 last_blit_generation;
+-    u32 last_resolve_generation;
+-    u32 last_other_generation;
+-    u32 last_guest_blit_generation;
+-    u32 last_present_copy_generation;
+-#endif
+-} surface_t;
+-typedef struct {
+-    u32 location, offset, pitch, width, height;
+-    int valid;
+-    int resolve_src;   /* surface slot + 1 a scaled blit resolves into this buffer; 0 = none */
+-} display_buffer_t;
+-typedef struct {
+-    u32 location, offset;
+-    ID3D12Resource* tex;
+-    ID3D12Resource* snapshot;
+-    u32 w, h;
+-    u32 snapshot_w, snapshot_h;
+-    D3D12_RESOURCE_STATES snapshot_state;
+-    int cleared;
+-    int had_write;
+-    int snapshot_valid;
+-    u64 draws;
+-    u64 depth_test_draws;
+-    u64 depth_write_draws;
+-    u64 depth_both_draws;
+-    int reject_logged;
+-} zdepth_t;
+-typedef struct {
+-    u32 location, offset, format, width, height, pitch, remap;
+-    u32 cubemap;
+-    ID3D12Resource* tex;
+-    u64 content_hash;
+-    u32 last_hash_frame;
+-    u64 last_use_serial;
+-} texcache_t;
+-typedef struct {
+-    u32 location, offset, format, width, height, pitch;
+-    ID3D12Resource* tex;
+-    u64 content_hash;
+-    u32 last_hash_frame;
+-} vtexcache_t;
+-typedef struct { u64 key; ID3D12PipelineState* pso; } psocache_t;
+-typedef struct {
+-    u64 hash;
+-    u32 source_length;
+-    char* source;
+-    ID3DBlob* blob;
+-} shader_blob_t;
+-typedef struct {
+-    shader_blob_t entries[MAX_SHADER_BLOBS];
+-    u32 count;
+-    u64 retained_source_bytes;
+-    u64 retained_blob_bytes;
+-} shader_blob_cache_t;
+-typedef struct {
+-    u32 magic;
+-    u32 version;
+-    u32 stage;
+-    u32 source_length;
+-    u32 blob_length;
+-    u32 reserved;
+-    u64 source_hash;
+-} shader_disk_cache_header;
+-
+-typedef struct {
+-    int              enabled;    /* RSX_DRAW resolved                     */
+-    int              ready;      /* device + resources up                    */
+-
+-    ID3D12Device*              dev;
+-    ID3D12CommandQueue*        queue;
+-    ID3D12CommandAllocator*    alloc;
+-    ID3D12GraphicsCommandList* list;
+-    ID3D12Fence*               fence;
+-    HANDLE                     fence_event;
+-    u64                        fence_value;
+-
+-    IDXGISwapChain3*           swap;
+-    ID3D12Resource*            backbuf[LD_SWAP_BUFFERS];
+-    ID3D12DescriptorHeap*      rtv_heap;
+-    u32                        rtv_step;
+-
+-    surface_t                  surfaces[MAX_SURFACES];
+-    u32                        n_surfaces;
+-    display_buffer_t           display_buffers[8];
+-
+-    ID3D12DescriptorHeap*      dsv_heap;
+-    u32                        dsv_step;
+-    ID3D12Resource*            depth;
+-    int                        depth_cleared;
+-    zdepth_t                   zdepths[MAX_SURFACES];
+-    u32                        n_zdepths;
+-
+-    ID3D12DescriptorHeap*      srv_cpu_heap;
+-    ID3D12DescriptorHeap*      srv_heap;
+-    u32                        srv_step, srv_ring_used;
+-    ID3D12Resource*            white_tex;
+-    texcache_t                 textures[MAX_TEXTURES];
+-    u32                        n_textures;
+-    vtexcache_t                vtex[MAX_VTEX];
+-    u32                        n_vtex;
+-    ID3D12Resource*            retired_textures[MAX_RETIRED_TEXTURES];
+-    u32                        n_retired_textures;
+-    ID3D12Resource*            upload;
+-    u8*                        upload_mapped;
+-    u32                        upload_used;
+-
+-    /* Optional host-movie UI compositor. The guest keeps rendering captions
+-     * into its ordinary offscreen surface. Each guest flip reads back the
+-     * latest sparse overlay for blending over each 30 Hz host movie frame. */
+-    ID3D12Resource*            movie_upload;
+-    u8*                        movie_upload_mapped;
+-    ID3D12Resource*            movie_overlay_readback;
+-    u8*                        movie_overlay_rgba;
+-    u8*                        movie_overlay_mask;
+-    u32                        movie_overlay_pitch;
+-    int                        movie_overlay_valid;
+-    u64                        movie_overlay_frames;
+-
+-    ID3D12DescriptorHeap*      smp_cpu_heap;
+-    ID3D12DescriptorHeap*      smp_heap;
+-    u32                        smp_step, smp_ring_used;
+-    u32                        smp_ring_slots[SMP_RING_TABLES][SMP_TABLE_SIZE];
+-    u64                        smp_keys[SMP_CACHE_SLOTS];
+-    u32                        n_samplers;
+-
+-    ID3D12RootSignature*       rootsig_x;
+-    ID3D12RootSignature*       depth_snapshot_rootsig;
+-    ID3D12PipelineState*       depth_snapshot_pso;
++    ID3D12RootSignature*       depth_pack_rootsig;
++    ID3D12PipelineState*       depth_pack_pso;
++    ID3D12PipelineState*       half2_pso;     /* shares depth_pack_rootsig */
+     ID3D12RootSignature*       downsample_rootsig;
+     ID3D12PipelineState*       downsample_pso[4];
+     DXGI_FORMAT                downsample_fmt[4];
+diff --git a/runtime/spu/spu_workload.c b/runtime/spu/spu_workload.c
+index 20c12e31..ac8f8687 100644
+--- a/runtime/spu/spu_workload.c
++++ b/runtime/spu/spu_workload.c
+@@ -1385,25 +1385,6 @@ void spu_taskset_signal_task(uint32_t taskset_ea, uint32_t taskId)
+     pthread_cond_broadcast(&s_sig_cv);
+     pthread_mutex_unlock(&s_sig_lock);
+ #endif
+-}
+-
+-/* Signal every parked task whose wait object lies in the 128-byte line
+- * line, whatever its taskset. A queue whose eaSignal names the SPURS
+- * instance rather than a taskset (an LFQueue made on the SPURS) is waited on
+- * through its own line: God of War: Ascension's task waits with the object
+- * 0x15E66A85 on the queue at 0x15E66A80. Returns how many. */
+-int spu_signal_parked_on_line(uint32_t line)
+-{
+-    int n = 0;
+-    for (int i = 0; i < SPU_PARKED_MAX; i++) {
+-        uint64_t k = s_parked[i];
+-        if (!k || !s_parked_obj[i] || (s_parked_obj[i] & ~127u) != (line & ~127u)) continue;
+-        spu_taskset_signal_task((uint32_t)(k >> 32), (uint32_t)(k & 0xFFFFFFFFu) - 1u);
+-        n++;
+-    }
+-    return n;
+-}
+-    spu_taskset_wake_written(NULL);
+     { static int _n = 0; if (PS3_LOG_FIRST(_n, 24))
+         fprintf(stderr, "[spu_workload] signal task %u (taskset 0x%08X)\n",
+                 taskId, taskset_ea); fflush(stderr); }
+@@ -1431,6 +1412,24 @@ int spu_signal_parked_on_line(uint32_t line)
+       } }
+ }
+ 
++/* Signal every parked task whose wait object lies in the 128-byte line
++ * line, whatever its taskset. A queue whose eaSignal names the SPURS
++ * instance rather than a taskset (an LFQueue made on the SPURS) is waited on
++ * through its own line: God of War: Ascension's task waits with the object
++ * 0x15E66A85 on the queue at 0x15E66A80. Returns how many. */
++int spu_signal_parked_on_line(uint32_t line)
++{
++    int n = 0;
++    for (int i = 0; i < SPU_PARKED_MAX; i++) {
++        uint64_t k = s_parked[i];
++        if (!k || !s_parked_obj[i] || (s_parked_obj[i] & ~127u) != (line & ~127u)) continue;
++        spu_taskset_signal_task((uint32_t)(k >> 32), (uint32_t)(k & 0xFFFFFFFFu) - 1u);
++        n++;
++    }
++    if (n) spu_taskset_wake_written(NULL);
++    return n;
++}
++
+ /* A successful PUTLLC/PUTLLUC committed the 128-byte guest line `line`.
+  *
+  * A task signalling another task does it on the SPU, as libspurs does: a
+-- 
+2.48.1.windows.1
+

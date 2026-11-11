@@ -1,0 +1,38 @@
+From 0aaf3cd21768539cd3b02628f13a669312ab66d2 Mon Sep 17 00:00:00 2001
+From: YJuDeAd <robinrashi@gmail.com>
+Date: Thu, 12 Nov 2026 01:11:32 +0530
+Subject: [PATCH 42/49] lift_jobmods.py: fix newline syntax error before
+ parse_args
+
+# Conflicts:
+#	tools/lift_jobmods.py
+---
+ tools/lift_jobmods.py | 11 +++++++++++
+ 1 file changed, 11 insertions(+)
+
+diff --git a/tools/lift_jobmods.py b/tools/lift_jobmods.py
+index 9da3bb4d..aed631d7 100644
+--- a/tools/lift_jobmods.py
++++ b/tools/lift_jobmods.py
+@@ -349,7 +349,18 @@ def main():
+                     help="Pass --merge-chunks to spu_lifter.py: each run of chunks "
+                          "between call targets becomes one C function with gotos "
+                          "instead of chunks linked by trampolines.")
++    ap.add_argument("--extra-funcs-json", default=None, metavar="FILE",
++                    help="Per-module extra function entries: a JSON object "
++                         "{module name: [LS address, ...]}. Every module shares "
++                         "LS 0x4000, so an address one module needs is mid-function "
++                         "in another; the global $LBP_JOBMOD_EXTRA_FUNCS cannot say "
++                         "which. The list is what the runtime's '[spu-smc] microstep "
++                         "... ovl=<image>' lines report for that module's image.")
+     args = ap.parse_args()
++    per_module = {}
++    if args.extra_funcs_json:
++        with open(args.extra_funcs_json) as f:
++            per_module = {k: [hex(int(str(a), 0)) for a in v] for k, v in json.load(f).items()}
+     OUTDIR  = args.out
+     register_c = args.register or os.path.join(OUTDIR, "jobmods_register.c")
+ 
+-- 
+2.48.1.windows.1
+

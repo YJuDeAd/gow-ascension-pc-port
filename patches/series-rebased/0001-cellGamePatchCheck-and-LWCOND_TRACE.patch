@@ -1,0 +1,96 @@
+From d22cfb5c06fef839ed9898dcff3219ab6d6d5418 Mon Sep 17 00:00:00 2001
+From: YJuDeAd <robinrashi@gmail.com>
+Date: Thu, 12 Nov 2026 00:08:23 +0530
+Subject: [PATCH 01/49] cellGamePatchCheck, and LWCOND_TRACE
+
+cellGamePatchCheck answers NOTPATCH, as a disc boot is: God of War:
+Ascension (BCES01741) asks it at boot, and unregistered it had a faked
+answer.
+
+LWCOND_TRACE=1 logs the first wait of each (thread, lwcond) with the
+paired lwmutex, its owner and recursion, and the caller. It is how the
+title's FIOS deadlock was found; the layout fix itself is upstream's
+(#277).
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+
+# Conflicts:
+#	runtime/ppu/ppu_sysprx.cpp
+---
+ libs/system/cellGame.c     | 11 +++++++++++
+ libs/system/cellGame.h     |  1 +
+ runtime/ppu/ppu_sysprx.cpp | 17 +++++++++++++++++
+ 3 files changed, 29 insertions(+)
+
+diff --git a/libs/system/cellGame.c b/libs/system/cellGame.c
+index 2d4a54d4..ddba4c7e 100644
+--- a/libs/system/cellGame.c
++++ b/libs/system/cellGame.c
+@@ -807,6 +807,17 @@ s32 cellGameGetSizeKB(s32* sizeKB)
+     return CELL_OK;
+ }
+ 
++/* cellGamePatchCheck(CellGameContentSize* size, void* reserved): is the title
++ * running from an installed patch? A disc boot is not, and says so with
++ * NOTPATCH, as the boot check already reports a disc (type 1). God of War:
++ * Ascension (BCES01741) asks it at boot; unregistered, it had a faked answer. */
++s32 cellGamePatchCheck(void* size, void* reserved)
++{
++    (void)size; (void)reserved;
++    printf("[cellGame] PatchCheck() -> NOTPATCH (a disc boot)\n");
++    return CELL_GAME_ERROR_NOTPATCH;
++}
++
+ s32 cellGameGetLocalWebContentPath(char* path)
+ {
+     printf("[cellGame] GetLocalWebContentPath()\n");
+diff --git a/libs/system/cellGame.h b/libs/system/cellGame.h
+index d3531fa1..52e087b8 100644
+--- a/libs/system/cellGame.h
++++ b/libs/system/cellGame.h
+@@ -173,6 +173,7 @@ s32 cellGameDeleteGameData(const char* dirName);
+ /* cellGameSetExitParam — see cellGameExec.h for correct signature */
+ 
+ s32 cellGameGetSizeKB(s32* sizeKB);
++s32 cellGamePatchCheck(void* size, void* reserved);
+ 
+ s32 cellGameGetLocalWebContentPath(char* path);
+ 
+diff --git a/runtime/ppu/ppu_sysprx.cpp b/runtime/ppu/ppu_sysprx.cpp
+index fd2c2078..64c6c311 100644
+--- a/runtime/ppu/ppu_sysprx.cpp
++++ b/runtime/ppu/ppu_sysprx.cpp
+@@ -17,6 +17,9 @@
+ #include <stdio.h>
+ #include <stdlib.h>
+ #include <string.h>
++#include <mutex>
++#include <set>
++#include <utility>
+ /* win32_compat.h is <windows.h> on Windows (CRITICAL_SECTION for the real
+  * lwmutex exclusion) and the POSIX shims elsewhere -- Sleep, DWORD, QPC. */
+ #include "../platform/win32_compat.h"
+@@ -427,6 +430,20 @@ static void sys_lwcond_wait(ppu_context* ctx)
+     uint32_t lwcond  = (uint32_t)ctx->gpr[3];
+     uint32_t lwmutex = vm_read32(lwcond + 0x00);
+     struct LwmSlot* sl = lwm_slot(lwmutex);
++    /* LWCOND_TRACE=1: the first wait of each (thread, lwcond): the paired
++     * lwmutex, its owner and recursion as the wait begins, and the caller. A
++     * thread that waits on a condition paired with one mutex while holding
++     * another starves whoever needs the other one. */
++    static const bool trace = getenv("LWCOND_TRACE") != nullptr;
++    if (trace) {
++        static std::mutex seen_lock;
++        static std::set<std::pair<uint32_t, uint32_t>> seen;
++        std::lock_guard<std::mutex> g(seen_lock);
++        if (seen.insert({(uint32_t)ctx->thread_id, lwcond}).second)
++            fprintf(stderr, "[LWCOND] tid=%u wait lwcond=0x%08X lwmutex=0x%08X owner=0x%08X recur=%u timeout=%llu lr=0x%08X\n",
++                    (unsigned)ctx->thread_id, lwcond, lwmutex, vm_read32(lwmutex + LWM_OWNER),
++                    vm_read32(lwmutex + LWM_RECUR), (unsigned long long)ctx->gpr[4], (uint32_t)ctx->lr);
++    }
+     if (sl) {
+         uint32_t own = vm_read32(lwmutex + LWM_OWNER);
+         uint32_t rc  = vm_read32(lwmutex + LWM_RECUR);
+-- 
+2.48.1.windows.1
+

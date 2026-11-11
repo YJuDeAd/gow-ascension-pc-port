@@ -1,0 +1,76 @@
+From e0da5ee51925bd4e5545a4e3704a80625865d837 Mon Sep 17 00:00:00 2001
+From: YJuDeAd <robinrashi@gmail.com>
+Date: Thu, 12 Nov 2026 00:18:04 +0530
+Subject: [PATCH 09/49] Apply ps3recomp-0013-gcm-park-grace-jobapi-log.patch
+
+# Conflicts:
+#	libs/video/cellGcmSys.c
+#	runtime/spu/spu_interp.c
+---
+ libs/video/cellGcmSys.c  |  1 +
+ runtime/spu/spu_interp.c | 23 +++++++++++++++++++++--
+ 2 files changed, 22 insertions(+), 2 deletions(-)
+
+diff --git a/libs/video/cellGcmSys.c b/libs/video/cellGcmSys.c
+index 5fd4a9ba..d545b22c 100644
+--- a/libs/video/cellGcmSys.c
++++ b/libs/video/cellGcmSys.c
+@@ -3023,6 +3023,7 @@ static void gcm_rsx_process_fifo_unlocked(void)
+           }
+       } else burned = 0; }
+ 
++<<<<<<< ours
+     /* A drain stopped on a semaphore acquire (GCM_SEMA_ACQUIRE) holds `get`
+      * on purpose: that is the wait, not a stuck walker, and the acquire's own
+      * bound (GCM_SEMA_ACQUIRE_MS) is what ends it. So is a self-JUMP park,
+diff --git a/runtime/spu/spu_interp.c b/runtime/spu/spu_interp.c
+index 6d63141f..02bf3eab 100644
+--- a/runtime/spu/spu_interp.c
++++ b/runtime/spu/spu_interp.c
+@@ -85,6 +85,25 @@ static void spu_decode1(uint32_t insn, uint32_t pc, spu_ins* d) {
+ #define I   (d.imm)
+ #define PREF(r) ((r)._u32[0])
+ 
++/* SPU_JOBAPI_LOG=1: calls from interpreted job code (LS >= 0x4000) into the
++ * resident policy module below it -- a Wws job's job-API calls -- with the
++ * job module (the word at LS 0x4000), the workload and the argument
++ * registers (first 4000). */
++static void spu_jobapi_log(spu_context* ctx, uint32_t pc, uint32_t tgt)
++{
++    static int s_on = -1; if (s_on < 0) s_on = getenv("SPU_JOBAPI_LOG") ? 1 : 0;
++    if (!s_on || pc < 0x4000u || tgt >= 0x4000u || !ctx->policy_mode) return;
++    static int s_wid = -2; if (s_wid == -2) { const char* w = getenv("SPU_JOBAPI_WID"); s_wid = w ? atoi(w) : -1; }
++    if (s_wid >= 0 && ctx->ls[0x1DF] != (unsigned)s_wid) return;
++    static long n; if (n++ >= 4000) return;
++    const uint8_t* m = ctx->ls + 0x4000;
++    fprintf(stderr, "[jobapi] wid=%u spu=%u mod=%02X%02X%02X%02X pc=0x%05X -> 0x%05X"
++                    " r3=%08X %08X r4=%08X %08X r5=%08X r6=%08X\n",
++            ctx->ls[0x1DF], ctx->ls[0x1CB], m[0], m[1], m[2], m[3], pc, tgt,
++            ctx->gpr[3]._u32[0], ctx->gpr[3]._u32[1], ctx->gpr[4]._u32[0], ctx->gpr[4]._u32[1],
++            ctx->gpr[5]._u32[0], ctx->gpr[6]._u32[0]);
++}
++
+ static int spu_step(spu_context* ctx) {
+     uint32_t pc = ctx->pc, m = pc & SPU_LS_MASK;
+     const uint8_t* p = ctx->ls;
+@@ -281,7 +300,7 @@ static int spu_step(spu_context* ctx) {
+     case SPU_dftsv:  DST = spu_dftsv(A, (int32_t)(d.rb & 0x7F)); break;   /* I7 sits in the rb field */
+     /* control flow */
+     case SPU_br: case SPU_bra: next = d.tgt; break;
+-    case SPU_brsl: case SPU_brasl: DST = spu_link((pc + 4) & 0x3FFFC); next = d.tgt;
++    case SPU_brsl: case SPU_brasl: spu_jobapi_log(ctx, pc, d.tgt); DST = spu_link((pc + 4) & 0x3FFFC); next = d.tgt;
+         { extern void spu_trace_call(uint32_t,uint32_t); spu_trace_call(pc, d.tgt); } break;
+     case SPU_brz:  if (PREF(DST) == 0) next = d.tgt; break;
+     case SPU_brnz: if (PREF(DST) != 0) next = d.tgt; break;
+@@ -296,7 +315,7 @@ static int spu_step(spu_context* ctx) {
+     } while (0)
+     case SPU_bi:   next = PREF(A) & 0x3FFFC; SPU_IED_BITS(); break;
+     case SPU_bisl: { uint32_t tg = PREF(A) & 0x3FFFC;   /* read ra BEFORE the link write: rt may alias ra */
+-        DST = spu_link((pc + 4) & 0x3FFFC); next = tg; SPU_IED_BITS(); break; }
++        spu_jobapi_log(ctx, pc, tg); DST = spu_link((pc + 4) & 0x3FFFC); next = tg; SPU_IED_BITS(); break; }
+     case SPU_bisled: { uint32_t tg = PREF(A) & 0x3FFFC;   /* branch when an enabled event is pending */
+         DST = spu_link((pc + 4) & 0x3FFFC);
+         if ((__atomic_load_n(&ctx->event_status, __ATOMIC_ACQUIRE) & ctx->event_mask) != 0) {
+-- 
+2.48.1.windows.1
+

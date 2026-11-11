@@ -1,0 +1,110 @@
+From fd977933abb32fcbc9ab06586a0d2b1844cc424c Mon Sep 17 00:00:00 2001
+From: YJuDeAd <robinrashi@gmail.com>
+Date: Thu, 12 Nov 2026 00:48:37 +0530
+Subject: [PATCH 28/49] Apply ps3recomp-0032-spu-fast-fp-mode.patch
+
+# Conflicts:
+#	libs/spurs/cellSpurs.c
+#	runtime/spu/spu_channels.c
+#	runtime/spu/spu_helpers.h
+---
+ CMakeLists.txt                   |  9 +++++++++
+ libs/spurs/cellSpurs.c           | 29 ++++++++++++++++++++++++++++-
+ templates/project/CMakeLists.txt | 12 ++++++++++--
+ 3 files changed, 47 insertions(+), 3 deletions(-)
+
+diff --git a/CMakeLists.txt b/CMakeLists.txt
+index 2c170fd5..d9e33fce 100644
+--- a/CMakeLists.txt
++++ b/CMakeLists.txt
+@@ -364,6 +364,15 @@ if(CMAKE_C_COMPILER_ID MATCHES "Clang|GNU")
+         # the runtime's existing ISA requirement so their fast path agrees.
+         target_compile_options(ps3recomp_runtime PUBLIC -msse4.1)
+     endif()
++    # The SPU float fast path (spu_helpers.h) runs with MXCSR rounding toward
++    # zero; -frounding-math keeps the compiler from folding float ops on
++    # constants under round-to-nearest (C only: the runtime's C++ third-party
++    # tables need their double->float initialisers folded). clang-cl takes it as /clang:.
++    if(MSVC)
++        target_compile_options(ps3recomp_runtime PRIVATE $<$<COMPILE_LANGUAGE:C>:/clang:-frounding-math>)
++    else()
++        target_compile_options(ps3recomp_runtime PRIVATE $<$<COMPILE_LANGUAGE:C>:-frounding-math>)
++    endif()
+ elseif(MSVC)
+     # Real cl.exe -- clang-cl reports its id as Clang and is handled above.
+     #
+diff --git a/libs/spurs/cellSpurs.c b/libs/spurs/cellSpurs.c
+index 94649093..f8595429 100644
+--- a/libs/spurs/cellSpurs.c
++++ b/libs/spurs/cellSpurs.c
+@@ -555,6 +555,33 @@ static void wkl_count_set(u32 ea, u32 field, u32 wid, int is2, u32 v)
+     else if (wid < 16) *b = (u8)((*b & 0xF0) | (v & 0x0F));
+     else *b = (u8)((*b & 0x0F) | ((v & 0x0F) << 4));
+ }
++/* SPURS_MAXCONT=<wid>=<n>[,<wid>=<n>...]: let more SPUs run a workload at
++ * once than the title asked for. A Wws job list keeps per-SPU progress lanes
++ * (six), so its manager is built to share a list between SPUs; a title that
++ * gave a heavy list one SPU (God of War: Ascension's main-menu list, wid 3)
++ * fitted a real SPU's speed, not a recompiled one's. 0 or unset: the title's. */
++static u32 wkl_maxcont_override(u32 wid)
++{
++    static int s_init; static u8 s_over[32];
++    if (!s_init) {
++        const char* e = getenv("SPURS_MAXCONT");
++        while (e && *e) {
++            char* end; unsigned long w = strtoul(e, &end, 10);
++            if (*end != '=') break;
++            unsigned long n = strtoul(end + 1, &end, 10);
++            if (w < 32 && n < 256) s_over[w] = (u8)n;
++            e = (*end == ',') ? end + 1 : NULL;
++        }
++        s_init = 1;
++    }
++    return wid < 32 ? s_over[wid] : 0;
++}
++static u32 wkl_maxcont(u32 ea, u32 wid, int is2)
++{
++    const u32 over = wkl_maxcont_override(wid);
++    if (over) return over;
++    return wkl_count_get(ea, SPURS_WKL_MAXCONT, wid, is2);
++}
+ 
+ /* Something a workload may be polling for happened outside SPURS (the RSX
+  * wrote a report). A workload that ran and found nothing to do is backed off
+@@ -2253,7 +2280,7 @@ static DWORD WINAPI spurs_kernel_thread(LPVOID p)
+                     continue;
+                 if (!vm_read8(ea + wkl_info_off(wid) + 0x18 + sn))
+                     continue; /* priority zero makes this physical lane ineligible */
+-                u32 maxcont = wkl_count_get(ea, SPURS_WKL_MAXCONT, wid, si->is2);
++                u32 maxcont = wkl_maxcont(ea, wid, si->is2);
+                 if (!maxcont || si->active[wid] >= maxcont) continue;
+                 WklPm* pm = spurs_resolve_pm(wid);
+                 if (!pm) continue;
+diff --git a/templates/project/CMakeLists.txt b/templates/project/CMakeLists.txt
+index d3a84f37..961d063d 100644
+--- a/templates/project/CMakeLists.txt
++++ b/templates/project/CMakeLists.txt
+@@ -200,10 +200,18 @@ if(SPU_SOURCES)
+         # The runtime gets the same flag; probed, as Apple arm64 clang rejects it.
+         include(CheckCCompilerFlag)
+         check_c_compiler_flag(-msse4.1 PORT_HAS_MSSE41)
++        # The SPU float fast path (spu_helpers.h) runs with MXCSR rounding toward
++        # zero; -frounding-math keeps the compiler from folding float ops on
++        # constants under round-to-nearest. clang-cl takes it as /clang:.
++        if(MSVC)
++            set(SPU_ROUNDING_MATH "/clang:-frounding-math")
++        else()
++            set(SPU_ROUNDING_MATH "-frounding-math")
++        endif()
+         if(PORT_HAS_MSSE41)
+-            set_source_files_properties(${SPU_SOURCES} PROPERTIES COMPILE_OPTIONS "-O2;-msse4.1")
++            set_source_files_properties(${SPU_SOURCES} PROPERTIES COMPILE_OPTIONS "-O2;-msse4.1;${SPU_ROUNDING_MATH}")
+         else()
+-            set_source_files_properties(${SPU_SOURCES} PROPERTIES COMPILE_OPTIONS "-O2")
++            set_source_files_properties(${SPU_SOURCES} PROPERTIES COMPILE_OPTIONS "-O2;${SPU_ROUNDING_MATH}")
+         endif()
+     endif()
+ endif()
+-- 
+2.48.1.windows.1
+
