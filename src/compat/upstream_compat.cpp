@@ -225,8 +225,9 @@ static void task4_monitor_thread_func()
                 ppu_context* pc9 = &g_ppu_threads[8].ctx;
                 uint32_t slot = (uint32_t)pc9->gpr[9];
                 uint32_t slot_val = (vm_base && slot && slot < 0xFF000000u) ? __builtin_bswap32(*(const uint32_t*)(vm_base + slot + 0x40)) : 0xDEADBEEF;
-                fprintf(stderr, "  [THREAD9-brbDriver] (tid=9): lr=0x%08X r9=0x%08X [r9+0x40]=0x%08X (%d)\n",
-                        (uint32_t)pc9->lr, slot, slot_val, (int)slot_val);
+                uint32_t val_3510 = (vm_base) ? __builtin_bswap32(*(const uint32_t*)(vm_base + 0x747D3510)) : 0xDEADBEEF;
+                fprintf(stderr, "  [THREAD9-brbDriver] (tid=9): lr=0x%08X r9=0x%08X [r9+0x40]=0x%08X (%d) [0x747D3510]=0x%08X (%d)\n",
+                        (uint32_t)pc9->lr, slot, slot_val, (int)slot_val, val_3510, (int)val_3510);
             }
             if (g_ppu_threads[11].state != PPU_THREAD_STATE_FREE) {
                 ppu_context* pc12 = &g_ppu_threads[11].ctx;
