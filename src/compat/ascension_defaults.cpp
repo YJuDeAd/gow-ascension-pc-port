@@ -226,13 +226,18 @@ extern "C" void ascension_apply_defaults(void)
     set_default("GCM_REPORT_SPU_HOLD_MS", "50");
     set_default("GCM_ROUND_GATE", "9BAC30");
     set_default("GCM_ROUND_RING", "io:1ED00,18");
+    set_default("SPURS_PRIO_SCHED", "1");
+    set_default("SPURS_SLOT_WAKE", "1");
+    set_default("SPURS_KERNEL_SPIN", "auto");
+    set_default("SPURS_IDLE_BASE_US", "50");
+    set_default("SPURS_BOOST_WID", "8=2");
+    set_default("SPURS_MAXCONT", "0=5,3=5,7=6,9=8,10=8,11=8,12=8,13=6,14=5,15=5,16=5,17=5");
+    set_default("SPURS_KICK_FIRST", "1");
+    set_default("SPURS_PRIO", "9=7,10=7,11=7,12=7");
     set_default("SPURS_READY_LEVEL", "1");
-    if (getenv("GOW_REVERT_DDE3F83")) {
-        set_default("SPURS_MAXCONT", "3=1,13=3,15=5,16=5,17=5");
-    } else {
-        set_default("SPURS_MAXCONT", "3=1,9=5,10=5,11=5,12=5,13=3,15=5,16=5,17=5,18=5");
-    }
-    set_default("SPURS_IDLE_BACKOFF_MAX", "0");
+    set_default("SPURS_IDLE_BACKOFF_MAX", "2");
+    set_default("SPURS_KERNEL_PAUSE", "30");
+    set_default("SPURS_BUSY_BALANCE", "1");
     set_default("SPURS_PIN", "1");
     set_default("PS3_PIN_PPU", "1");
     set_default("PS3_PPU_POLL_WAIT", "3E8378:99AAC4");
