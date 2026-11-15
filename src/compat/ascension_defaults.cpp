@@ -220,12 +220,12 @@ extern "C" void ascension_apply_defaults(void)
     set_default("PS3_EDGE_ZLIB_HLE", "1");
     set_default("RSX_LIVE_DRAW", "1");
     set_default("LD_SWIN", "0");
-    set_default("GCM_PARK_WAIT_MS", "2000");
+    set_default("GCM_PARK_WAIT_MS", "60000");
     set_default("GCM_SEMA_ACQUIRE", "1");
     set_default("GCM_PARK_SPU_HOLD_MS", "1000");
-    set_default("GCM_REPORT_SPU_HOLD_MS", "50");
+    set_default("GCM_REPORT_SPU_HOLD_MS", "2000");
     set_default("GCM_ROUND_GATE", "9BAC30");
-    set_default("GCM_ROUND_RING", "io:1ED00,18");
+    set_default("GCM_ROUND_RING", "1101ED00,18");
     set_default("SPURS_PRIO_SCHED", "1");
     set_default("SPURS_SLOT_WAKE", "1");
     set_default("SPURS_KERNEL_SPIN", "auto");
