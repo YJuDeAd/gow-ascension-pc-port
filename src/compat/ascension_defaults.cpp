@@ -245,6 +245,8 @@ extern "C" void ascension_apply_defaults(void)
     set_default("GOWA_PPU_SCHED_WAIT", "1");
     set_default("SPU_REJOIN", "204:9700-1C000");
     set_default("SPU_REJOIN_CALL", "1");
+    set_default("SPU_LL_STRIPE", "1");
+    set_default("SPU_COH_DENSE", "1");
     set_default("LD_PERF_OVERLAY", "1");
     set_default("PS3_OVERLAY_COLORS", "#E2B86AFF,#0B090899,#E2B86AFF,#00000000");
     set_default_overlay_font();
