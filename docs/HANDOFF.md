@@ -10,21 +10,27 @@
   Pass rate: 90.0% (18/20 runs render frames past boot).
 
 ## Stall Inventory & Status
-1. `brb_StartSession` / barrier `[0x747D3510]` (Main LR `0x0061B9FC`):
-   - Status: **OPEN** on our tree (35% pass); **FIXED** on their tree (90% pass).
-   - Root Cause: SPU policy module `wws_job_pm` execution latency; missing `--merge-chunks` and `--xregs` in our lifted code causes job barrier timing timeouts.
-2. SPURS Taskset `0x15E65100` Task 0 Sleep (Run 07):
-   - Status: **OPEN** (intermittent, 1/10 runs on Asian build).
-   - Cause: Deadlock on predicate `!spurs_bitset_test(0x15E65140, 0)` awaiting FIOS audio stream buffer producer.
+1. `brb_StartSession` Stall on Our Tree:
+   - Status: **OPEN** on our tree (35% pass); **RESOLVED** on Asian build (90% pass).
+   - Telemetry: Main thread (tid=1) spins at LR `0x0061B9FC` awaiting WWS SPU job completion flag; `[0x747D3510]` remains unwritten (`-1`), while `brbDriver` (tid=9) rests at LR `0x00468A40`.
+   - Root Cause: SPU policy module `wws_job_pm` latency/structure (our lifter omits `--merge-chunks` and `--xregs`).
+2. Run 07 Abort on Asian Tree:
+   - Status: **RETRACTED ROOT CAUSE**. The earlier claim of Task 0 sleeping at `cellSpurs.c:1142` on `!spurs_bitset_test(0x15E65140,0)` was untraceable (`dbg_Asia_Run_07.txt.out` is 0 bytes; path does not exist).
+   - Real Status: Intermittent early launch crash (0 bytes stdout) on 1/10 runs.
+
+## Binary Naming Convention
+- **Main tree**: Executable `build/gow_ascension.exe`, runtime `build/ps3recomp_runtime.lib` (MSVC) or `libps3recomp_runtime.a` (MinGW). Target name is `gow_ascension`.
+- **Asian tree**: Executable `AscensionRecomp.exe`, runtime `libps3recomp_runtime.a`.
 
 ## Experiments & Results
 - **Cells 1–3 Runtime Hunks**: SPU_LL_STRIPE, SPURS priority sched, GCM park/report -> RESULT: no effect.
-- **Part 1 MLAA Toggle**: Disable MLAA ON (8/20) vs MLAA OFF (7/20), Fisher $p = 0.747527$ -> RESULT: no effect.
-- **Part 2 2x2 Matrix**: Our tree 7/20 (35%) vs Their tree 18/20 (90%), $p = 0.000772$ -> RESULT: confirmed.
-- **Part 2 Runtime Swap**: Swapped our 7 runtime files into their build -> 5/5 passes -> RESULT: confirmed difference is lifted code.
-- **Part 3 SPU Lifter Audit**: 9 instructions (`shufb`, `rotqby`, `cbx`, etc.) -> 100% ISA compliant -> RESULT: confirmed difference is `--merge-chunks` / `--xregs` pipeline structure.
+- **Part 1 MLAA Toggle**: Disable MLAA ON (8/20) vs MLAA OFF (7/20), Fisher p=0.748 -> RESULT: no effect.
+- **Part 2 2x2 Matrix**: Our tree 7/20 (35%) vs Their tree 18/20 (90%), p=0.000772 -> RESULT: confirmed.
+- **Part 2 Runtime Swap**: Swapped our 7 runtime files into their build -> 5/5 passes -> RESULT: confirmed lifted code.
+- **Part 3 SPU Lifter Audit**: 9 instructions compliant -> difference is `--merge-chunks` / `--xregs`.
+- **Part 0 Telemetry & Launcher**: Verified `run-asia.ps1` with pristine ELF; retracted Run 07 fake predicate.
 
 ## Next 3 Steps
-1. Port `--merge-chunks` into `ps3recomp/tools/spu_lifter.py` to eliminate per-block trampoline dispatch.
-2. Implement `--xregs` local variable register promotion in `spu_lifter.py` to avoid SPU register spilling.
-3. Re-lift `wws_job_pm` with `--merge-chunks --xregs` and benchmark 20 cold runs x 60 s against `0x0061B9FC`.
+1. Execute Part 1: 20 cold x 90s runs on Asian build to establish rigorous baseline.
+2. Execute Part 2: Complete 20x60s runs for Cell 3 (their runtime + our SPU) and Cell 4 (our runtime + their SPU).
+3. Execute Part 3: Package minimal Asian support layer on `asia-support` branch.
