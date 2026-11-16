@@ -220,12 +220,20 @@ static void task4_monitor_thread_func()
                     }
                 }
             }
-            if (g_ppu_threads[8].state != PPU_THREAD_STATE_FREE) {
-                ppu_context* pc9 = &g_ppu_threads[8].ctx;
-                uint32_t slot = (uint32_t)pc9->gpr[9];
-                uint32_t slot_val = (vm_base && slot && slot < 0xFF000000u) ? __builtin_bswap32(*(const uint32_t*)(vm_base + slot + 0x40)) : 0xDEADBEEF;
-                fprintf(stderr, "  [THREAD9-brbDriver] (tid=9): lr=0x%08X r9=0x%08X [r9+0x40]=0x%08X (%d)\n",
-                        (uint32_t)pc9->lr, slot, slot_val, (int)slot_val);
+            for (uint32_t tid = 2; tid <= PPU_THREAD_MAX; tid++) {
+                ppu_thread_info* t = &g_ppu_threads[tid - 1];
+                if (t->state != PPU_THREAD_STATE_FREE && strcmp(t->name, "brbDriver") == 0) {
+                    ppu_context* pc = &t->ctx;
+                    uint32_t slot = (uint32_t)pc->gpr[9];
+                    uint32_t slot_val = (vm_base && slot && slot < 0xFF000000u) ? __builtin_bswap32(*(const uint32_t*)(vm_base + slot + 0x40)) : 0xDEADBEEF;
+                    uint32_t val_3510 = (vm_base) ? __builtin_bswap32(*(const uint32_t*)(vm_base + 0x747D3510)) : 0xDEADBEEF;
+                    fprintf(stderr, "  [brbDriver] (tid=%u): lr=0x%08X r9=0x%08X [r9+0x40]=0x%08X (%d) [0x747D3510]=0x%08X (%d)\n",
+                            tid, (uint32_t)pc->lr, slot, slot_val, (int)slot_val, val_3510, (int)val_3510);
+                }
+            }
+            if (vm_base) {
+                uint32_t val_3510 = __builtin_bswap32(*(const uint32_t*)(vm_base + 0x747D3510));
+                fprintf(stderr, "  [STATUS-3510] [0x747D3510]=0x%08X (%d)\n", val_3510, (int)val_3510);
             }
             if (g_ppu_threads[11].state != PPU_THREAD_STATE_FREE) {
                 ppu_context* pc12 = &g_ppu_threads[11].ctx;
@@ -1069,7 +1077,63 @@ extern "C" {
     }
 
     extern void gow_psn_stubs_register(void);
+
+    static void gow_apply_runtime_patches(void)
+    {
+        if (!vm_base) return;
+
+        // Check PS3_PATCHES and GOWA_NO_MLAA
+        // Disable MLAA is DEFAULT ON.
+        bool mlaa_disabled = true;
+
+        const char* ps3_patches = getenv("PS3_PATCHES");
+        if (ps3_patches) {
+            if (strcmp(ps3_patches, "none") == 0 || strcmp(ps3_patches, "") == 0) {
+                mlaa_disabled = false;
+            } else if (strstr(ps3_patches, "Disable MLAA") || strstr(ps3_patches, "mlaa") || strstr(ps3_patches, "MLAA")) {
+                mlaa_disabled = true;
+            } else {
+                // PS3_PATCHES was explicitly set to a list that does NOT include MLAA
+                mlaa_disabled = false;
+            }
+        }
+
+        const char* gowa_no_mlaa = getenv("GOWA_NO_MLAA");
+        if (gowa_no_mlaa) {
+            if (strcmp(gowa_no_mlaa, "0") == 0) {
+                mlaa_disabled = false;
+            } else if (strcmp(gowa_no_mlaa, "1") == 0) {
+                mlaa_disabled = true;
+            }
+        }
+
+        if (mlaa_disabled) {
+            // Disable MLAA:
+            // 1. Data byte at 0x0081C9B7 -> 0x00
+            vm_base[0x0081C9B7] = 0x00;
+            // 2. Insn at 0x00369B34 -> 0x60000000 (nop in big-endian)
+            static const uint8_t s_nop[4] = { 0x60, 0x00, 0x00, 0x00 };
+            memcpy(vm_base + 0x00369B34, s_nop, 4);
+            // 3. Insn at 0x00369B64 -> 0x60000000 (nop in big-endian)
+            memcpy(vm_base + 0x00369B64, s_nop, 4);
+            printf("[patches] Disable MLAA: ON (default) -> [0x0081C9B7]=0x00, [0x00369B34]=nop, [0x00369B64]=nop\n");
+        } else {
+            // MLAA enabled (stock disc behavior):
+            // 1. Data byte at 0x0081C9B7 -> 0x01
+            vm_base[0x0081C9B7] = 0x01;
+            // 2. Insn at 0x00369B34 -> 0x4BFFFCB5 (bl 0x003697E8 in big-endian)
+            static const uint8_t s_orig_34[4] = { 0x4B, 0xFF, 0xFC, 0xB5 };
+            memcpy(vm_base + 0x00369B34, s_orig_34, 4);
+            // 3. Insn at 0x00369B64 -> 0x4BFFFC85 (bl 0x003697E8 in big-endian)
+            static const uint8_t s_orig_64[4] = { 0x4B, 0xFF, 0xFC, 0x85 };
+            memcpy(vm_base + 0x00369B64, s_orig_64, 4);
+            printf("[patches] Disable MLAA: OFF -> [0x0081C9B7]=0x01, [0x00369B34]=orig, [0x00369B64]=orig\n");
+        }
+        fflush(stdout);
+    }
+
     void ps3_load_prx_modules(void) {
+        gow_apply_runtime_patches();
         gow_register_spu_overrides();
         gow_psn_stubs_register();
         if (!s_task4_monitor_started.exchange(true)) {

@@ -18,59 +18,20 @@ import argparse
 import json
 from pathlib import Path
 
-def apply_insn_switches(elf_in_path, elf_out_path, switches_path):
-    print(f"[relift] Applying instruction switches from {switches_path}...")
+def prepare_patch_sites(switches_path: str, out_path: str):
+    """Convert switches (list of dicts or dict) to patch_sites.json {addr: insn}."""
     with open(switches_path, "r", encoding="utf-8") as f:
-        switches = json.load(f)
-
-    # Read input ELF
-    with open(elf_in_path, "rb") as f:
-        elf_bytes = bytearray(f.read())
-
-    # Parse ELF64 program headers to map vaddr -> file offset
-    e_phoff = int.from_bytes(elf_bytes[0x20:0x28], "big")
-    e_phentsize = int.from_bytes(elf_bytes[0x36:0x38], "big")
-    e_phnum = int.from_bytes(elf_bytes[0x38:0x3A], "big")
-
-    segments = []
-    for i in range(e_phnum):
-        ph_off = e_phoff + i * e_phentsize
-        p_type = int.from_bytes(elf_bytes[ph_off:ph_off+4], "big")
-        p_offset = int.from_bytes(elf_bytes[ph_off+8:ph_off+16], "big")
-        p_vaddr = int.from_bytes(elf_bytes[ph_off+16:ph_off+24], "big")
-        p_filesz = int.from_bytes(elf_bytes[ph_off+32:ph_off+40], "big")
-        if p_type == 1: # PT_LOAD
-            segments.append((p_vaddr, p_filesz, p_offset))
-
-    applied_count = 0
-    for s in switches:
-        addr = int(s["addr"], 0)
-        insn = int(s["insn"], 0)
-        patched = False
-        for p_vaddr, p_filesz, p_offset in segments:
-            if p_vaddr <= addr < p_vaddr + p_filesz:
-                file_off = addr - p_vaddr + p_offset
-                orig_insn = int.from_bytes(elf_bytes[file_off:file_off+4], "big")
-                
-                # Hard guardrail: all spin-yield patches MUST overwrite pure NOPs (0x60000000)
-                if insn in (0x396003FC, 0x44000002):
-                    assert orig_insn == 0x60000000, (
-                        f"[FATAL GUARDRAIL] Attempted to patch non-NOP at {s['addr']} (file off 0x{file_off:X}): "
-                        f"original instruction is 0x{orig_insn:08X}, expected 0x60000000 (NOP). Aborting."
-                    )
-                
-                elf_bytes[file_off:file_off+4] = insn.to_bytes(4, "big")
-                note = s.get("note", "")[:50]
-                print(f"  [switch] {s['addr']} (file off 0x{file_off:X}): orig 0x{orig_insn:08X} -> new 0x{insn:08X} ({note})")
-                applied_count += 1
-                patched = True
-                break
-        if not patched:
-            raise RuntimeError(f"[relift] Switch address {s['addr']} not found in any PT_LOAD segment!")
-
-    with open(elf_out_path, "wb") as f:
-        f.write(elf_bytes)
-    print(f"[relift] Applied {applied_count} instruction switches -> {elf_out_path}")
+        data = json.load(f)
+    sites = {}
+    if isinstance(data, list):
+        for s in data:
+            sites[s["addr"]] = s["insn"]
+    elif isinstance(data, dict):
+        sites = data
+    with open(out_path, "w", encoding="utf-8") as f:
+        json.dump(sites, f, indent=2)
+    print(f"[relift] Prepared {len(sites)} runtime patch site(s) -> {out_path}")
+    return out_path
 
 def postprocess_lifted_chunks(out_dir: Path):
     print(f"[relift] Post-processing lifted chunks in {out_dir} to preserve gpr[3] and gpr[11]...")
@@ -105,7 +66,8 @@ def main():
     parser.add_argument("--chunks", type=int, default=8, help="Number of C++ chunks to split into")
     parser.add_argument("--jobs", "-j", type=int, default=os.cpu_count(), help="Parallel workers for lifting")
     parser.add_argument("--code-end", default="0x0062C4CC", help="Override code-end hex boundary")
-    parser.add_argument("--insn-switches", default="tools/ppu_switches.json", help="Path to instruction switches JSON")
+    parser.add_argument("--insn-switches", default="tools/patch_sites.json", help="Path to instruction switches JSON")
+    parser.add_argument("--patch-sites", default=None, help="Direct path to patch_sites.json")
     args = parser.parse_args()
 
     root_dir = Path(__file__).resolve().parent.parent
@@ -132,19 +94,20 @@ def main():
                         "--seed-json", str(analysis_dir / "EBOOT.functions.json"),
                         "--output", str(funcs_json)], check=True)
 
-    # Step 2: Apply switches if provided
-    lift_elf = elf_path
-    temp_elf = None
-    if args.insn_switches and os.path.exists(args.insn_switches):
+    # Step 2: Prepare runtime patch sites if switches are provided
+    patch_sites_file = None
+    switches_source = args.patch_sites if hasattr(args, "patch_sites") and args.patch_sites else args.insn_switches
+    if switches_source and os.path.exists(switches_source):
         scratch_dir = root_dir / "scratch"
         scratch_dir.mkdir(parents=True, exist_ok=True)
-        temp_elf = scratch_dir / "EBOOT_switched.ELF"
-        apply_insn_switches(elf_path, temp_elf, args.insn_switches)
-        lift_elf = temp_elf
+        patch_sites_file = scratch_dir / "patch_sites.json"
+        prepare_patch_sites(switches_source, str(patch_sites_file))
 
     # Step 3: Run ppu_lifter.py
+    lifter_script = root_dir / "tools" / "ppu_lifter.py"
+
     lift_cmd = [
-        sys.executable, str(ps3recomp_tools / "ppu_lifter.py"), str(lift_elf),
+        sys.executable, str(lifter_script), str(elf_path),
         "--functions", str(funcs_json),
         "--hle-stubs", str(imports_json),
         "--chunks", str(args.chunks),
@@ -153,9 +116,13 @@ def main():
     ]
     if args.code_end:
         lift_cmd.extend(["--code-end", args.code_end])
+    if patch_sites_file:
+        lift_cmd.extend(["--patch-sites", str(patch_sites_file)])
 
+    lift_env = os.environ.copy()
+    lift_env["PYTHONUTF8"] = "0"
     print(f"[relift] Running: {' '.join(str(c) for c in lift_cmd)}")
-    subprocess.run(lift_cmd, check=True)
+    subprocess.run(lift_cmd, env=lift_env, check=True)
 
     # Step 4: Post-process lifted chunks
     postprocess_lifted_chunks(out_dir)
@@ -166,9 +133,9 @@ def main():
     print(f"[relift] Running: {' '.join(str(c) for c in gen_nids_cmd)}")
     subprocess.run(gen_nids_cmd, check=True)
 
-    # Cleanup temp elf if created
-    if temp_elf and temp_elf.exists():
-        temp_elf.unlink()
+    # Cleanup scratch patch sites if created
+    if patch_sites_file and patch_sites_file.exists():
+        patch_sites_file.unlink()
 
     # Step 6: Summary
     gen_files = list(out_dir.glob("*.cpp")) + list(out_dir.glob("*.h"))
