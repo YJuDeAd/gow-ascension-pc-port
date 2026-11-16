@@ -24,16 +24,15 @@
 ## Experiments & Results
 - **Cells 1–3 Runtime Hunks**: SPU_LL_STRIPE, SPURS priority sched, GCM park/report -> RESULT: no effect.
 - **Part 1 MLAA Toggle**: Disable MLAA ON (8/20) vs MLAA OFF (7/20), Fisher p=0.748 -> RESULT: no effect.
-- **Part 2 2x2 Matrix**:
-  - Cell 1 (Our rtm + Our SPU): 7/20 (35%) pass
-  - Cell 2 (Their rtm + Their SPU): 18/20 (90%) pass (20/20 in baseline)
-  - Cell 3 (Their rtm + Our SPU): 0/20 runnable (layout/symbol incompatibility: base 0x0 vs 0xA00)
-  - Cell 4 (Our rtm + Their SPU): 20/20 (100%) pass (20 cold x 60s, MLAA off) -> RESULT: confirmed.
-- **wws_job_pm Generation**: Ours omits `--merge-chunks` and `--xregs`; theirs merges blocks and promotes SPU registers to C locals (`--xregs hya`).
-- **Part 1 Asian Baseline**: 20 cold x 90s runs -> 20/20 alive (100%), 0 crashes, 0 stalls -> RESULT: confirmed.
+- **Part 2 2x2 Matrix & Cell 4 Swap Decomposition**:
+  - Cell 1: [Our SPU C] + [Our SPU Headers] + [Our Runtime .c] -> 7/20 (35%) pass
+  - Cell 2: [Their SPU C] + [Their SPU Headers] + [Their Runtime .c] -> 18/20 (90%) pass (20/20 in baseline)
+  - Cell 3: [Our SPU C] + [Their SPU Headers] + [Their Runtime .c] -> 0/20 runnable (layout/base 0x0 vs 0xA00)
+  - Cell 4: [Their SPU C] + [Their SPU Headers] + [Our Runtime .c] -> 20/20 (100%) pass -> RESULT: confirmed.
+- **Cell 4 Verification**: SPU code in Cell 4 was compiled against THEIR SPU headers (`spu_helpers.h` with `spu_xr` / `--xregs`); our runtime supplied the 7 core `.c` files (`cellSpurs`, `cellGcmSys`, `spu_coherency`, `spu_channels`, `spu_drain`, `spu_dma`, `spu_workload`).
 - **Part 3 Asian Support Layer**: Committed minimal diff on `asia-support` (`6742f71`) -> RESULT: confirmed.
 
 ## Next 3 Steps
-1. Port `--merge-chunks` and `--xregs` SSA promotion into `ps3recomp/tools/spu_lifter.py`.
-2. Re-lift `wws_job_pm` natively in main tree to resolve the `0x0061B9FC` stall permanently on Cell 1.
-3. Bring up full audio / streaming pipelines for first-level gameplay progression.
+1. Execute Part 1: Missing cell & per-module isolation (A: their rtm + our SPU; B: our rtm + our headers + their wws_job_pm; C: our rtm + their headers + our SPU).
+2. Execute Part 2: Force wws_job_pm through SPU interpreter on our tree; test defect vs race via differential replay.
+3. Execute Part 3: Adopt their lifter pipeline into our tree with MIT notices and re-lift.
