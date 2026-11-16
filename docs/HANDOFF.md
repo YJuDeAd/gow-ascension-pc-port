@@ -24,13 +24,15 @@
 ## Experiments & Results
 - **Cells 1–3 Runtime Hunks**: SPU_LL_STRIPE, SPURS priority sched, GCM park/report -> RESULT: no effect.
 - **Part 1 MLAA Toggle**: Disable MLAA ON (8/20) vs MLAA OFF (7/20), Fisher p=0.748 -> RESULT: no effect.
-- **Part 2 2x2 Matrix**: Our tree 7/20 (35%) vs Their tree 18/20 (90%), p=0.000772 -> RESULT: confirmed.
-- **Part 2 Runtime Swap**: Swapped our 7 runtime files into their build -> 5/5 passes -> RESULT: confirmed lifted code.
-- **Part 3 SPU Lifter Audit**: 9 instructions compliant -> difference is `--merge-chunks` / `--xregs`.
-- **Part 0 Telemetry & Launcher**: Verified `run-asia.ps1` with pristine ELF; retracted Run 07 fake predicate.
-- **Part 1 Asian Baseline**: 20 cold x 90s runs -> 20/20 alive (100%), 0 crashes, 0 stalls, first draw <0.5s, ~156 flips/5s (~31 FPS) -> RESULT: confirmed.
+- **Part 2 2x2 Matrix**:
+  - Cell 1 (Our rtm + Our SPU): 7/20 (35%) pass
+  - Cell 2 (Their rtm + Their SPU): 18/20 (90%) pass (20/20 in baseline)
+  - Cell 3 (Their rtm + Our SPU): 0/20 runnable (layout/symbol incompatibility: base 0x0 vs 0xA00)
+  - Cell 4 (Our rtm + Their SPU): 20/20 (100%) pass (20 cold x 60s, MLAA off) -> RESULT: confirmed.
+- **wws_job_pm Generation**: Ours omits `--merge-chunks` and `--xregs`; theirs merges blocks and promotes SPU registers to C locals (`--xregs hya`).
+- **Part 1 Asian Baseline**: 20 cold x 90s runs -> 20/20 alive (100%), 0 crashes, 0 stalls -> RESULT: confirmed.
 
 ## Next 3 Steps
-1. Execute Part 2: Complete 20x60s runs for Cell 3 (their runtime + our SPU) and Cell 4 (our runtime + their SPU).
-2. Document wws_job_pm generation differences (--merge-chunks and --xregs).
-3. Execute Part 3: Package minimal Asian support layer on `asia-support` branch.
+1. Execute Part 3: Create minimal Asian-support layer diff on `asia-support` branch.
+2. Verify BCAS25016 title-ID allowlist, MLAA default, DXC documentation, mod entry, README note.
+3. Answer the 3 concluding questions (90s survival, stall carrier, remaining steps for playable level 1).
