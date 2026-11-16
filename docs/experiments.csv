@@ -7,3 +7,4 @@ date,commit,change,N,metric,count,result
 2026-11-17,HEAD,part0-script-and-evidence-correction,1,launcher_boot_verify,1/1,confirmed
 2026-11-17,HEAD,part1-asian-baseline-20x90s,20,main_leaves_0061B9FC_and_stays_alive,20/20,confirmed
 2026-11-17,HEAD,part2-cell4-our-rtm-their-lift,20,main_leaves_0061B9FC,20/20,confirmed
+2026-11-17,6742f71,part3-asian-support-layer,1,build_and_launch_integration,1/1,confirmed

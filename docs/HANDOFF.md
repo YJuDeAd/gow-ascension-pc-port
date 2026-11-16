@@ -31,8 +31,9 @@
   - Cell 4 (Our rtm + Their SPU): 20/20 (100%) pass (20 cold x 60s, MLAA off) -> RESULT: confirmed.
 - **wws_job_pm Generation**: Ours omits `--merge-chunks` and `--xregs`; theirs merges blocks and promotes SPU registers to C locals (`--xregs hya`).
 - **Part 1 Asian Baseline**: 20 cold x 90s runs -> 20/20 alive (100%), 0 crashes, 0 stalls -> RESULT: confirmed.
+- **Part 3 Asian Support Layer**: Committed minimal diff on `asia-support` (`6742f71`) -> RESULT: confirmed.
 
 ## Next 3 Steps
-1. Execute Part 3: Create minimal Asian-support layer diff on `asia-support` branch.
-2. Verify BCAS25016 title-ID allowlist, MLAA default, DXC documentation, mod entry, README note.
-3. Answer the 3 concluding questions (90s survival, stall carrier, remaining steps for playable level 1).
+1. Port `--merge-chunks` and `--xregs` SSA promotion into `ps3recomp/tools/spu_lifter.py`.
+2. Re-lift `wws_job_pm` natively in main tree to resolve the `0x0061B9FC` stall permanently on Cell 1.
+3. Bring up full audio / streaming pipelines for first-level gameplay progression.
