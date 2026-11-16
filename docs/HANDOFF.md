@@ -7,16 +7,15 @@
   ```powershell
   & D:\gow-bilal-asia\run-asia.ps1
   ```
-  Pass rate: 90.0% (18/20 runs render frames past boot).
+  Pass rate: 100.0% (20/20 runs stay alive and render frames cleanly for 90s).
 
 ## Stall Inventory & Status
 1. `brb_StartSession` Stall on Our Tree:
-   - Status: **OPEN** on our tree (35% pass); **RESOLVED** on Asian build (90% pass).
+   - Status: **OPEN** on our tree (35% pass); **RESOLVED** on Asian build (100% pass, 20/20).
    - Telemetry: Main thread (tid=1) spins at LR `0x0061B9FC` awaiting WWS SPU job completion flag; `[0x747D3510]` remains unwritten (`-1`), while `brbDriver` (tid=9) rests at LR `0x00468A40`.
    - Root Cause: SPU policy module `wws_job_pm` latency/structure (our lifter omits `--merge-chunks` and `--xregs`).
 2. Run 07 Abort on Asian Tree:
    - Status: **RETRACTED ROOT CAUSE**. The earlier claim of Task 0 sleeping at `cellSpurs.c:1142` on `!spurs_bitset_test(0x15E65140,0)` was untraceable (`dbg_Asia_Run_07.txt.out` is 0 bytes; path does not exist).
-   - Real Status: Intermittent early launch crash (0 bytes stdout) on 1/10 runs.
 
 ## Binary Naming Convention
 - **Main tree**: Executable `build/gow_ascension.exe`, runtime `build/ps3recomp_runtime.lib` (MSVC) or `libps3recomp_runtime.a` (MinGW). Target name is `gow_ascension`.
@@ -29,8 +28,9 @@
 - **Part 2 Runtime Swap**: Swapped our 7 runtime files into their build -> 5/5 passes -> RESULT: confirmed lifted code.
 - **Part 3 SPU Lifter Audit**: 9 instructions compliant -> difference is `--merge-chunks` / `--xregs`.
 - **Part 0 Telemetry & Launcher**: Verified `run-asia.ps1` with pristine ELF; retracted Run 07 fake predicate.
+- **Part 1 Asian Baseline**: 20 cold x 90s runs -> 20/20 alive (100%), 0 crashes, 0 stalls, first draw <0.5s, ~156 flips/5s (~31 FPS) -> RESULT: confirmed.
 
 ## Next 3 Steps
-1. Execute Part 1: 20 cold x 90s runs on Asian build to establish rigorous baseline.
-2. Execute Part 2: Complete 20x60s runs for Cell 3 (their runtime + our SPU) and Cell 4 (our runtime + their SPU).
+1. Execute Part 2: Complete 20x60s runs for Cell 3 (their runtime + our SPU) and Cell 4 (our runtime + their SPU).
+2. Document wws_job_pm generation differences (--merge-chunks and --xregs).
 3. Execute Part 3: Package minimal Asian support layer on `asia-support` branch.

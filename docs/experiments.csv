@@ -5,3 +5,4 @@ date,commit,change,N,metric,count,result
 2026-11-16,9cbfcd8,part1-mlaa-off-vs-on,40,main_leaves_0061B9FC,8/20 vs 7/20 (p=0.748),no effect
 2026-11-16,8ca6aba,part2-2x2-matrix,40,main_leaves_0061B9FC,7/20 vs 18/20 (p=0.000772),confirmed
 2026-11-17,HEAD,part0-script-and-evidence-correction,1,launcher_boot_verify,1/1,confirmed
+2026-11-17,HEAD,part1-asian-baseline-20x90s,20,main_leaves_0061B9FC_and_stays_alive,20/20,confirmed
