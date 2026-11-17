@@ -16,27 +16,18 @@
    - Root Cause: Missing basic-block merging (`--merge-chunks`), unpromoted registers, and missing musttail indirect-branch dispatch (`spu_dispatch_mt.c`).
 
 ## Binary Naming Convention
-- **Main tree**: Executable `build/gow_ascension.exe`, runtime `ps3recomp/build/ps3recomp_runtime.lib`.
+- **Main tree**: Executable `build/gow_ascension.exe`, runtime static library `ps3recomp/build/libps3recomp_runtime.a` (Clang/LLVM). Note: `ps3recomp_runtime.lib` is a dormant legacy MSVC artifact.
 - **Asian tree**: Executable `AscensionRecomp.exe`, runtime `libps3recomp_runtime.a`.
 
 ## How to Regenerate SPU Code
 Run `powershell tools/relift_spu.ps1` to extract and re-lift all SPU sources from `vfs/PS3_GAME/USRDIR/EBOOT.ELF` into `src/gen/spu/` with `--merge-chunks` and `--xregs` (takes ~158s). Then run `ninja -C build` to re-link.
 
 ## Experiments & Results
-- **Part 0**: Cell 4 swap decomposed across Generated SPU C vs SPU Headers vs Runtime .c.
-- **Part 1 Isolation Matrix (20 cold x 60s, MLAA off)**:
-  - Baseline (our rtm + our hdr + our SPU): 7/20 passed (35.0%)
-  - Cell A (their rtm + our hdr + our SPU): 0/20 passed (0.0%), p = 0.0083 -> RESULT: no effect
-  - Cell B (our rtm + our hdr + their wws_pm): 0/20 passed (0.0%), p = 0.0083 -> RESULT: no effect
-  - Cell C (our rtm + their hdr + our SPU): 0/20 passed (0.0%), p = 0.0083 -> RESULT: no effect
-  - Cell 4 (our rtm + their hdr + their full SPU): 20/20 passed (100.0%), p = 1.0e-5 -> RESULT: confirmed
-- **Part 2 Bug vs Race & Differential Replay (20 cold x 60s)**:
-  - Interpreter `wws_job_pm` (`spu_title_nolift = "2:0"`): 20/20 passed (100.0%, p = 1.288e-5).
-  - Differential Replay: First divergence at iteration 1, `pc=0x02D08`, `brsl $r0, 0x02DB8` (raw `33001680` at `0x02D04`). Confirmed structural lifter bug (stack explosion), not race.
-- **Part 3 Lifter Adoption & Native Benchmark (20 cold x 90s)**:
-  - Adopted `tools/{spu_lifter.py, find_spu_functions.py, lift_jobmods.py, lift_spu_pic.py}`, `src/spu_headers/`, `spu_dispatch_mt.c`.
-  - Re-lifted all 33 jobmods, 42 PICs, 5 workloads in 157.66s (delta 0.02 GB).
-  - Native benchmark: 20/20 passed (100.0%, Fisher p = 1.288e-5 vs baseline). First draw <0.5s-5s, FPS up to 144.2.
+- **Part 1 Verification & Raw Log Audit**:
+  - Part 3 Relift: 20/20 passed barrier `0x0061B9FC` (100.0%, main -> `0x0033A394` @ 15s -> `0x00467B1C`). 144 pres/s is the 144 Hz display swapchain rate during intro playback; intro video terminates deterministically at ~22.5s yielding 3227-3233 total frames.
+  - Depth guard (`host_depth=2000`): In unmerged build, fires in BOTH passing and stalling runs (12-14 lane 5 halts in passing runs vs 6-13 in stalling runs); depth guard kill does NOT explain the stall. In merged build, `host_depth <= 2`, 0 halts.
+  - Cells A, B, C Audit: `0/20` was an artifact of runner script bug (`status_3510 == -1` check); in reality, all runs in Cells A, B, C also left `0x0061B9FC` at 15s. The runner hashed dormant `.lib` (5D09F175) instead of real `.a` (48AE715E vs 7631D612).
+- **Part 2 Next Stall (`0x00467B1C`)**: Workload admission / title menu readiness to be resolved.
 
 ## Next 3 Steps
 1. Land Part 3 commit and close SPU lifter adoption milestone.
