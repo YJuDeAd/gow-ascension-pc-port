@@ -35,6 +35,95 @@ extern "C" {
     __thread const struct spu_iojrn_ops* t_spu_iojrn = nullptr;
     const struct spu_iojrn_rt* g_spu_iojrn_rt = nullptr;
     volatile long long g_spu_skip_calls = 0;
+
+    void __attribute__((weak)) spu_taskset_track(uint32_t taskset_ea) { (void)taskset_ea; }
+    void __attribute__((weak)) spu_taskset_set_running(uint32_t taskset_ea, uint32_t t, int on) { (void)taskset_ea; (void)t; (void)on; }
+    void __attribute__((weak)) cellGcm_park_run_begin(void) {}
+    void __attribute__((weak)) cellGcm_park_kick_flush(void) {}
+    int __attribute__((weak)) cellGcm_refwait_line(char* buf, int len) { (void)buf; (void)len; return 0; }
+    void __attribute__((weak)) spu_lockline_lock_range(uint32_t ea, uint32_t n) { (void)ea; (void)n; }
+    void __attribute__((weak)) spu_lockline_unlock_range(uint32_t ea, uint32_t n) { (void)ea; (void)n; }
+    volatile int __attribute__((weak)) g_edge6_on = 1;
+    volatile int __attribute__((weak)) g_ld_prio_on = 1;
+    volatile int __attribute__((weak)) g_q4_snd_on = 1;
+
+    int __attribute__((weak)) spu_coh_reserve_fast(void* ctx, uint32_t ea) { (void)ctx; (void)ea; return 0; }
+    void __attribute__((weak)) spu_coh_watch_add(void* watch, uint32_t ea, void (*wake)(void*), void* opaque) { (void)watch; (void)ea; (void)wake; (void)opaque; }
+    void __attribute__((weak)) spu_coh_watch_remove(void* watch) { (void)watch; }
+    int __attribute__((weak)) spu_taskset_round_busy(uint32_t taskset_ea) { (void)taskset_ea; return 0; }
+    void* __attribute__((weak)) spu_workload_find_img_masked(uint32_t ea, uint32_t mask) { (void)ea; (void)mask; return nullptr; }
+
+    void __attribute__((weak)) spu_drain_hop(void* ctx, void (*fn)(void*)) { if (fn) fn(ctx); }
+    void __attribute__((weak)) spu_irqwait_diag(void* ctx) { (void)ctx; }
+    uint32_t __attribute__((weak)) g_spu_depth_guard_limit = 2000;
+    void __attribute__((weak)) spu_jmpbuf_noframe(void* env) { (void)env; }
+    void __attribute__((weak)) rsx_live_draw_vtx_join(void) {}
+
+    uint64_t __attribute__((weak)) spu_coh_getllar_lock(void* ctx, uint32_t ea) { (void)ctx; (void)ea; return 0; }
+    void __attribute__((weak)) spu_coh_unlock_tok(uint64_t held) { (void)held; }
+    int __attribute__((weak)) spu_coh_live_on(void) { return 0; }
+    void __attribute__((weak)) spu_coh_event_ack(void* ctx, uint32_t v) { (void)ctx; (void)v; }
+    void (* volatile __attribute__((weak)) g_occl_rdiag_fn)(uint32_t, uint32_t, int, uint32_t, uint32_t) = nullptr;
+    const uint32_t* __attribute__((weak)) g_gcm_ea_io_tab = nullptr;
+    volatile uint32_t __attribute__((weak)) g_spu_merge_lo = 0;
+    volatile uint32_t __attribute__((weak)) g_spu_merge_span = 0;
+    volatile uint32_t __attribute__((weak)) g_wtrace_lo = 0;
+    volatile uint32_t __attribute__((weak)) g_wtrace_lo2 = 0;
+    volatile uint32_t __attribute__((weak)) g_wtrace_span = 0;
+    volatile uint32_t __attribute__((weak)) g_wtrace_span2 = 0;
+    __thread uint32_t __attribute__((weak)) g_spu_interp_stop2 = 0;
+
+    const uint8_t* __attribute__((weak)) cellGcm_park_ea_ptr(uint32_t ea) { (void)ea; return nullptr; }
+    void __attribute__((weak)) spu_wtrace_dump(void) {}
+    void __attribute__((weak)) spu_wtrace_dump_hdr(void) {}
+    volatile uint32_t __attribute__((weak)) spu_wtrace_last_ppu_d = 0;
+    volatile uint32_t __attribute__((weak)) spu_wtrace_last_ppu_e = 0;
+    __thread int __attribute__((weak)) g_spu_drain_anyret = 0;
+    __thread spu_direct_state __attribute__((weak)) t_spu_direct = { ~0u, 0u };
+    void __attribute__((weak)) spu_step_inline(void* ctx) { (void)ctx; }
+    void __attribute__((weak)) spu_drain_top(void* ctx) { (void)ctx; }
+    void __attribute__((weak)) spu_taskset_note_wait_link(uint32_t ea, uint32_t lr) { (void)ea; (void)lr; }
+    void __attribute__((weak)) spu_lockline_lock_ea(uint32_t ea) { (void)ea; }
+    void __attribute__((weak)) spu_lockline_unlock_ea(uint32_t ea) { (void)ea; }
+    void __attribute__((weak)) spu_wtrace_rec(uint32_t a, uint32_t b, uint32_t c, uint32_t d) { (void)a; (void)b; (void)c; (void)d; }
+    void __attribute__((weak)) spu_wtrace_hdr_commit(void) {}
+    void __attribute__((weak)) spu_drain_interp(void* ctx) { (void)ctx; }
+    void __attribute__((weak)) spu_jmp_no_unwind(void* env) { (void)env; }
+
+    int __attribute__((weak)) spu_mfc_list_park_get(void* spu, uint32_t ea, uint32_t size) { (void)spu; (void)ea; (void)size; return 0; }
+    void __attribute__((weak)) spu_mfc_list_bad(void* spu, uint32_t lsa, uint32_t ea, uint32_t size, int why) { (void)spu; (void)lsa; (void)ea; (void)size; (void)why; }
+    void __attribute__((weak)) spu_mfc_list_park_note(void* spu, uint32_t ea, uint32_t size) { (void)spu; (void)ea; (void)size; }
+    void __attribute__((weak)) spu_dma_copy_rsx(uint8_t* d, const uint8_t* s, uint32_t n, uint32_t ea, int locked) { (void)d; (void)s; (void)n; (void)ea; (void)locked; }
+    void __attribute__((weak)) spu_merge_put(uint32_t ea, uint32_t size) { (void)ea; (void)size; }
+    void __attribute__((weak)) spu_merge_note_get(uint32_t ea, uint32_t size) { (void)ea; (void)size; }
+
+    volatile unsigned long __attribute__((weak)) g_gcm_drain_tid = 0;
+    int __attribute__((weak)) rsx_live_draw_occl_get(uint32_t off, uint32_t rea, uint32_t* val) { (void)off; (void)rea; (void)val; return 0; }
+    int __attribute__((weak)) rsx_live_draw_w2_nop(uint32_t count, uint32_t last_arg) { (void)count; (void)last_arg; return 0; }
+    int __attribute__((weak)) rsx_live_draw_w2_packet(uint32_t cls, uint32_t type, uint32_t method, uint32_t count, uint32_t dea0) { (void)cls; (void)type; (void)method; (void)count; (void)dea0; return 0; }
+    void __attribute__((weak)) rsx_live_draw_occl_pass_end(void) {}
+    void __attribute__((weak)) rsx_live_draw_occl_freeze_dump(const char* why) { (void)why; }
+    void __attribute__((weak)) spu_running_dump(const char* label) { (void)label; }
+    void __attribute__((weak)) rsx_live_draw_occl_read(uint32_t ea) { (void)ea; }
+    int __attribute__((weak)) ld_blit_ab(void) { return 0; }
+    volatile int __attribute__((weak)) g_ld_blit_cpu_on = 0;
+    volatile int __attribute__((weak)) g_ld_ppu_delay_on = 0;
+    volatile int __attribute__((weak)) g_ld_zocc_on = 0;
+    volatile int __attribute__((weak)) g_occl_apply = 0;
+    volatile int __attribute__((weak)) g_w2_fifo_act = 0;
+    volatile int __attribute__((weak)) g_w2_pkstats = 0;
+    int __attribute__((weak)) cellGcm_current_scanout(uint32_t* a, uint32_t* b, uint32_t* c, uint32_t* d) { (void)a; (void)b; (void)c; (void)d; return 0; }
+    void* __attribute__((weak)) ppu_gcm_wait_pump(void (**pump)(void)) { if (pump) *pump = nullptr; return nullptr; }
+
+    int __attribute__((weak)) ppu_vram_guard(void* ctx, int kind) { (void)ctx; (void)kind; return 0; }
+    void __attribute__((weak)) ppu_vram_trap(void) {}
+    void __attribute__((weak)) ppu_vram_desc_check(void* a, void* b) { (void)a; (void)b; }
+    void __attribute__((weak)) ppu_vram_shrink_check(void* a, void* b) { (void)a; (void)b; }
+    void __attribute__((weak)) ppu_texstream_budget(void* ctx) { (void)ctx; }
+    int __attribute__((weak)) ppu_zprepass_skip(void* ctx) { (void)ctx; return 0; }
+    void __attribute__((weak)) ppu_vram_plan_put(uint32_t base, uint32_t off, uint32_t w0, uint32_t w1, uint32_t w2) { (void)base; (void)off; (void)w0; (void)w1; (void)w2; }
+    uint32_t __attribute__((weak)) ppu_vram_plan_batch(uint32_t count) { return count; }
+    uint32_t __attribute__((weak)) ppu_vram_plan_consume(void) { return 0; }
 }
 static void gow_barrier_watch_thread_func();
 

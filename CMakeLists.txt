@@ -2,7 +2,7 @@
 # Directly mirroring gow-ascension-pc/CMakeLists.txt (boot_main.cpp harness).
 
 cmake_minimum_required(VERSION 3.20)
-project(gow_ascension CXX C)
+project(gow_ascension CXX C ASM)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -97,6 +97,7 @@ add_executable(gow_ascension
     "${CMAKE_CURRENT_SOURCE_DIR}/src/compat/ascension_defaults.cpp"
     # Fallback symbols (cellFiberPpu, spurs diag)
     "${CMAKE_CURRENT_SOURCE_DIR}/src/compat/upstream_compat.cpp"
+    "${CMAKE_CURRENT_SOURCE_DIR}/src/compat/retaddr.s"
     # PSN offline stubs
     "${CMAKE_CURRENT_SOURCE_DIR}/src/compat/psn_stubs.cpp"
     ${PS3RECOMP_SCAFFOLD}

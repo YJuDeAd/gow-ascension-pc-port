@@ -1,8 +1,8 @@
 # God of War: Ascension Port Handoff
 
 ## Current Best Build
-- **Target**: `build/gow_ascension.exe` (SHA256: `690036C13201CD3048BFC6683A7DF17BACACA3EFB7C0091760A244D307ACA27C`)
-- **Runtime**: `D:/gow-bilal-asia/.../libps3recomp_runtime.a` (SHA256: `7631D612693821736BA9DF947191895F6028A9E0C6D0C13CE9B0A0ECCE8AE7FA`)
+- **Target**: `build/gow_ascension.exe` (SHA256: `54B64376868ECF1D51B6F717483967841990288819F0DB370D8724143093338B`)
+- **Runtime**: `ps3recomp/build/libps3recomp_runtime.a` (SHA256: `3588D889D4DD57DEA2C14FC05AA20039DEB0F09F56B602768F3A739CB8C5F2BC`)
 - **How to Run**:
   ```powershell
   $env:PS3_PATCHES="Disable MLAA"; & build/gow_ascension.exe vfs/PS3_GAME/USRDIR/EBOOT.ELF
