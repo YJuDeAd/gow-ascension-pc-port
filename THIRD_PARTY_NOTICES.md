@@ -75,6 +75,14 @@ SOFTWARE.
 - **Repository**: https://github.com/bc160201983/GoW-Ascension-Recomp
 - **Authors**: Bilal & Ascension Recomp contributors
 - **License**: MIT License
+- **Included Components**:
+  - `tools/spu_lifter.py`: SPU lifter supporting `--merge-chunks` and `--xregs` register promotion.
+  - `tools/find_spu_functions.py`: SPU function boundary detection.
+  - `tools/lift_jobmods.py`: WWS job module lifting and registration generator.
+  - `tools/lift_spu_pic.py`: Position-independent SPU fragment lifter.
+  - `src/spu_headers/spu_helpers.h`: SSE4.1/AVX2 SPU helper macros and `spu_xr` SSA register representations.
+  - `src/spu_headers/spu_context.h`: SPU context definition with fast dispatch, direct call, and PIC displacement support.
+  - `src/spu_headers/spu_dispatch_mt.c`: Clang-compiled musttail fast path for SPU indirect-branch dispatch (`spu_indirect_branch_mt`).
 
 ```
 MIT License

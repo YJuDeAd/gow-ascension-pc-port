@@ -391,5 +391,5 @@ struct AscensionDefaultsInit {
 } s_init;
 } // namespace
 
-extern "C" const char* const spu_title_nolift = "2:0";
+extern "C" const char* const spu_title_nolift = nullptr;
 

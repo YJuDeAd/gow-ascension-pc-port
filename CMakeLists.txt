@@ -50,6 +50,11 @@ list(REMOVE_ITEM GEN_SOURCES "${CMAKE_CURRENT_SOURCE_DIR}/src/gen/ppu_hle_nids.c
 
 # Lifted SPU images
 file(GLOB_RECURSE SPU_SOURCES "src/gen/spu/*.c" "src/spu_gen/*.c")
+list(APPEND SPU_SOURCES "${CMAKE_CURRENT_SOURCE_DIR}/src/spu_headers/spu_dispatch_mt.c")
+
+set_source_files_properties(${SPU_SOURCES} PROPERTIES
+    COMPILE_DEFINITIONS "SPU_USE_DISPATCH_MT;SPU_ASSUME_SPU_FP;SPU_LS_NO_HOOKS"
+)
 
 # LAW 4: Compile generated code in Release /O2 / -O2 without full debug PDBs to protect disk space on C:
 if(MSVC)
@@ -106,6 +111,7 @@ target_include_directories(gow_ascension PRIVATE
     "${CMAKE_CURRENT_SOURCE_DIR}/src/compat"
     "${CMAKE_CURRENT_SOURCE_DIR}/src/gen"
     "${CMAKE_CURRENT_SOURCE_DIR}/src/gen/spu"
+    "${CMAKE_CURRENT_SOURCE_DIR}/src/spu_headers"
     "${PS3RECOMP_DIR}/runtime/ppu"
     "${PS3RECOMP_DIR}/runtime/spu"
     "${PS3RECOMP_DIR}/runtime/syscalls"

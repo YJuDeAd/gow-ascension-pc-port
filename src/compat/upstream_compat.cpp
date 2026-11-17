@@ -854,6 +854,32 @@ extern "C" {
     GOW_WEAK void cellFiberPpuSleep(void) {}
     GOW_WEAK void cellFiberPpuWakeup(void) {}
 
+    static void gow_barrier_watch_thread_func()
+    {
+        uint16_t last_val = 0xFFFF;
+        bool initialized = false;
+        while (true) {
+            if (vm_base) {
+                uint32_t ea = 0x71600484u;
+                uint16_t cur_val = __builtin_bswap16(*(const volatile uint16_t*)(vm_base + ea));
+                if (!initialized || cur_val != last_val) {
+                    extern unsigned long long ps3_qpc_us(void);
+                    double t = (double)ps3_qpc_us() / 1e6;
+                    uint32_t main_lr = g_ppu_main_ctx ? (uint32_t)g_ppu_main_ctx->lr : 0;
+                    uint32_t main_r3 = g_ppu_main_ctx ? (uint32_t)g_ppu_main_ctx->gpr[3] : 0;
+                    fprintf(stderr, "[BARRIER-WATCH] t=%.4fs EA=0x%08X val: 0x%04X -> 0x%04X (%u -> %u) | main_lr=0x%08X r3=0x%08X last_hle=%s (nid=0x%08X)\n",
+                            t, ea, last_val, cur_val, last_val, cur_val, main_lr, main_r3,
+                            g_last_hle_name ? g_last_hle_name : "none", g_last_hle_nid);
+                    fflush(stderr);
+                    last_val = cur_val;
+                    initialized = true;
+                }
+            }
+            Sleep(1);
+        }
+    }
+
+#if 0 // Legacy unmerged wws_job_pm shims (superseded by native merged lifter pipeline)
     void spu_begin_image(int image_id);
     void spu_register_function(uint32_t addr, void (*fn)(spu_context*));
     void spu_indirect_branch(spu_context* ctx);
@@ -1081,6 +1107,7 @@ extern "C" {
     {
         gow_register_spu_overrides();
     }
+#endif
 
     extern void gow_psn_stubs_register(void);
 
@@ -1140,7 +1167,9 @@ extern "C" {
 
     void ps3_load_prx_modules(void) {
         gow_apply_runtime_patches();
+#if 0
         gow_register_spu_overrides();
+#endif
         gow_psn_stubs_register();
         if (!s_task4_monitor_started.exchange(true)) {
             std::thread(task4_monitor_thread_func).detach();

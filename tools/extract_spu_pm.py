@@ -50,9 +50,12 @@ def main():
         sys.exit(f'fingerprint differs from the expected 0x{a.fnv:016X}: another release of the executable?')
     raw = a.out + '.bin'
     open(raw, 'wb').write(blob)
-    top = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', '..')
-    kit = 'ps3kit' if os.path.isdir(os.path.join(top, 'ps3kit')) else 'ps3recomp'   # the toolkit beside this repo
-    wrap = os.path.join(top, kit, 'tools', 'wrap_spu_elf.py')
+    repo = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..')
+    top = os.path.join(repo, '..')
+    wrap = os.path.join(repo, 'ps3recomp', 'tools', 'wrap_spu_elf.py')
+    if not os.path.exists(wrap):
+        kit = 'ps3kit' if os.path.isdir(os.path.join(top, 'ps3kit')) else 'ps3recomp'
+        wrap = os.path.join(top, kit, 'tools', 'wrap_spu_elf.py')
     subprocess.run([sys.executable, wrap, raw, '--base', hex(a.base), '--entry', hex(a.base), '--out', a.out], check=True)
     os.remove(raw)
 
