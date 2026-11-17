@@ -19,3 +19,5 @@ date,commit,change,N,metric,count,result
 2026-11-17,HEAD,part2-bisect-comp2-their-defaults,20,main_still_at_00467B1C_at_60s,0/20 (p=1.0),no_effect_stalls_30s_to_60s
 2026-11-17,HEAD,part2-bisect-comp3-their-cellSpurs,20,main_still_at_00467B1C_at_60s,0/20 (p=1.0),identical_0_bytes_diff
 2026-11-17,HEAD,part2-bisect-comp4-remaining-runtime-files,20,main_still_at_00467B1C_at_60s,20/20 (p=1.451e-11),flips_stall_leaves_at_25s
+2026-11-17,HEAD,part3-stable-unified-20x90s,20,main_leaves_00467B1C_to_0046700C,15/20 (75%),all_20_alive_and_presenting_fps150_draw_lt5s
+2026-11-17,HEAD,part3-next-stall-3x300s,3,main_advances_past_0046700C,0/3,held_at_0046700C_polling_cellSpursGetWorkloadInfo_wid8

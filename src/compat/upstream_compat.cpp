@@ -22,7 +22,19 @@ extern "C" {
     extern uint32_t cellGcmGetCurrentDisplayBufferId(void);
     extern unsigned ppu_boot_frames_presented(void);
     extern uint32_t cellGcm_flip_request_count(void);
-    extern uint32_t gcm_io_offset_to_ea(uint32_t io);
+    uint32_t __attribute__((weak)) gcm_io_offset_to_ea(uint32_t io) { (void)io; return 0; }
+    spu_context* __attribute__((weak)) g_spu_lane_ctx[8] = {nullptr};
+    uint64_t __attribute__((weak)) g_spu_lane_last_entry_us[8] = {0};
+    uint32_t __attribute__((weak)) g_spu_lane_last_wid[8] = {0};
+    int __attribute__((weak)) g_spu_lane_busy[8] = {0};
+    SpursPollHistEntry __attribute__((weak)) g_spurs_poll_hist_lane5[5] = {{0}};
+    uint32_t __attribute__((weak)) g_spurs_poll_hist_lane5_idx = 0;
+
+    struct spu_iojrn_ops;
+    struct spu_iojrn_rt;
+    __thread const struct spu_iojrn_ops* t_spu_iojrn = nullptr;
+    const struct spu_iojrn_rt* g_spu_iojrn_rt = nullptr;
+    volatile long long g_spu_skip_calls = 0;
 }
 static void gow_barrier_watch_thread_func();
 

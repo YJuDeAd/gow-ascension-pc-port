@@ -115,6 +115,8 @@ target_include_directories(gow_ascension PRIVATE
     "${PS3RECOMP_DIR}/runtime/ppu"
     "${PS3RECOMP_DIR}/runtime/spu"
     "${PS3RECOMP_DIR}/runtime/syscalls"
+    "${PS3RECOMP_DIR}/runtime/platform"
+    "${PS3RECOMP_DIR}/runtime/memory"
     "${PS3RECOMP_DIR}"
     "${PS3RECOMP_DIR}/include"
     ${LIB_INC_DIRS}
@@ -123,7 +125,7 @@ target_include_directories(gow_ascension PRIVATE
 target_link_libraries(gow_ascension PRIVATE "${PS3RECOMP_RUNTIME_LIB}")
 
 if(GOW_ENABLE_RPCS3_RSX)
-    include("${PS3RECOMP_DIR}/gpu/ps3rsx.cmake")
+    include("${CMAKE_CURRENT_SOURCE_DIR}/ps3recomp/gpu/ps3rsx.cmake")
     ps3rsx_link(gow_ascension "${ASCENSION_RPCS3_BUILD}")
 endif()
 
