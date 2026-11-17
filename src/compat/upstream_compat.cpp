@@ -1058,6 +1058,12 @@ extern "C" {
         if (s_registered) return;
         s_registered = 1;
 
+        const char* no_ovr = getenv("GOW_SPU_NO_OVERRIDES");
+        if (no_ovr && atoi(no_ovr) != 0) {
+            fprintf(stderr, "[ascension] SPU overrides skipped (GOW_SPU_NO_OVERRIDES=1)\n");
+            return;
+        }
+
         // Register for image 2
         spu_begin_image(2);
         spu_register_function(0x3FEC0u, gow_wws_job_pm_3fec0_handler);

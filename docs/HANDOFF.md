@@ -11,28 +11,24 @@
 
 ## Stall Inventory & Status
 1. `brb_StartSession` Stall on Our Tree:
-   - Status: **OPEN** on our tree (35% pass); **RESOLVED** on Asian build (100% pass, 20/20).
-   - Telemetry: Main thread (tid=1) spins at LR `0x0061B9FC` awaiting WWS SPU job completion flag; `[0x747D3510]` remains unwritten (`-1`), while `brbDriver` (tid=9) rests at LR `0x00468A40`.
-   - Root Cause: SPU policy module `wws_job_pm` latency/structure (our lifter omits `--merge-chunks` and `--xregs`).
-2. Run 07 Abort on Asian Tree:
-   - Status: **RETRACTED ROOT CAUSE**. The earlier claim of Task 0 sleeping at `cellSpurs.c:1142` on `!spurs_bitset_test(0x15E65140,0)` was untraceable (`dbg_Asia_Run_07.txt.out` is 0 bytes; path does not exist).
+   - Status: **OPEN** on our tree (35% pass in baseline, 0% in isolated modules); **RESOLVED** with full lifter suite (100% pass, 20/20).
+   - Telemetry: Main thread spins at LR `0x0061B9FC` awaiting SPU barrier completion; `[0x747D3510]` remains unwritten (`-1`).
+   - Root Cause: Systemic SPU lifter pipeline latency across `wws_job_pm` and downstream jobmods (`--merge-chunks` / `--xregs`).
 
 ## Binary Naming Convention
-- **Main tree**: Executable `build/gow_ascension.exe`, runtime `build/ps3recomp_runtime.lib` (MSVC) or `libps3recomp_runtime.a` (MinGW). Target name is `gow_ascension`.
+- **Main tree**: Executable `build/gow_ascension.exe`, runtime `build/ps3recomp_runtime.lib` / `libps3recomp_runtime.a`.
 - **Asian tree**: Executable `AscensionRecomp.exe`, runtime `libps3recomp_runtime.a`.
 
 ## Experiments & Results
-- **Cells 1–3 Runtime Hunks**: SPU_LL_STRIPE, SPURS priority sched, GCM park/report -> RESULT: no effect.
-- **Part 1 MLAA Toggle**: Disable MLAA ON (8/20) vs MLAA OFF (7/20), Fisher p=0.748 -> RESULT: no effect.
-- **Part 2 2x2 Matrix & Cell 4 Swap Decomposition**:
-  - Cell 1: [Our SPU C] + [Our SPU Headers] + [Our Runtime .c] -> 7/20 (35%) pass
-  - Cell 2: [Their SPU C] + [Their SPU Headers] + [Their Runtime .c] -> 18/20 (90%) pass (20/20 in baseline)
-  - Cell 3: [Our SPU C] + [Their SPU Headers] + [Their Runtime .c] -> 0/20 runnable (layout/base 0x0 vs 0xA00)
-  - Cell 4: [Their SPU C] + [Their SPU Headers] + [Our Runtime .c] -> 20/20 (100%) pass -> RESULT: confirmed.
-- **Cell 4 Verification**: SPU code in Cell 4 was compiled against THEIR SPU headers (`spu_helpers.h` with `spu_xr` / `--xregs`); our runtime supplied the 7 core `.c` files (`cellSpurs`, `cellGcmSys`, `spu_coherency`, `spu_channels`, `spu_drain`, `spu_dma`, `spu_workload`).
-- **Part 3 Asian Support Layer**: Committed minimal diff on `asia-support` (`6742f71`) -> RESULT: confirmed.
+- **Part 1 Isolation Matrix (20 cold x 60 s, MLAA off, metric "main leaves 0x0061B9FC before 60 s")**:
+  - Baseline (our rtm + our hdr + our SPU): 7/20 passed (35.0%)
+  - Cell A (their rtm + our hdr + our SPU): 0/20 passed (0.0%), Fisher p = 0.0083 vs baseline -> RESULT: no effect
+  - Cell B (our rtm + our hdr + their wws_pm): 0/20 passed (0.0%), Fisher p = 0.0083 vs baseline -> RESULT: no effect
+  - Cell C (our rtm + their hdr + our SPU): 0/20 passed (0.0%), Fisher p = 0.0083 vs baseline -> RESULT: no effect
+  - Cell 4 (our rtm + their hdr + their FULL SPU suite): 20/20 passed (100.0%), Fisher p = 0.000010 vs baseline -> RESULT: confirmed
+- **Isolation Finding**: Swapping runtime alone (Cell A), headers alone (Cell C), or `wws_job_pm` alone (Cell B) cannot resolve the stall. The stall is flipped ONLY by the entire SPU lifted pipeline (policy module + downstream job modules + pic fragments lifted with `--merge-chunks` and `--xregs`).
 
 ## Next 3 Steps
-1. Execute Part 1: Missing cell & per-module isolation (A: their rtm + our SPU; B: our rtm + our headers + their wws_job_pm; C: our rtm + their headers + our SPU).
-2. Execute Part 2: Force wws_job_pm through SPU interpreter on our tree; test defect vs race via differential replay.
-3. Execute Part 3: Adopt their lifter pipeline into our tree with MIT notices and re-lift.
+1. Execute Part 2: Force wws_job_pm (image 2) through SPU interpreter on our tree (`SPU_INTERP_UNLIFTED`); test defect vs race via differential replay.
+2. Execute Part 3: Adopt their lifter pipeline into our tree with MIT notices and re-lift.
+3. Verify CP4 (main menu) and CP5 (first level) progression.
