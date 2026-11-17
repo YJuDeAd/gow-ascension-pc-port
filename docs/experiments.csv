@@ -12,3 +12,4 @@ date,commit,change,N,metric,count,result
 2026-11-17,HEAD,part1-cellA-their-rtm-our-spu-our-hdr,20,main_leaves_0061B9FC,0/20 (p=0.0083),no effect
 2026-11-17,HEAD,part1-cellB-our-rtm-our-hdr-their-wws-pm,20,main_leaves_0061B9FC,0/20 (p=0.0083),no effect
 2026-11-17,HEAD,part1-cellC-our-rtm-their-hdr-our-spu,20,main_leaves_0061B9FC,0/20 (p=0.0083),no effect
+2026-11-17,HEAD,part2-interp-wws-job-pm-20x60s,20,main_leaves_0061B9FC,20/20 (p=1.288e-5),confirmed
