@@ -15,3 +15,7 @@ date,commit,change,N,metric,count,result
 2026-11-17,HEAD,part2-interp-wws-job-pm-20x60s,20,main_leaves_0061B9FC,20/20 (p=1.288e-5),confirmed
 2026-11-17,HEAD,part3-adopt-lifter-pipeline-20x90s,20,main_leaves_0061B9FC_and_stays_alive,20/20 (p=1.288e-5),confirmed
 2026-11-17,HEAD,part1-verification-and-raw-log-audit,20,main_leaves_0061B9FC_audit,20/20,confirmed
+2026-11-17,HEAD,part2-bisect-comp1-their-ppu-lifted,20,main_still_at_00467B1C_at_60s,0/20 (p=1.0),unresolved_hooks_and_read_only_poll
+2026-11-17,HEAD,part2-bisect-comp2-their-defaults,20,main_still_at_00467B1C_at_60s,0/20 (p=1.0),no_effect_stalls_30s_to_60s
+2026-11-17,HEAD,part2-bisect-comp3-their-cellSpurs,20,main_still_at_00467B1C_at_60s,0/20 (p=1.0),identical_0_bytes_diff
+2026-11-17,HEAD,part2-bisect-comp4-remaining-runtime-files,20,main_still_at_00467B1C_at_60s,20/20 (p=1.451e-11),flips_stall_leaves_at_25s
