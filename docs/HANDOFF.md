@@ -21,6 +21,7 @@
 3. Next Downstream Wait (`0x0046700C`, `func_00466E28`):
    - Status: **ACTIVE (Identified in 3x 5-min runs)**.
    - Wait Predicate: Workload 8 (`BrBDblBufWrkld`) completion poll (`cellSpursGetWorkloadInfo`), checking `readyCount == 0` (offset `0x23`) and `contention == 0` (offset `0x20`).
+   - SPU Mechanism: Under `SPURS_READY_LEVEL=1`, kernel does not clear ready byte on slot fill; SPU policy module `wws_job_pm` clears it via PUTLLC at `0x2F40/0x2F7C` once job list drains.
    - Blocked Threads: `brbDriver` (`tid 13`, `lr = 0x006245B8`) and `brbClient` (`tid 14`, `lr = 0x0062308C`) awaiting buffer descriptor transitions.
 
 ## How to Regenerate SPU Code
